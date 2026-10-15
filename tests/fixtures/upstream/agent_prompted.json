@@ -1,0 +1,1 @@
+{"id": "t004", "result": {"type": "agent_prompted", "agent": {"terminal_id": "term_demo1", "agent": "tool-a", "agent_status": "working", "workspace_id": "w1", "tab_id": "w1:t1", "pane_id": "w1:p1", "focused": false, "state_change_seq": 10, "revision": 44}}}

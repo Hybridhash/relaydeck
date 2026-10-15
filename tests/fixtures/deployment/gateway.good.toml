@@ -1,0 +1,27 @@
+# Synthetic PASSING deployment config (deployment verifier self-check).
+# Every value is fake ("synthetic-..." markers) and ONLY exercises the
+# offline verifier. Never deploy these values; provision real secrets
+# over a secure channel.
+
+[secrets]
+cursor_secret = "synthetic-cursor-key-7f3a-91cd-44be-aa10-2398"
+cookie_secret = "synthetic-cookie-key-55e1-08bd-77cc-d412-0091"
+fcm_key = "synthetic-fcm-key-aa00-11bb-22cc-33dd-44ee"
+
+[server]
+bind = "127.0.0.1"
+port = 8000
+workers = 1
+public_origin = "https://relaydeck-synth.invalid"
+auth_callback_allowlist = ["https://relaydeck-synth.invalid"]
+
+[tls]
+mode = "terminated-at-proxy"
+
+[logging]
+redact_query_tokens = true
+log_config = "/etc/relaydeck/uvicorn-logging.ini"
+
+[database]
+journal_path = "/var/lib/relaydeck/gateway-journal.db"
+push_path = "/var/lib/relaydeck/push.db"

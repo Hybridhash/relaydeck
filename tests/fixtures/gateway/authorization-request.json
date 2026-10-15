@@ -1,0 +1,7 @@
+{
+  "response_type": "code",
+  "code_challenge_method": "S256",
+  "code_challenge": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+  "state": "synthetic-state-123456789",
+  "redirect_uri": "dev.relaydeck.app://oauth"
+}

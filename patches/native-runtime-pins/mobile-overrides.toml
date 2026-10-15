@@ -1,0 +1,31 @@
+# RelayDeck native packaging pins (data only; nothing reads this file yet).
+# The host lock (uv.lock) and root pyproject.toml are NOT changed: the host stays on
+# Python 3.13, and these pins apply to staged native copies only.
+
+[python]
+# pypi.flet.dev has cryptography 48.0.0 wheels for cp314 only (Android and iOS).
+build_python_version = "3.14"          # flet build ... --python-version 3.14
+# Staged requires-python for the app AND both extensions (terminal, notifications)
+# must admit 3.14; the host value is ">=3.13,<3.14".
+staged_requires_python = ">=3.13,<3.15"
+
+[python.host_lock]
+# What uv.lock resolves for the host today (informational).
+cryptography = "48.0.0"
+cffi = "2.1.1"
+msgpack = "1.2.3"
+
+[python.mobile_overrides]
+# Only versions that ship mobile wheels.
+cffi = "2.0.0"
+msgpack = "1.1.2"
+# cryptography stays 48.0.0 (cp314 wheel).
+
+[flutter.dependency_overrides]
+# The Flet 1.0.3 template pins jni 1.0.0; jni_flutter 1.0.4+1 needs jni ^1.1.0.
+jni_flutter = "1.0.3"
+
+[build_environment]
+# Bitdefender Safe Files blocks build tools writing under ~/Desktop: stage and
+# build under /private/tmp/rd-native/ (outputs never go into the repo).
+stage_root = "/private/tmp/rd-native"

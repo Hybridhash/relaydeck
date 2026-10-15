@@ -1,0 +1,1 @@
+{"event": "pane.agent_status_changed", "data": {"pane_id": "w1:p1", "agent_status": "blocked"}}

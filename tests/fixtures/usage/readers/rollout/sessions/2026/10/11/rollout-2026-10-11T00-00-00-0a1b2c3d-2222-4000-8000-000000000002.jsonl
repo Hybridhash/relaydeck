@@ -1,0 +1,3 @@
+{"payload": {"id": "0a1b2c3d-2222-4000-8000-000000000002"}, "timestamp": "2026-10-11T09:00:00Z", "type": "session_meta"}
+{"payload": {"usage": {"input_tokens": 5, "output_tokens": 1}}, "timestamp": "2026-10-11T09:02:00Z", "type": "token_usage_record"}
+{"payload": {"response_id": "resp-neg", "usage": {"cached_input_tokens": 20, "input_tokens": 10, "output_tokens": 1}}, "timestamp": "2026-10-11T09:03:00Z", "type": "token_usage_record"}

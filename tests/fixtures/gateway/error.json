@@ -1,0 +1,1 @@
+{"code": "stale_epoch", "message": "cursor invalid, resnapshot from scratch", "retryable": true, "details": {"reason": "cursor"}}

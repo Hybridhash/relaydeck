@@ -1,0 +1,63 @@
+import 'package:flutter/material.dart';
+
+import '../flet_backend.dart';
+import '../models/control.dart';
+import '../utils/keys.dart';
+import '../widgets/control_inherited_notifier.dart';
+import '../widgets/error.dart';
+
+/// Builds the Flutter [Widget] for a [Control].
+///
+/// Responsibilities:
+/// - Resolves a stable Flutter [Key] from the control's `key` property (including
+///   registering a scroll [GlobalKey] with the backend).
+/// - Delegates widget creation to registered extensions.
+/// - Builds the result in this control's standard "control context":
+///   [ControlInheritedNotifier] (reactivity) and per-control theme overrides.
+/// Identifies a child [ControlWidget] among its siblings by control id.
+///
+/// Its own type, so it never equals a user's `key` (a `ValueKey<int>` with the
+/// same number), which Flet applies to the widget the control builds.
+class ControlIdKey extends ValueKey<int> {
+  const ControlIdKey(super.value);
+}
+
+class ControlWidget extends StatelessWidget {
+  final Control control;
+
+  const ControlWidget({super.key, required this.control});
+
+  @override
+  Widget build(BuildContext context) {
+    ControlKey? controlKey = control.getKey("key");
+    Key? key;
+    if (controlKey is ControlScrollKey) {
+      // A scroll key needs to be a GlobalKey so the backend can access state.
+      key = GlobalKey();
+      FletBackend.of(context).globalKeys[controlKey.toString()] =
+          key as GlobalKey;
+    } else if (controlKey != null) {
+      // Preserve the concrete value type so the resulting ValueKey<T> matches
+      // what callers construct in tests, e.g. `find.byKey(Key('foo'))` which
+      // resolves to `ValueKey<String>('foo')`. `ValueKey(controlKey.value)`
+      // would produce `ValueKey<Object>(...)` because `controlKey.value` is
+      // statically typed `Object`, and ValueKey's `==` is runtimeType-strict
+      // — `ValueKey<Object>` is never equal to `ValueKey<String>`.
+      key = switch (controlKey.value) {
+        String v => ValueKey<String>(v),
+        int v => ValueKey<int>(v),
+        double v => ValueKey<double>(v),
+        bool v => ValueKey<bool>(v),
+        _ => ValueKey(controlKey.value),
+      };
+    }
+
+    return control.buildInControlContext((context) {
+      for (var extension in FletBackend.of(context).extensions) {
+        final widget = extension.createWidget(key, control);
+        if (widget != null) return widget;
+      }
+      return ErrorControl("Unknown control: ${control.type}");
+    });
+  }
+}

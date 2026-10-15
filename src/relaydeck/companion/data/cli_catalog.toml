@@ -1,0 +1,397 @@
+# CLI catalog for `relaydeck setup --detect`. Versioned data only: no code, no personal paths.
+# This is the ONE file under src/relaydeck allowed to name CLI products (tests/unit/test_no_agent_product_names.py).
+# herdr_detects: the CLI has a Herdr detection manifest (the 22 manifest ids; agy is the antigravity entry).
+# reader_root: the directory a tier-A reader enumerates (what setup writes); default_roots are the CLI's log locations, for detection only.
+# Roots use `~`; the env override names are the CLI's own, never an aggregator's. A tier-A reader_format is one
+# this build reads today. Tiers: A works today (a reader parses the format); B needs a JSON/JSONL reader; C needs a SQLite reader; D reports no reliable tokens; E is not supported yet.
+catalog_version = 1
+
+[[cli]]
+id = "claude"
+herdr_detects = true
+display_name = "Claude Code"
+aliases = ["claude-code"]
+binaries = ["claude"]
+default_roots = ["~/.claude/projects"]
+reader_root = "~/.claude/projects"
+env_override = "CLAUDE_CONFIG_DIR"
+env_subdir = "projects"
+reader_format = "jsonl-message-usage-v1"
+limits = "statusline-hook"
+tier = "A"
+evidence = "JSONL message logs read on this Mac; limits via the statusline hook."
+herdr_integration = "claude"
+
+[[cli]]
+id = "codex"
+herdr_detects = true
+display_name = "Codex"
+aliases = []
+binaries = ["codex"]
+default_roots = ["~/.codex/sessions"]
+reader_root = "~/.codex"
+env_override = "CODEX_HOME"
+env_subdir = "sessions"
+reader_format = "jsonl-cumulative-token-count-v1"
+limits = "jsonrpc-rate-limits-stdio-v1"
+tier = "A"
+evidence = "Cumulative token-count logs read on this Mac; limits via the stdio rate-limits feed."
+herdr_integration = "codex"
+
+[[cli]]
+id = "muse"
+herdr_detects = true
+display_name = "Muse"
+aliases = []
+binaries = ["muse"]
+default_roots = ["~/.local/share/muse/sessions"]
+reader_root = "~/.local/share/muse"
+env_override = "MUSE_SESSIONS_DIR"
+env_subdir = ""
+reader_format = "jsonl-event-usage-v1"
+limits = "tui-usage-pane-v1"
+tier = "A"
+evidence = "JSONL event logs read on this Mac; limits via the usage pane; model enrichment pending."
+
+[cli.tui]
+launch_new = ["muse", "--no-session-log"]
+quit_text = "/quit"
+prompt_marker = "(?m)^❯"
+usage_marker = "Subscription"
+not_reported = ['Subscription[^\n]*\n[^\n]*Currently unavailable']
+binary = "muse"
+plan_pattern = 'Subscription · (?P<plan>[^\n]+)'
+
+[[cli.tui.windows]]
+key = "current"
+pattern = 'Current\s+(?P<percent>[0-9]+)% used'
+reset_pattern = 'Resets at (?P<reset>[0-9]{1,2}:[0-9]{2} [AP]M)'
+reset_kind = "clock"
+minutes = 300
+
+[[cli.tui.windows]]
+key = "weekly"
+pattern = 'Weekly\s+(?P<percent>[0-9]+)% used'
+reset_pattern = 'Resets (?P<reset>[A-Z][a-z]{2} [0-9]{1,2} at [0-9]{1,2}:[0-9]{2} [AP]M)'
+reset_kind = "monthday"
+minutes = 10080
+
+[[cli]]
+id = "kiro"
+herdr_detects = true
+display_name = "Kiro"
+aliases = ["kiro-cli"]
+binaries = ["kiro-cli", "kiro"]
+default_roots = ["~/.kiro/sessions/cli"]
+reader_root = "~/.kiro"
+reader_format = "json-session-turns-v1"
+limits = "tui-usage-pane-v1"
+tier = "A"
+evidence = "Session-turn logs read on this Mac; limits via the usage pane; credits meter pending."
+
+[cli.tui]
+launch_new = ["kiro-cli", "chat"]
+launch_resume = ["kiro-cli", "--resume-id", "{id}"]
+quit_text = "/quit"
+quit_marker = 'Session ended\.'
+dismiss = "esc"
+prompt_marker = "ask a question or describe a task"
+usage_marker = 'Credits \('
+hint_pattern = 'Resume with: kiro-cli --resume-id (?P<id>\S+)'
+id_pattern = "[A-Za-z0-9][A-Za-z0-9_.-]{0,127}"
+session_root = "~/.kiro/sessions/cli"
+not_found = []
+binary = "kiro-cli"
+plan_pattern = '\|[ ]*(?P<plan>[A-Z][A-Za-z0-9 ._-]{1,31})[ ]*$'
+
+[[cli.tui.windows]]
+key = "month"
+pattern = 'Credits \((?P<used>[0-9]+(?:\.[0-9]+)?) of (?P<limit>[0-9]+(?:\.[0-9]+)?)[^)]*\)'
+unit = "credit"
+reset_pattern = 'resets on (?P<reset>[0-9]{4}-[0-9]{2}-[0-9]{2})'
+reset_kind = "date"
+
+[[cli]]
+id = "pi"
+herdr_detects = true
+display_name = "Pi"
+aliases = []
+binaries = ["pi"]
+default_roots = ["~/.pi/agent/sessions"]
+env_override = "PI_CODING_AGENT_DIR"
+env_subdir = "sessions"
+limits = "none"
+tier = "B"
+evidence = "Documented JSONL session layout; usage is not read."
+herdr_integration = "pi"
+
+[[cli]]
+id = "omp"
+herdr_detects = false
+display_name = "Oh My Pi"
+aliases = []
+binaries = ["omp"]
+default_roots = ["~/.omp/agent/sessions"]
+limits = "none"
+tier = "B"
+evidence = "Documented JSONL session layout; usage is not read."
+herdr_integration = "omp"
+
+[[cli]]
+id = "prime-agent"
+herdr_detects = false
+display_name = "Prime Agent"
+aliases = []
+binaries = ["prime"]
+default_roots = ["~/.prime/agent/sessions"]
+limits = "none"
+tier = "B"
+evidence = "Documented JSONL session layout shared with Pi; usage is not read."
+
+[[cli]]
+id = "gemini"
+herdr_detects = true
+display_name = "Gemini CLI"
+aliases = []
+binaries = ["gemini"]
+default_roots = ["~/.gemini/tmp"]
+env_override = "GEMINI_CLI_HOME"
+env_subdir = "tmp"
+limits = "none"
+tier = "B"
+evidence = "Documented JSONL chat layout; usage is not read."
+
+[[cli]]
+id = "qwen"
+herdr_detects = true
+display_name = "Qwen Code"
+aliases = []
+binaries = ["qwen"]
+default_roots = ["~/.qwen/projects"]
+limits = "none"
+tier = "B"
+evidence = "Documented JSONL chat and monthly usage layouts; usage is not read."
+herdr_integration = "qwen"
+
+[[cli]]
+id = "kimi"
+herdr_detects = true
+display_name = "Kimi"
+aliases = []
+binaries = ["kimi", "kimi-code"]
+default_roots = ["~/.kimi/sessions", "~/.kimi-code/sessions"]
+env_override = "KIMI_SHARE_DIR"
+env_subdir = "sessions"
+limits = "none"
+tier = "B"
+evidence = "Two documented session directory layouts; usage is not read."
+herdr_integration = "kimi"
+
+[[cli]]
+id = "cline"
+herdr_detects = true
+display_name = "Cline"
+aliases = []
+binaries = ["cline"]
+default_roots = ["~/.cline/data/sessions"]
+env_override = "CLINE_DIR"
+env_subdir = "data/sessions"
+limits = "none"
+tier = "B"
+evidence = "Session layout from the CLI's own source; usage is not read."
+
+[[cli]]
+id = "grok"
+herdr_detects = true
+display_name = "Grok"
+aliases = []
+binaries = ["grok"]
+default_roots = ["~/.grok/sessions"]
+env_override = "GROK_HOME"
+env_subdir = "sessions"
+limits = "none"
+tier = "B"
+evidence = "Layout mostly from aggregator tools with the root from the CLI's source; usage is not read."
+herdr_integration = "grok"
+
+[[cli]]
+id = "command-code"
+herdr_detects = false
+display_name = "Command Code"
+aliases = []
+binaries = ["command-code"]
+default_roots = ["~/.commandcode/projects"]
+limits = "none"
+tier = "B"
+evidence = "Layout from aggregator tools and the app bundle; usage is not read."
+
+[[cli]]
+id = "opencode"
+herdr_detects = true
+display_name = "OpenCode"
+aliases = []
+binaries = ["opencode"]
+default_roots = ["~/.local/share/opencode"]
+limits = "none"
+tier = "C"
+evidence = "Documented SQLite session schema; usage is not read."
+herdr_integration = "opencode"
+
+[[cli]]
+id = "kilo"
+herdr_detects = true
+display_name = "Kilo"
+aliases = []
+binaries = ["kilo"]
+default_roots = ["~/.local/share/kilo"]
+limits = "none"
+tier = "C"
+evidence = "SQLite schema from the CLI's source and docs; usage is not read."
+herdr_integration = "kilo"
+
+[[cli]]
+id = "hermes"
+herdr_detects = true
+display_name = "Hermes"
+aliases = []
+binaries = ["hermes"]
+default_roots = ["~/.hermes"]
+env_override = "HERMES_HOME"
+env_subdir = ""
+limits = "none"
+tier = "C"
+evidence = "Session layout from the CLI's source; usage is not read."
+herdr_integration = "hermes"
+
+[[cli]]
+id = "devin"
+herdr_detects = true
+display_name = "Devin"
+aliases = []
+binaries = ["devin"]
+default_roots = ["~/.local/share/devin/cli"]
+limits = "none"
+tier = "C"
+evidence = "Session database seen only in aggregator tools; usage is not read."
+herdr_integration = "devin"
+
+[[cli]]
+id = "copilot"
+herdr_detects = true
+display_name = "GitHub Copilot CLI"
+aliases = []
+binaries = ["copilot"]
+default_roots = ["~/.copilot/session-state"]
+limits = "none"
+tier = "C"
+evidence = "Session event layout with shutdown totals; usage is not read."
+herdr_integration = "copilot"
+
+[[cli]]
+id = "mastracode"
+herdr_detects = false
+display_name = "Mastra Code"
+aliases = []
+binaries = ["mastracode"]
+default_roots = ["~/Library/Application Support/mastracode"]
+limits = "none"
+tier = "C"
+evidence = "Thread database layout from the CLI's source only; usage is not read."
+herdr_integration = "mastracode"
+
+[[cli]]
+id = "cursor"
+herdr_detects = true
+display_name = "Cursor Agent"
+aliases = []
+binaries = ["cursor-agent"]
+default_roots = ["~/.cursor/projects"]
+limits = "none"
+tier = "D"
+evidence = "Transcript layout only; the CLI reports no tokens."
+herdr_integration = "cursor"
+
+[[cli]]
+id = "qodercli"
+herdr_detects = true
+display_name = "Qoder CLI"
+aliases = []
+binaries = ["qodercli"]
+default_roots = ["~/.qoder/projects"]
+env_override = "QODER_CONFIG_DIR"
+env_subdir = "projects"
+limits = "none"
+tier = "D"
+evidence = "Closed source; token source unresolved."
+herdr_integration = "qodercli"
+
+[[cli]]
+id = "letta"
+herdr_detects = true
+display_name = "Letta"
+aliases = []
+binaries = ["letta"]
+default_roots = ["~/.letta"]
+limits = "none"
+tier = "D"
+evidence = "Settings directory only; no local usage data."
+herdr_integration = "letta"
+
+[[cli]]
+id = "crush"
+herdr_detects = false
+display_name = "Crush"
+aliases = []
+binaries = ["crush"]
+default_roots = ["~/.local/share/crush"]
+limits = "none"
+tier = "D"
+evidence = "Layout from the CLI's source; cost only, no tokens."
+
+[[cli]]
+id = "droid"
+herdr_detects = true
+display_name = "Factory Droid"
+aliases = ["factory-droid"]
+binaries = ["droid"]
+default_roots = ["~/.factory/sessions"]
+limits = "none"
+tier = "D"
+evidence = "Session path from the CLI's source with aggregator-reported fields; session totals only."
+herdr_integration = "droid"
+
+[[cli]]
+id = "maki"
+herdr_detects = true
+display_name = "Maki"
+aliases = []
+binaries = ["maki"]
+default_roots = ["~/.local/state/maki/sessions"]
+env_override = "XDG_STATE_HOME"
+env_subdir = "maki/sessions"
+limits = "none"
+tier = "E"
+evidence = "Session layout from the CLI's source only; needs a second source."
+
+[[cli]]
+id = "amp"
+herdr_detects = true
+display_name = "Amp"
+aliases = []
+binaries = ["amp"]
+default_roots = ["~/.local/share/amp/threads"]
+limits = "none"
+tier = "E"
+evidence = "Closed source; paths seen only in aggregator tools."
+
+[[cli]]
+id = "antigravity"
+herdr_detects = true
+display_name = "Antigravity"
+aliases = ["agy"]
+binaries = ["agy"]
+default_roots = ["~/.gemini/antigravity-cli/conversations"]
+limits = "statusline-hook"
+tier = "E"
+evidence = "Status-line JSON from the CLI's source; session database is protobuf."
+herdr_integration = "antigravity-cli"

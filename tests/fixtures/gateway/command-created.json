@@ -1,0 +1,17 @@
+{
+  "protocol": "relaydeck.gateway.v1",
+  "command_id": "cmd-new-workspace-001",
+  "host_id": "home-mac",
+  "kind": "agent.start",
+  "target": {
+    "workspace_mode": "new"
+  },
+  "status": "succeeded",
+  "result": {
+    "type": "agent_started",
+    "workspace_id": "w2",
+    "tab_id": "t2",
+    "pane_id": "p2",
+    "agent_id": "a2"
+  }
+}

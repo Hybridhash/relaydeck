@@ -1,0 +1,13 @@
+{
+  "account": "acct-1",
+  "device_id": "dev_demo1",
+  "capabilities": [
+    "agents.prompt",
+    "sessions.read",
+    "terminal.view"
+  ],
+  "hosts": [
+    "home-mac"
+  ],
+  "protocol_version": "relaydeck.gateway.v1"
+}

@@ -1,0 +1,1 @@
+{"description": "Alternate screen preserves the main buffer", "parts": ["04a_alt_enter_prefix.bin", "04b_alt_content.bin", "04c_alt_exit.bin"], "alt_after_part": 1, "lines_during_alt": ["TUI-content"], "lines_after_exit": ["main-screen"]}

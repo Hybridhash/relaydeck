@@ -1,0 +1,19 @@
+[snapshot]
+date = "2026-10-01"
+source = "synthetic-pin"
+
+[[rates]]
+model = "model-a"
+effective_from = "2026-01-01"
+input = 2.0
+output = 4.0
+cache_read = 0.5
+cache_write_short = 3.0
+cache_write_long = 5.0
+
+[[rates]]
+model = "model-a"
+effective_from = "2026-10-01"
+input = 3.0
+output = 6.0
+

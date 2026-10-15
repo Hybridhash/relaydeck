@@ -1,0 +1,47 @@
+--- a/build/{{cookiecutter.out_dir}}/ios/Podfile
++++ b/build/{{cookiecutter.out_dir}}/ios/Podfile
+@@ -1,5 +1,5 @@
+ # Uncomment this line to define a global platform for your project
+-platform :ios, '13.0'
++platform :ios, '15.0'
+ 
+ # CocoaPods analytics sends network stats synchronously affecting flutter build latency.
+ ENV['COCOAPODS_DISABLE_STATS'] = 'true'
+@@ -66,6 +66,8 @@
+ post_install do |installer|
+   installer.pods_project.targets.each do |target|
+     flutter_additional_ios_build_settings(target)
++    # RelayDeck: Xcode 27 supports iOS 15.0+ only.
++    target.build_configurations.each { |c| c.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '15.0' }
+     # Ensure rive_native's setup script runs from the project root so pubspec.yaml is found in CI.
+     if target.name == 'rive_native'
+       target.shell_script_build_phases.each do |phase|
+--- a/build/{{cookiecutter.out_dir}}/ios/Runner.xcodeproj/project.pbxproj
++++ b/build/{{cookiecutter.out_dir}}/ios/Runner.xcodeproj/project.pbxproj
+@@ -345,7 +345,7 @@
+ 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+ 				GCC_WARN_UNUSED_FUNCTION = YES;
+ 				GCC_WARN_UNUSED_VARIABLE = YES;
+-				IPHONEOS_DEPLOYMENT_TARGET = 13.0;
++				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+ 				MTL_ENABLE_DEBUG_INFO = NO;
+ 				SDKROOT = iphoneos;
+ 				SUPPORTED_PLATFORMS = iphoneos;
+@@ -488,7 +488,7 @@
+ 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+ 				GCC_WARN_UNUSED_FUNCTION = YES;
+ 				GCC_WARN_UNUSED_VARIABLE = YES;
+-				IPHONEOS_DEPLOYMENT_TARGET = 13.0;
++				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+ 				MTL_ENABLE_DEBUG_INFO = YES;
+ 				ONLY_ACTIVE_ARCH = YES;
+ 				SDKROOT = iphoneos;
+@@ -537,7 +537,7 @@
+ 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+ 				GCC_WARN_UNUSED_FUNCTION = YES;
+ 				GCC_WARN_UNUSED_VARIABLE = YES;
+-				IPHONEOS_DEPLOYMENT_TARGET = 13.0;
++				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+ 				MTL_ENABLE_DEBUG_INFO = NO;
+ 				SDKROOT = iphoneos;
+ 				SUPPORTED_PLATFORMS = iphoneos;

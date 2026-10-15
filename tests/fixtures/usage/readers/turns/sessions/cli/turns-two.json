@@ -1,0 +1,1 @@
+{"session_id": "turns-two", "session_state": {"conversation_metadata": {"user_turn_metadatas": [{"end_timestamp": "2026-10-11T12:00:00Z", "input_token_count": 2, "model": "model-e", "output_token_count": 1, "result": {"Ok": {"id": "turn-two-1"}}}]}}}

@@ -1,0 +1,321 @@
+# RelayDeck theme — single source of the app's look.
+# Resolved by client/theme.py at import; edit values here, never in code.
+# Provenance: palette + console constants transcribed from the mock
+# design; deviations recorded in tokens history stay documented
+# in client/components/design_system/tokens.py (now an adapter).
+
+[meta]
+version = 1
+
+[palette.dark]
+bg = "#130F26"
+surface = "#191335"
+raised = "#2B2356"
+line = "#3B3270"
+outline = "#8E86B8"
+text = "#F5F2FF"
+muted = "#B7AFDA"
+accent = "#7443F5"
+on_accent = "#FFFFFF"
+accent_text = "#A98BFF"
+teal = "#A98BFF"
+amber = "#FF8A3D"
+danger = "#FFB4AB"
+success = "#C8F03C"
+disabled_text = "#B7AFDA"
+error_bg = "#3C2024"
+rail_bg = "#1A1436"
+active_row_bg = "#1F1840"
+active_row_border = "#F5F2FF"
+terminal_bg = "#0B0818"
+terminal_text = "#F5F2FF"
+terminal_muted = "#8E86B8"
+terminal_attention = "#FF8A3D"
+
+[palette.light]
+bg = "#F5F5F7"
+surface = "#FFFFFF"
+raised = "#E9EAEE"
+line = "#C9CDD5"
+outline = "#747B88"
+text = "#191B20"
+muted = "#606570"
+accent = "#0063CC"
+on_accent = "#FFFFFF"
+accent_text = "#0063CC"
+teal = "#0063CC"
+amber = "#805000"
+danger = "#B3261E"
+success = "#216A36"
+disabled_text = "#606570"
+error_bg = "#FCE9E7"
+rail_bg = "#FFFFFF"
+active_row_bg = "#E0EDFF"
+active_row_border = "#0063CC"
+terminal_bg = "#101113"
+terminal_text = "#DEDFE4"
+terminal_muted = "#B5B7C0"
+terminal_attention = "#EDC77F"
+
+[status]
+colors = { idle = "#70757A", working = "#1A73E8", blocked = "#D93025", done = "#188038", unknown = "#70757A" }
+banner_tones = { error = "#D93025", warning = "#E8710A", info = "#1A73E8" }
+
+[agent]
+triples = [
+  ["#E08A6A", "#B4532F", "#904226"],
+  ["#5CC8B8", "#127A6C", "#0E6256"],
+  ["#E58BF5", "#9B2BAE", "#8C279D"],
+  ["#8AB4F8", "#1F5FC4", "#1C56B0"],
+]
+fallback_dark = "#A7A3C7"
+fallback_light = "#5B577A"
+light_ink_fallback = "#524E6E"
+
+[console]
+ground = "#130F26"
+dot = "#241D48"
+card = "#1F1840"
+raised = "#2B2356"
+panel = "#191335"
+nav = "#1A1436"
+terminal_bg = "#0B0818"
+border = "#3B3270"
+border_dashed_offline = "#5A4F96"
+text = "#F5F2FF"
+text_secondary = "#D9D3F2"
+text_muted = "#B7AFDA"
+text_terminal_muted = "#8E86B8"
+primary_fill = "#7443F5"
+primary_text = "#A98BFF"
+primary_text_light = "#C4B0FF"
+blocked = "#FF8A3D"
+blocked_text = "#24100A"
+blocked_small_text = "#4A1F0A"
+blocked_pill_bg = "#24100A"
+blocked_pill_text = "#FFC49A"
+working = "#5CCBFF"
+working_text = "#06202E"
+done = "#C8F03C"
+done_text = "#1A2400"
+idle_fill = "#B7AFDA"
+idle_text = "#1F1840"
+unknown_text = "#B7AFDA"
+# Roles that replaced scattered literals (same values, named by meaning).
+focus_wash = "#33FFFFFF"
+on_primary = "#FFFFFF"
+chip_ink = "#E9E5FA"
+live_ink = "#E9E5FA"
+terminal_text = "#E9E5FA"
+status_rule = "#241D48"
+presence_warn = "#F59E0B"
+scrim_gradient_start = "#00110C22"
+light_ink = "#201B36"
+light_surface = "#F8F6FC"
+scroll_thumb_bg = "#343434"
+shell_disabled = "#8E86B8"
+
+[console.usage.dark]
+bg = "#13101F"
+bg_deep = "#0B0914"
+surface = "#1C1730"
+surface_sheet = "#1A1530"
+surface_raised = "#241E3D"
+surface_accent = "#2A2150"
+nav = "#181428"
+border = "#2E2750"
+border_strong = "#3E3270"
+text = "#F2EFFA"
+text_2 = "#CFC9E6"
+text_muted = "#A9A2C8"
+text_faint = "#8A83A8"
+accent = "#7046F0"
+accent_on = "#FFFFFF"
+link = "#B9A4FF"
+link_hover = "#D6C9FF"
+series_1 = "#8B63FF"
+series_1_dim = "#5A3BC4"
+series_2 = "#4FD1B8"
+series_other = "#5B5380"
+warn = "#FFC46B"
+warn_bg = "#3A2A12"
+danger = "#FF7A85"
+danger_bg = "#3A1620"
+
+[console.usage.light]
+bg = "#F5F3FA"
+bg_deep = "#DCD8E6"
+surface = "#FFFFFF"
+surface_sheet = "#FFFFFF"
+surface_raised = "#F1EEF8"
+surface_accent = "#E9E3FB"
+nav = "#EEEAF6"
+border = "#DAD4EA"
+border_strong = "#9C91C4"
+text = "#17122B"
+text_2 = "#3A3260"
+text_muted = "#55507A"
+text_faint = "#5F5990"
+accent = "#5A36D8"
+accent_on = "#FFFFFF"
+link = "#4A2BB5"
+link_hover = "#3A1F96"
+series_1 = "#6C47E6"
+series_1_dim = "#B6A4F2"
+series_2 = "#17927C"
+series_other = "#8D87AB"
+warn = "#7A4A00"
+warn_bg = "#FFF0D2"
+danger = "#B3212F"
+danger_bg = "#FCE3E6"
+
+[scales]
+spacing = [4, 8, 12, 16, 24, 32]
+radius = [4, 8, 12]
+min_touch = 48
+
+[scales.console]
+radius_card = 18
+radius_tile = 20
+radius_pane = 24
+radius_terminal = 18
+radius_key = 12
+card_pad_v = 12
+card_pad_h = 14
+gap_card = 10
+gap_section = 14
+gap_chip = 8
+pad_phone = 16
+pad_web = 28
+pane_pad = 20
+pane_gap = 20
+select_outline_width = 3
+
+[type.font_size]
+eyebrow = 12
+meta = 12
+small = 13
+body = 15
+base = 14
+title = 20
+headline = 22
+
+[type.type_agent_title]
+size = 22
+weight = 800
+height = 1.1818181818181819
+
+[type.type_button]
+size = 14
+weight = 700
+height = 1.2
+
+[type.type_button_idle]
+size = 14
+weight = 600
+height = 1.2
+
+[type.type_card_line]
+size = 13.5
+weight = 500
+height = 1.3333333333333333
+
+[type.type_card_line_strong]
+size = 13.5
+weight = 600
+height = 1.3333333333333333
+
+[type.type_card_title]
+size = 17
+weight = 700
+height = 1.2941176470588236
+
+[type.type_count_label]
+size = 12.5
+weight = 700
+height = 1.28
+
+[type.type_count_number]
+size = 32
+weight = 800
+height = 1.0625
+
+[type.type_eyebrow]
+size = 11.5
+weight = 400
+height = 1.2173913043478262
+
+[type.type_meta]
+size = 11.5
+weight = 400
+height = 1.391304347826087
+
+[type.type_nav_label]
+size = 12
+weight = 500
+height = 1.2
+
+[type.type_nav_label_active]
+size = 12
+weight = 700
+height = 1.2
+
+[type.type_pill]
+size = 11.5
+weight = 700
+height = 1.9130434782608696
+
+[type.type_tile_initials]
+size = 13
+weight = 700
+height = 1.2
+
+[type.type_title]
+size = 34
+weight = 800
+height = 1.1176470588235294
+
+[a11y]
+surface_light_ref = "#FFFFFF"
+surface_dark_ref = "#121212"
+
+[themes]
+# Seasonal overlays. An overlay may replace only decorative colours (grounds, surfaces,
+# borders, accent and primary fills); status, text and terminal colours are refused.
+# active: "auto" applies the overlay whose window holds today, "default" applies none,
+# or name an overlay to force it. RELAYDECK_THEME overrides this for one process.
+active = "auto"
+
+[themes.christmas]
+# Evergreen grounds with crimson brand fills, from mid-December to the new year.
+window = ["12-15", "01-02"]
+
+[themes.christmas.console]
+ground = "#0E1A14"
+dot = "#1D3A2A"
+card = "#15291F"
+raised = "#19302A"
+panel = "#12231A"
+nav = "#132419"
+border = "#2F5A43"
+status_rule = "#1D3A2A"
+primary_fill = "#C8102E"
+primary_text = "#FF9AA2"
+primary_text_light = "#FFC2C7"
+
+[themes.christmas.palette.dark]
+bg = "#0E1A14"
+surface = "#12231A"
+raised = "#19302A"
+line = "#2F5A43"
+accent = "#C8102E"
+on_accent = "#FFFFFF"
+accent_text = "#FF9AA2"
+rail_bg = "#132419"
+active_row_bg = "#15291F"
+
+[themes.christmas.palette.light]
+accent = "#B3122A"
+on_accent = "#FFFFFF"
+accent_text = "#A30F25"
+active_row_bg = "#FBEFF0"

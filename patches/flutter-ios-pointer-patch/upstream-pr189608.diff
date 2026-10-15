@@ -1,0 +1,524 @@
+diff --git a/engine/src/flutter/lib/web_ui/lib/src/engine/dom.dart b/engine/src/flutter/lib/web_ui/lib/src/engine/dom.dart
+index ac296f15b6433..489581eaaea57 100644
+--- a/engine/src/flutter/lib/web_ui/lib/src/engine/dom.dart
++++ b/engine/src/flutter/lib/web_ui/lib/src/engine/dom.dart
+@@ -1997,6 +1997,19 @@ extension type DomTouchEvent._(JSObject _) implements DomUIEvent {
+   @JS('changedTouches')
+   external _DomList get _changedTouches;
+   Iterable<DomTouch> get changedTouches => _createDomListWrapper<DomTouch>(_changedTouches);
++
++  @JS('touches')
++  external _DomList get _touches;
++
++  /// All touch points currently in contact with the surface.
++  ///
++  /// On iOS WebKit this stays accurate even where the pointer events do not:
++  /// WebKit can stop dispatching pointer events for a touch it has taken over
++  /// for a native gesture, but it still drops that touch from this list once
++  /// the finger leaves, which is what makes an abandoned touch detectable. This
++  /// is observed WebKit behavior, not a cross-browser guarantee.
++  /// See: https://github.com/flutter/flutter/issues/188781
++  Iterable<DomTouch> get touches => _createDomListWrapper<DomTouch>(_touches);
+ }
+ 
+ @JS('Touch')
+diff --git a/engine/src/flutter/lib/web_ui/lib/src/engine/pointer_binding.dart b/engine/src/flutter/lib/web_ui/lib/src/engine/pointer_binding.dart
+index d0b8e14d2a29e..411338fdb11cf 100644
+--- a/engine/src/flutter/lib/web_ui/lib/src/engine/pointer_binding.dart
++++ b/engine/src/flutter/lib/web_ui/lib/src/engine/pointer_binding.dart
+@@ -482,6 +482,20 @@ class ClickDebouncer {
+     EnginePlatformDispatcher.instance.invokeOnPointerDataPacket(packet);
+   }
+ 
++  /// Flushes any in-progress debounce, then forwards [data] to the framework.
++  ///
++  /// For synthetic events that must not be queued or dropped by an in-progress
++  /// debounce, such as cancels that repair a pointer the browser abandoned.
++  /// Flushing first keeps the stream ordered: a queued `pointerdown` has to
++  /// reach the framework before the cancel that closes it out, otherwise the
++  /// framework is left holding a down it can never match.
++  void flushAndSend(List<ui.PointerData> data) {
++    if (isDebouncing) {
++      _flush();
++    }
++    _sendToFramework(null, data);
++  }
++
+   /// Cancels any pending debounce process and forgets anything that happened so
+   /// far.
+   ///
+@@ -1007,6 +1021,13 @@ class _PointerAdapter extends _BaseAdapter with _WheelEventListenerMixin {
+ 
+   final Map<int, _ButtonSanitizer> _sanitizers = <int, _ButtonSanitizer>{};
+ 
++  /// Touch devices that went down and have not been released yet.
++  ///
++  /// A device leaves this set when the browser reports `pointerup` or
++  /// `pointercancel`, or when [_cancelAbandonedTouches] gives up on it. It is
++  /// what that method reconciles against the touches actually on the surface.
++  final Set<int> _downTouchDevices = <int>{};
++
+   @visibleForTesting
+   Iterable<int> debugTrackedDevices() => _sanitizers.keys;
+ 
+@@ -1025,7 +1046,9 @@ class _PointerAdapter extends _BaseAdapter with _WheelEventListenerMixin {
+ 
+   void _removePointerIfUnhoverable(DomPointerEvent event) {
+     if (event.pointerType == 'touch') {
+-      _sanitizers.remove(event.pointerId);
++      final int device = _getPointerId(event);
++      _sanitizers.remove(device);
++      _downTouchDevices.remove(device);
+     }
+   }
+ 
+@@ -1071,6 +1094,9 @@ class _PointerAdapter extends _BaseAdapter with _WheelEventListenerMixin {
+         buttons: event.buttons!.toInt(),
+       );
+       _convertEventsToPointerData(data: pointerData, event: event, details: down);
++      if (event.pointerType == 'touch') {
++        _downTouchDevices.add(device);
++      }
+       _callback(event, pointerData);
+ 
+       if (event.target == _viewTarget) {
+@@ -1177,11 +1203,80 @@ class _PointerAdapter extends _BaseAdapter with _WheelEventListenerMixin {
+       }
+     }, checkModifiers: false);
+ 
++    // Safety net for touches the browser abandons without a `pointerup` or a
++    // `pointercancel`. See [_cancelAbandonedTouches].
++    addEventListener(_globalTarget, 'touchend', (DomEvent event) {
++      _cancelAbandonedTouches(event as DomTouchEvent);
++    });
++    addEventListener(_globalTarget, 'touchcancel', (DomEvent event) {
++      _cancelAbandonedTouches(event as DomTouchEvent);
++    });
++
+     _addWheelEventListener((DomEvent event) {
+       _handleWheelEvent(event);
+     });
+   }
+ 
++  /// Cancels touch pointers that the browser stopped reporting mid-gesture.
++  ///
++  /// iOS WebKit stops dispatching pointer events for a touch once it promotes
++  /// that touch to a native gesture, such as dragging the caret inside a text
++  /// field. It delivers neither `pointerup` nor `pointercancel`, so the
++  /// framework is left with a pointer that never lifts, and any gesture
++  /// recognizer tracking it is wedged forever.
++  ///
++  /// Observed on iOS 27; iOS 26 does not do it. Gated to iOS because the
++  /// reconciliation below relies on WebKit behavior that other engines do not
++  /// guarantee, in particular that a `Touch.identifier` equals its pointer
++  /// event's `pointerId`. Despite its name, [isIosSafari] means WebKit on iOS,
++  /// so the gate covers every browser on iOS, not just Safari.
++  /// See: https://github.com/flutter/flutter/issues/188781
++  ///
++  /// On iOS WebKit, `touches` still reports the truth throughout: it lists the
++  /// touches in contact with the surface, and drops an abandoned one once the
++  /// finger leaves. Only the pointer events go missing. So any touch this class
++  /// believes is down, but which the browser does not report as being on the
++  /// surface, has been abandoned and must be cancelled.
++  ///
++  /// The cancel does not join the click debouncer's queue: it repairs an older
++  /// pointer and must not be dropped by debouncing of a concurrent tap. Any
++  /// queued events are flushed ahead of it, so the framework still sees the
++  /// abandoned pointer's `down` before its `cancel`.
++  void _cancelAbandonedTouches(DomTouchEvent event) {
++    if (!isIosSafari || _downTouchDevices.isEmpty) {
++      return;
++    }
++
++    final onSurface = <int>{
++      for (final DomTouch touch in event.touches)
++        if (touch.identifier?.toInt() case final int device) device,
++    };
++    final Set<int> stale = _downTouchDevices.difference(onSurface);
++    if (stale.isEmpty) {
++      return;
++    }
++
++    final pointerData = <ui.PointerData>[];
++    final Duration timeStamp = _BaseAdapter._eventTimeStampToDuration(event.timeStamp!);
++    for (final device in stale) {
++      _sanitizers.remove(device);
++      // `convert` defaults `change` to `PointerChange.cancel`. It also replaces
++      // a cancel's coordinates with the pointer's last known location, so no
++      // position is supplied here.
++      _pointerDataConverter.convert(
++        pointerData,
++        viewId: _view.viewId,
++        timeStamp: timeStamp,
++        signalKind: ui.PointerSignalKind.none,
++        device: device,
++        pressureMax: 1.0,
++      );
++    }
++    _downTouchDevices.removeAll(stale);
++
++    PointerBinding.clickDebouncer.flushAndSend(pointerData);
++  }
++
+   // For each event that is de-coalesced from `event` and described in
+   // `details`, convert it to pointer data and store in `data`.
+   void _convertEventsToPointerData({
+diff --git a/engine/src/flutter/lib/web_ui/test/engine/pointer_binding_test.dart b/engine/src/flutter/lib/web_ui/test/engine/pointer_binding_test.dart
+index 528c8ee35354a..2a387b23672fd 100644
+--- a/engine/src/flutter/lib/web_ui/test/engine/pointer_binding_test.dart
++++ b/engine/src/flutter/lib/web_ui/test/engine/pointer_binding_test.dart
+@@ -20,6 +20,42 @@ List<ui.PointerData> _allPointerData(List<ui.PointerDataPacket> packets) {
+   return packets.expand((ui.PointerDataPacket packet) => packet.data).toList();
+ }
+ 
++/// Whether this browser exposes the `Touch` and `TouchEvent` constructors that
++/// [_createTouchEvent] needs.
++///
++/// Desktop Safari and Firefox only define them on devices with a touchscreen,
++/// so the touch tests below cannot build their input there.
++bool get _canConstructTouchEvents =>
++    domWindow.hasProperty('Touch'.toJS).toDart && domWindow.hasProperty('TouchEvent'.toJS).toDart;
++
++/// Builds a `touchend` or `touchcancel` reporting that the touches in [lifted]
++/// left the surface, while those in [remaining] are still on it.
++///
++/// A touch identifier is the same value as its pointer event's `pointerId`, so
++/// both lists hold device ids. The touch points carry no meaningful coordinates,
++/// because the engine only reads their identifiers.
++DomTouchEvent _createTouchEvent(
++  String type,
++  List<int> lifted, {
++  List<int> remaining = const <int>[],
++}) {
++  JSAny touch(int device) => DomTouch(
++    JSObject()
++      ..setProperty('identifier'.toJS, device.toJS)
++      ..setProperty('target'.toJS, rootElement as JSAny)
++      ..setProperty('clientX'.toJS, 0.toJS)
++      ..setProperty('clientY'.toJS, 0.toJS),
++  );
++  return DomTouchEvent(
++    type,
++    JSObject()
++      ..setProperty('bubbles'.toJS, true.toJS)
++      ..setProperty('cancelable'.toJS, true.toJS)
++      ..setProperty('touches'.toJS, <JSAny>[for (final int d in remaining) touch(d)].toJS)
++      ..setProperty('changedTouches'.toJS, <JSAny>[for (final int d in lifted) touch(d)].toJS),
++  );
++}
++
+ void main() {
+   internalBootstrapBrowserTest(() => testMain);
+ }
+@@ -2539,6 +2575,311 @@ void testMain() {
+     packets.clear();
+   });
+ 
++  // WebKit stops dispatching pointer events for a touch once it promotes that
++  // touch to a native gesture, such as dragging the caret in a text field. It
++  // sends neither `pointerup` nor `pointercancel`, which used to leave the
++  // pointer down forever and wedge any gesture recognizer tracking it.
++  // Regression test for https://github.com/flutter/flutter/issues/188781
++  test('cancels a touch the browser abandons without pointerup', () {
++    final context = _PointerEventContext();
++    // This workaround is gated to iOS WebKit.
++    debugEmulateIosSafari = true;
++    addTearDown(() {
++      debugEmulateIosSafari = false;
++    });
++    final packets = <ui.PointerDataPacket>[];
++    ui.PlatformDispatcher.instance.onPointerDataPacket = (ui.PointerDataPacket packet) {
++      packets.add(packet);
++    };
++
++    context
++        .multiTouchDown(const <_TouchDetails>[
++          _TouchDetails(pointer: 2, clientX: 100, clientY: 101),
++        ])
++        .forEach(rootElement.dispatchEvent);
++    packets.clear();
++
++    // The finger lifts, but the browser only reports `touchend`. No `pointerup`
++    // and no `pointercancel` ever arrive.
++    //
++    // `touches` is not empty here: it can run ahead of the event stream, and
++    // already lists touch 3, whose `pointerdown` has not been dispatched yet.
++    // Touch 2 is absent from it though, which is what marks it as abandoned.
++    rootElement.dispatchEvent(_createTouchEvent('touchend', <int>[2], remaining: <int>[3]));
++
++    // A cancelled touch is also removed, so exactly two events are emitted.
++    expect(packets, hasLength(1));
++    expect(packets[0].data, hasLength(2));
++    expect(packets[0].data[0].change, equals(ui.PointerChange.cancel));
++    expect(packets[0].data[0].device, equals(2));
++    expect(packets[0].data[0].buttons, equals(0));
++    // The cancel is reported at the pointer's last known location.
++    expect(packets[0].data[0].physicalX, equals(100 * dpi));
++    expect(packets[0].data[0].physicalY, equals(101 * dpi));
++    expect(packets[0].data[1].change, equals(ui.PointerChange.remove));
++    expect(packets[0].data[1].device, equals(2));
++  }, skip: !_canConstructTouchEvents);
++
++  test('does not cancel a touch that was released normally', () {
++    final context = _PointerEventContext();
++    // This workaround is gated to iOS WebKit.
++    debugEmulateIosSafari = true;
++    addTearDown(() {
++      debugEmulateIosSafari = false;
++    });
++    final packets = <ui.PointerDataPacket>[];
++    ui.PlatformDispatcher.instance.onPointerDataPacket = (ui.PointerDataPacket packet) {
++      packets.add(packet);
++    };
++
++    context
++        .multiTouchDown(const <_TouchDetails>[
++          _TouchDetails(pointer: 2, clientX: 100, clientY: 101),
++        ])
++        .forEach(rootElement.dispatchEvent);
++    context
++        .multiTouchUp(const <_TouchDetails>[_TouchDetails(pointer: 2, clientX: 100, clientY: 101)])
++        .forEach(rootElement.dispatchEvent);
++    packets.clear();
++
++    // `pointerup` precedes `touchend` in a healthy sequence, so by now the
++    // pointer is already released and the trailing `touchend` must be a no-op.
++    rootElement.dispatchEvent(_createTouchEvent('touchend', <int>[2]));
++
++    expect(packets, isEmpty);
++  }, skip: !_canConstructTouchEvents);
++
++  // WebKit sometimes drops the `touchend` for an abandoned touch entirely, so
++  // no event ever announces it. It is still caught because `touches` stops
++  // listing it, so reconciling against a later touch finds it missing.
++  test('cancels an abandoned touch whose touchend never arrives', () {
++    final context = _PointerEventContext();
++    // This workaround is gated to iOS WebKit.
++    debugEmulateIosSafari = true;
++    addTearDown(() {
++      debugEmulateIosSafari = false;
++    });
++    final packets = <ui.PointerDataPacket>[];
++    ui.PlatformDispatcher.instance.onPointerDataPacket = (ui.PointerDataPacket packet) {
++      packets.add(packet);
++    };
++
++    // Pointer 2 is abandoned: no pointerup, and no touchend naming it either.
++    context
++        .multiTouchDown(const <_TouchDetails>[
++          _TouchDetails(pointer: 2, clientX: 100, clientY: 101),
++        ])
++        .forEach(rootElement.dispatchEvent);
++
++    // A later, unrelated touch completes normally.
++    context
++        .multiTouchDown(const <_TouchDetails>[
++          _TouchDetails(pointer: 3, clientX: 200, clientY: 201),
++        ])
++        .forEach(rootElement.dispatchEvent);
++    context
++        .multiTouchUp(const <_TouchDetails>[_TouchDetails(pointer: 3, clientX: 200, clientY: 201)])
++        .forEach(rootElement.dispatchEvent);
++    packets.clear();
++
++    // This is pointer 3's touchend, and `touches` is now empty. Pointer 2 is
++    // absent from it, so it is stale and must be cancelled.
++    rootElement.dispatchEvent(_createTouchEvent('touchend', <int>[3]));
++
++    expect(packets, hasLength(1));
++    expect(packets[0].data[0].change, equals(ui.PointerChange.cancel));
++    expect(packets[0].data[0].device, equals(2));
++  }, skip: !_canConstructTouchEvents);
++
++  // The abandoned touch is neither named by this event nor the last finger on
++  // the surface, so it is only detectable by being absent from `touches`.
++  test('cancels an abandoned touch while other fingers are still down', () {
++    final context = _PointerEventContext();
++    // This workaround is gated to iOS WebKit.
++    debugEmulateIosSafari = true;
++    addTearDown(() {
++      debugEmulateIosSafari = false;
++    });
++    final packets = <ui.PointerDataPacket>[];
++    ui.PlatformDispatcher.instance.onPointerDataPacket = (ui.PointerDataPacket packet) {
++      packets.add(packet);
++    };
++
++    // Touch 2 is abandoned: no pointerup, and no touchend naming it either.
++    context
++        .multiTouchDown(const <_TouchDetails>[
++          _TouchDetails(pointer: 2, clientX: 100, clientY: 101),
++        ])
++        .forEach(rootElement.dispatchEvent);
++
++    // Two more fingers go down, and one of them lifts normally.
++    context
++        .multiTouchDown(const <_TouchDetails>[
++          _TouchDetails(pointer: 3, clientX: 200, clientY: 201),
++          _TouchDetails(pointer: 4, clientX: 300, clientY: 301),
++        ])
++        .forEach(rootElement.dispatchEvent);
++    context
++        .multiTouchUp(const <_TouchDetails>[_TouchDetails(pointer: 3, clientX: 200, clientY: 201)])
++        .forEach(rootElement.dispatchEvent);
++    packets.clear();
++
++    // Pointer 4 is still on the surface, so this is not the last finger up.
++    // Pointer 2 must still be cancelled, and pointer 4 must be left alone.
++    rootElement.dispatchEvent(_createTouchEvent('touchend', <int>[3], remaining: <int>[4]));
++
++    // A cancelled touch is also removed, so two events are emitted, both for
++    // pointer 2. Nothing at all is emitted for pointer 4.
++    expect(packets, hasLength(1));
++    expect(packets[0].data, hasLength(2));
++    expect(packets[0].data[0].change, equals(ui.PointerChange.cancel));
++    expect(packets[0].data[0].device, equals(2));
++    expect(packets[0].data[1].change, equals(ui.PointerChange.remove));
++    expect(packets[0].data[1].device, equals(2));
++    expect(
++      packets[0].data.every((ui.PointerData data) => data.device != 4),
++      isTrue,
++      reason: 'pointer 4 is still down and must not be cancelled',
++    );
++  }, skip: !_canConstructTouchEvents);
++
++  // An aborted touch is normally cleaned up by the `pointercancel` that
++  // accompanies `touchcancel`. This covers the case where the browser drops that
++  // `pointercancel`, which is the same class of defect as the missing
++  // `pointerup` this whole safety net exists for.
++  test('cancels an abandoned touch on touchcancel', () {
++    final context = _PointerEventContext();
++    // This workaround is gated to iOS WebKit.
++    debugEmulateIosSafari = true;
++    addTearDown(() {
++      debugEmulateIosSafari = false;
++    });
++    final packets = <ui.PointerDataPacket>[];
++    ui.PlatformDispatcher.instance.onPointerDataPacket = (ui.PointerDataPacket packet) {
++      packets.add(packet);
++    };
++
++    context
++        .multiTouchDown(const <_TouchDetails>[
++          _TouchDetails(pointer: 2, clientX: 100, clientY: 101),
++        ])
++        .forEach(rootElement.dispatchEvent);
++    packets.clear();
++
++    // The touch is aborted, and no `pointercancel` arrives to release it.
++    rootElement.dispatchEvent(_createTouchEvent('touchcancel', <int>[2]));
++
++    expect(packets, hasLength(1));
++    expect(packets[0].data[0].change, equals(ui.PointerChange.cancel));
++    expect(packets[0].data[0].device, equals(2));
++  }, skip: !_canConstructTouchEvents);
++
++  // The reconciliation is gated to iOS WebKit, because it relies on WebKit
++  // behavior other engines do not guarantee (notably that `Touch.identifier`
++  // equals `pointerId`). Off iOS it must never cancel a live pointer.
++  test('does not cancel abandoned touches on non-iOS browsers', () {
++    // Deliberately does NOT emulate iOS.
++    final context = _PointerEventContext();
++    final packets = <ui.PointerDataPacket>[];
++    ui.PlatformDispatcher.instance.onPointerDataPacket = (ui.PointerDataPacket packet) {
++      packets.add(packet);
++    };
++
++    context
++        .multiTouchDown(const <_TouchDetails>[
++          _TouchDetails(pointer: 2, clientX: 100, clientY: 101),
++        ])
++        .forEach(rootElement.dispatchEvent);
++    packets.clear();
++
++    // The same abandonment that would be cancelled on iOS.
++    rootElement.dispatchEvent(_createTouchEvent('touchend', <int>[2]));
++
++    expect(packets, isEmpty);
++  }, skip: !_canConstructTouchEvents);
++
++  // A semantics-enabled text field is itself a tappable element, so the touch
++  // WebKit abandons is usually the very one being debounced: its `down` is still
++  // queued when the repair runs. Sending the cancel straight through would hand
++  // the framework a cancel for a pointer it has not seen go down, and the `down`
++  // would arrive afterwards with nothing left to close it out. That is the same
++  // stuck state this workaround exists to repair, so the queue has to be flushed
++  // ahead of the cancel.
++  test('flushes the debounce queue before delivering the cancel', () {
++    debugEmulateIosSafari = true;
++    EngineSemantics.instance.semanticsEnabled = true;
++    addTearDown(() {
++      debugEmulateIosSafari = false;
++      EngineSemantics.instance.semanticsEnabled = false;
++    });
++
++    final context = _PointerEventContext();
++    final events = <(ui.PointerChange, int)>[];
++    ui.PlatformDispatcher.instance.onPointerDataPacket = (ui.PointerDataPacket packet) {
++      for (final ui.PointerData datum in packet.data) {
++        events.add((datum.change, datum.device));
++      }
++    };
++
++    // The touch lands on a tappable element, so it starts click debouncing and
++    // its `down` sits in the queue instead of going to the framework.
++    final DomElement tappable = createDomElement('flutter-tappable')
++      ..setAttribute('flt-tappable', '');
++    rootElement.append(tappable);
++    addTearDown(() {
++      tappable.remove();
++    });
++    tappable.dispatchEvent(
++      context.multiTouchDown(const <_TouchDetails>[
++        _TouchDetails(pointer: 2, clientX: 100, clientY: 101),
++      ]).single,
++    );
++    expect(PointerBinding.clickDebouncer.isDebouncing, isTrue);
++    expect(events, isEmpty, reason: 'the debounced down must still be queued');
++
++    // WebKit abandons that same touch: no pointerup or pointercancel arrives,
++    // and the finger is gone from the surface by the time touchend fires.
++    rootElement.dispatchEvent(_createTouchEvent('touchend', <int>[2]));
++
++    expect(events, <(ui.PointerChange, int)>[
++      (ui.PointerChange.add, 2),
++      (ui.PointerChange.down, 2),
++      (ui.PointerChange.cancel, 2),
++      (ui.PointerChange.remove, 2),
++    ], reason: 'the queued down must be flushed ahead of the cancel that closes it out');
++  }, skip: !_canConstructTouchEvents);
++
++  // The abandoned pointer's `down` must already have reached the framework
++  // before its synthesized `cancel`, otherwise the framework sees cancel first.
++  test('sends the abandoned pointer down before its cancel', () {
++    debugEmulateIosSafari = true;
++    addTearDown(() {
++      debugEmulateIosSafari = false;
++    });
++
++    final context = _PointerEventContext();
++    final events = <(ui.PointerChange, int)>[];
++    ui.PlatformDispatcher.instance.onPointerDataPacket = (ui.PointerDataPacket packet) {
++      for (final ui.PointerData d in packet.data) {
++        events.add((d.change, d.device));
++      }
++    };
++
++    // Not cleared: we want the whole ordered stream, down then cancel.
++    context
++        .multiTouchDown(const <_TouchDetails>[
++          _TouchDetails(pointer: 2, clientX: 100, clientY: 101),
++        ])
++        .forEach(rootElement.dispatchEvent);
++    rootElement.dispatchEvent(_createTouchEvent('touchend', <int>[2]));
++
++    final int downIndex = events.indexOf((ui.PointerChange.down, 2));
++    final int cancelIndex = events.indexOf((ui.PointerChange.cancel, 2));
++    expect(downIndex, greaterThanOrEqualTo(0));
++    expect(cancelIndex, greaterThanOrEqualTo(0));
++    expect(downIndex, lessThan(cancelIndex));
++  }, skip: !_canConstructTouchEvents);
++
+   test('does not synthesize pointer up if from different device', () {
+     final context = _PointerEventContext();
+     final packets = <ui.PointerDataPacket>[];

@@ -1,0 +1,17 @@
+{
+  "field": {
+    "value": "",
+    "height": 36,
+    "multiline": true,
+    "fit_parent_size": true,
+    "shift_enter": false,
+    "can_request_focus": true,
+    "enable_interactive_selection": true,
+    "autocorrect": false,
+    "enable_suggestions": false,
+    "on_change": true,
+    "on_selection_change": true
+  },
+  "pasted_text": "echo first\r\necho second\n",
+  "fields": ["agent-workflow-direct-typing", "shell-mode-text-typing"]
+}

@@ -1,0 +1,21 @@
+{
+  "protocol": "relaydeck.gateway.v1",
+  "command_id": "cmd-new-workspace-001",
+  "host_id": "home-mac",
+  "host_epoch": "epoch-7",
+  "kind": "agent.start",
+  "target": {
+    "workspace_mode": "new"
+  },
+  "payload": {
+    "name": "tool-a-2",
+    "kind": "tool-a",
+    "argv": [
+      ""
+    ],
+    "new_workspace": {
+      "directory": "/synthetic/project",
+      "label": "project"
+    }
+  }
+}

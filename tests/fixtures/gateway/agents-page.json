@@ -1,0 +1,23 @@
+{
+  "host_id": "home-mac",
+  "host_epoch": "epoch-7",
+  "total": 1,
+  "agents": [
+    {
+      "terminal_id": "term-1",
+      "name": "demo",
+      "agent": "tool-a",
+      "title": "Demo agent",
+      "status": "blocked",
+      "focused": true,
+      "revision": 11,
+      "workspace_id": "w1",
+      "project": "Synthetic project",
+      "tab_id": "tab-1",
+      "pane_id": "p1",
+      "last_activity_ms": 0,
+      "activity_id": "",
+      "unread": false
+    }
+  ]
+}

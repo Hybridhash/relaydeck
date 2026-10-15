@@ -1,0 +1,1 @@
+{"mode": "big", "big_bytes": 2097152, "read_result": {"accountId": "synthetic-account-1", "rateLimitsByLimitId": {"limit-a": {"planType": "plan-x", "primary": {"usedPercent": 41, "windowDurationMins": 10080, "resetsAt": 1791820000}}}}}

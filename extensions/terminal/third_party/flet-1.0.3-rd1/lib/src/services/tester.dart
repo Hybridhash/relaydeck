@@ -1,0 +1,190 @@
+import 'package:flutter/material.dart';
+
+import '../flet_service.dart';
+import '../testing/test_finder.dart';
+import '../utils/icons.dart';
+import '../utils/keys.dart';
+import '../utils/time.dart';
+import 'package:flet/src/utils/transforms.dart';
+
+
+class TesterService extends FletService {
+  TesterService({required super.control});
+  final Map<int, TestFinder> _finders = {};
+
+  @override
+  void init() {
+    super.init();
+    debugPrint("Tester(${control.id}).init: ${control.properties}");
+    control.addInvokeMethodListener(_invokeMethod);
+  }
+
+  @override
+  void dispose() {
+    debugPrint("Tester(${control.id}).dispose()");
+    control.removeInvokeMethodListener(_invokeMethod);
+    super.dispose();
+  }
+
+  Future<dynamic> _invokeMethod(String name, dynamic args) async {
+    debugPrint("Tester.$name($args)");
+    switch (name) {
+      case "pump":
+        await control.backend.tester!
+            .pump(duration: parseDuration(args["duration"]));
+
+      case "pump_and_settle":
+        await control.backend.tester!
+            .pumpAndSettle(duration: parseDuration(args["duration"]));
+
+      case "find_by_text":
+        var finder = control.backend.tester!.findByText(args["text"]);
+        _finders[finder.id] = finder;
+        return finder.toMap();
+
+      case "find_by_text_containing":
+        var finder =
+            control.backend.tester!.findByTextContaining(args["pattern"]);
+        _finders[finder.id] = finder;
+        return finder.toMap();
+
+      case "find_by_key":
+        var controlKey = parseKey(args["key"])!;
+        // Preserve the concrete value type so the constructed ValueKey<T>
+        // matches the one ControlWidget assigned to the rendered widget.
+        // ValueKey's `==` is runtimeType-strict — `ValueKey<Object>('foo')`
+        // never equals `ValueKey<String>('foo')`, which would make
+        // `find.byKey(...)` miss every Flet control.
+        Key? key = controlKey is ControlScrollKey
+            ? control.backend.globalKeys[controlKey.toString()]
+            : switch (controlKey.value) {
+                String v => ValueKey<String>(v),
+                int v => ValueKey<int>(v),
+                double v => ValueKey<double>(v),
+                bool v => ValueKey<bool>(v),
+                _ => ValueKey(controlKey.value),
+              };
+        if (key == null) {
+          throw Exception("Key not found: $key");
+        }
+        var finder = control.backend.tester!.findByKey(key);
+        _finders[finder.id] = finder;
+        return finder.toMap();
+
+      case "find_by_tooltip":
+        var finder = control.backend.tester!.findByTooltip(args["value"]);
+        _finders[finder.id] = finder;
+        return finder.toMap();
+
+      case "find_by_icon":
+        var iconCode = args["icon"];
+        var icon = parseIconData(iconCode, control.backend);
+        if (icon == null) {
+          throw Exception("Icon not found: $iconCode");
+        }
+        var finder = control.backend.tester!.findByIcon(icon);
+        _finders[finder.id] = finder;
+        return finder.toMap();
+
+      case "find_by_semantics_identifier":
+        var finder = control.backend.tester!
+            .findBySemanticsIdentifier(args["identifier"]);
+        _finders[finder.id] = finder;
+        return finder.toMap();
+
+      case "take_screenshot":
+        return await control.backend.tester!.takeScreenshot(args["name"]);
+
+      case "tap":
+        var finder = _finders[args["finder_id"]];
+        if (finder != null) {
+          await control.backend.tester!.tap(finder, args["finder_index"]);
+        }
+
+      case "mouse_click":
+        var finder = _finders[args["finder_id"]];
+        if (finder != null) {
+          await control.backend.tester!.mouseClick(finder, args["finder_index"]);
+        }
+
+      case "mouse_double_click":
+        var finder = _finders[args["finder_id"]];
+        if (finder != null) {
+          await control.backend.tester!
+              .mouseDoubleClick(finder, args["finder_index"]);
+        }
+
+      case "right_mouse_click":
+        var finder = _finders[args["finder_id"]];
+        if (finder != null) {
+          await control.backend.tester!
+              .rightMouseClick(finder, args["finder_index"]);
+        }
+
+      case "tap_at":
+        var offset = parseOffset(args["offset"]);
+        if (offset != null) {
+          await control.backend.tester!.tapAt(offset);
+        }
+
+      case "mouse_click_at":
+        var offset = parseOffset(args["offset"]);
+        if (offset != null) {
+          await control.backend.tester!.mouseClickAt(offset);
+        }
+
+      case "mouse_double_click_at":
+        var offset = parseOffset(args["offset"]);
+        if (offset != null) {
+          await control.backend.tester!.mouseDoubleClickAt(offset);
+        }
+
+      case "right_mouse_click_at":
+        var offset = parseOffset(args["offset"]);
+        if (offset != null) {
+          await control.backend.tester!.rightMouseClickAt(offset);
+        }
+
+      case "drag":
+        var finder = _finders[args["finder_id"]];
+        var offset = parseOffset(args["offset"]);
+        if (finder != null && offset != null) {
+          await control.backend.tester!
+              .drag(finder, args["finder_index"], offset);
+        }
+
+      case "drag_from":
+        var start = parseOffset(args["start"]);
+        var offset = parseOffset(args["offset"]);
+        if (start != null && offset != null) {
+          await control.backend.tester!.dragFrom(start, offset);
+        }
+
+      case "long_press":
+        var finder = _finders[args["finder_id"]];
+        if (finder != null) {
+          await control.backend.tester!.longPress(finder, args["finder_index"]);
+        }
+
+      case "enter_text":
+        var finder = _finders[args["finder_id"]];
+        if (finder != null) {
+          await control.backend.tester!
+              .enterText(finder, args["finder_index"], args["text"]);
+        }
+
+      case "mouse_hover":
+        var finder = _finders[args["finder_id"]];
+        if (finder != null) {
+          await control.backend.tester!
+              .mouseHover(finder, args["finder_index"]);
+        }
+
+      case "teardown":
+        control.backend.tester?.teardown();
+
+      default:
+        throw Exception("Unknown Tester method: $name");
+    }
+  }
+}

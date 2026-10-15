@@ -1,0 +1,11 @@
+{
+  "protocol": "relaydeck.gateway.v1",
+  "command_id": "cmd-20241003-001",
+  "host_id": "home-mac",
+  "kind": "agent.prompt",
+  "target": {
+    "agent_id": "term-1"
+  },
+  "status": "accepted",
+  "updated_ms": 1788900000000
+}

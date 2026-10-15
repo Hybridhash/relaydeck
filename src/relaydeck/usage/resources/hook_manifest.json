@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "script": "statusline_limits_hook.py",
+  "sha256": "1cf6b549e22c8d0bc1efaf245da1630dbb242ce35c6acc85225b2909eef4b9a6",
+  "previous_sha256": [
+    "eece0979aa2ccd21be47121fd2ba2a958a7a2caf8ccf4c8a3b8b24c7995c0c64",
+    "f5632268feff5fa6ee8ec65e97049bbbd30f3f42f8000d977267fced84f0e5e7",
+    "81833a623b5e14b8b0cf242d87ffdbe3fafb01ceee87e06845bc946fcde4914c"
+  ]
+}

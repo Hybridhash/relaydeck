@@ -1,0 +1,16 @@
+{
+  "hosts": [
+    {
+      "host_id": "home-mac",
+      "label": "Home Mac",
+      "epoch": "epoch-7",
+      "reachable": true,
+      "last_seen_at": "2026-10-03T06:19:00Z",
+      "upstream": {
+        "protocol": 22,
+        "version": "0.9.1",
+        "compatible": true
+      }
+    }
+  ]
+}

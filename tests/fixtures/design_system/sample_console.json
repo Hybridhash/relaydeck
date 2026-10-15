@@ -1,0 +1,49 @@
+{
+  "_note": "EXPLICIT SYNTHETIC preview/test data mirroring the mock screens. Never production data; the application maps verified models.",
+  "eyebrow": "2 of 3 hosts online",
+  "title": "Console",
+  "counts": [["blocked", 2], ["working", 2], ["done", 1]],
+  "hosts": [["mac-studio", "mac-studio"], ["hetzner-01", "hetzner-01"]],
+  "agents": [
+    {
+      "agent_id": "a-fx",
+      "name": "fx-rounding-fix",
+      "status": "blocked",
+      "subtitle": "Wants to edit src/ledger/fx.ts",
+      "meta_left": "mac-studio / payments-api",
+      "meta_right": "4m"
+    },
+    {
+      "agent_id": "a-onboard",
+      "name": "onboarding-copy",
+      "status": "blocked",
+      "subtitle": "Asks: keep the old empty state?",
+      "meta_left": "hetzner-01 / web-app",
+      "meta_right": "11m"
+    },
+    {
+      "agent_id": "a-migrate",
+      "name": "migrate-to-pg16",
+      "status": "working",
+      "subtitle": "Running the migration dry-run",
+      "meta_left": "hetzner-01 / infra",
+      "meta_right": "2m"
+    },
+    {
+      "agent_id": "a-flaky",
+      "name": "flaky-test-hunt",
+      "status": "working",
+      "subtitle": "Reading the test logs",
+      "meta_left": "mac-studio / payments-api",
+      "meta_right": "38s"
+    },
+    {
+      "agent_id": "a-changelog",
+      "name": "changelog-draft",
+      "status": "done",
+      "subtitle": "Finished, 6 files changed",
+      "meta_left": "mac-studio / docs",
+      "meta_right": "19m"
+    }
+  ]
+}

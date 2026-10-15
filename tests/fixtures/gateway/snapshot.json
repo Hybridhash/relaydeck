@@ -1,0 +1,14 @@
+{
+  "host": {"id": "home-mac", "label": "Home Mac", "epoch": "epoch-7", "reachable": true, "protocol": 22, "version": "0.9.1", "capabilities": ["sessions.read", "terminal.view", "terminal.control", "agents.prompt", "agents.start", "shells.create", "terminal.attach"]},
+  "cursor": "CURSOR",
+  "workspaces": [{"id": "w1", "host_id": "home-mac", "number": 1, "label": "demo", "focused": true, "pane_count": 2, "tab_count": 2, "active_tab_id": "w1:t1", "agent_status": "working"}],
+  "tabs": [
+    {"id": "w1:t1", "host_id": "home-mac", "workspace_id": "w1", "number": 1, "label": "Agent", "focused": true, "pane_count": 1, "agent_status": "working"},
+    {"id": "w1:t2", "host_id": "home-mac", "workspace_id": "w1", "number": 2, "label": "shell", "pane_count": 1, "agent_status": "unknown"}
+  ],
+  "panes": [
+    {"id": "w1:p1", "host_id": "home-mac", "workspace_id": "w1", "tab_id": "w1:t1", "focused": true, "agent_status": "working"},
+    {"id": "w1:p2", "host_id": "home-mac", "workspace_id": "w1", "tab_id": "w1:t2"}
+  ],
+  "agents": [{"terminal_id": "term-1", "host_id": "home-mac", "workspace_id": "w1", "tab_id": "w1:t1", "pane_id": "w1:p1", "name": "feature", "agent": "tool-a", "title": "feature | demo", "status": "working", "focused": true, "interactive_ready": true, "state_change_seq": 4, "revision": 10}]
+}

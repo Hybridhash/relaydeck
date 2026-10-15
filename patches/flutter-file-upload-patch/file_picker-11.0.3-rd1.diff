@@ -1,0 +1,817 @@
+diff --color -ruN -x .swiftpm a/RD1_PATCH_NOTES.md b/RD1_PATCH_NOTES.md
+--- a/RD1_PATCH_NOTES.md
++++ b/RD1_PATCH_NOTES.md
+@@ -0,0 +1,79 @@
++# RD1: RelayDeck backport of the file_picker web fix
++
++Vendored from `file_picker` **11.0.3** (pub.dev archive; `LICENSE` kept).
++Only `lib/src/platform/web/file_picker_web.dart` differs from upstream
++11.0.3, plus this note and `test/file_picker_web_backport_test.dart`.
++Package name/version stay `file_picker: 11.0.3` so the `^11.0.2`
++constraint keeps resolving. Native (Android/iOS/macOS/Windows/Linux)
++implementations and the public Dart API are unchanged.
++
++## Why
++
++11.0.3 attached its hidden `<input type=file>` (and the
++`flt-file-picker-inputs` container) with `HTMLCollection.add`, which does
++not exist in package:web — it resolved to the js_interop `+` operator
++and silently never inserted anything. Chromium fires `change` on a
++detached input; WebKit (Safari, all iOS browsers) does not, so iPhone
++picks never resolved. It also removed the input right after `click()`.
++
++Upstream issue vicajilau/flutter_file_picker#2222, fix PR #2228
++(merged 2026-10-05, released as file_picker_web 4.0.1). Flet 1.0.3
++pins `file_picker: ^11.0.2` and uses the 11.x API, so we backport the
++web-session fix here instead of upgrading. Reference archive
++`file_picker_web-4.0.1.tar.gz` sha256
++`8d69eb18de3c028a49276d6ca317028a1f39fa17c3ec312e132bac8659c8775e`.
++
++## What changed (`file_picker_web.dart`, all marked RD1)
++
++- Container and input attach with `appendChild`; the input stays
++  attached until the session settles (change / cancel / focus-cancel /
++  error) and only its own input is removed afterwards.
++- JS listener identities (`.toJS` handles) are cached and reused for
++  removal, so window/input listeners no longer leak per attempt. The
++  duplicate `uploadInput.onChange.listen(...)` subscription is gone;
++  the single cached `addEventListener('change', ...)` replaces it.
++- Settle-once guard across change/cancel/error paths; empty selections
++  complete with an empty result instead of hanging (11.0.3 hung);
++  per-file read failures deliver null bytes instead of hanging.
++- Focus-before-change delivers a selection already on the input
++  instead of reporting cancellation (Safari fires focus first).
++- Superseded attempts never touch a newer input (`_activeInput`
++  identity check; the newer session retires the older input at start).
++- Everything before `uploadInput.click()` stays synchronous (user
++  gesture path); `cancelUploadOnWindowBlur: false` still registers no
++  window focus listener; the 1s focus grace of 11.0.3 is kept.
++
++## Deliberate deviations from 4.0.1
++
++- Processing errors settle with `null`, not `completeError`: on Flet's
++  gesture path there is no error channel, and an error would skip the
++  `result` event entirely; null produces the empty result event that
++  Python already handles. Same for the empty-selection result (`[]`,
++  matching 4.0.1's empty-list completion).
++- The focus grace stays 1s (11.0.3) rather than 4.0.1's 500ms.
++- `deliverSelection` returns `Future<void>`: both settle paths await
++  it, and dart2js rejects awaiting a `void` async function
++  (compile error found by a web build).
++
++## Supersede and failure settlement
++
++- Supersession retires synchronously: each attempt is a `_PickSession`
++  (input + retirement closure); starting a new pick retires the previous
++  session — cached listeners unregistered, future resolved as cancelled
++  (null), input removed — before the next input is installed. Later
++  events/timers of the retired attempt are ignored via the settled flag,
++  removed listeners and the completer guard. 4.0.1 has no supersede
++  path (its clearer orphans the old future); this goes beyond it.
++- One idempotent failure path: sync read errors, FileReader
++  error/abort (`addEventListener`, mirroring 4.0.1 — package:web
++  exposes no `onError` stream on FileReader), reader-callback
++  exceptions and `deliverSelection` failures all route through
++  `failAttempt()`, which settles the attempt null exactly once.
++  Whole-attempt null, no partial results (4.0.1 delivers partial
++  results and completes errors; RD1 has no error channel on Flet's
++  gesture path). `readSequential` is always released via a guarded
++  completer, and the read loop exits once the attempt settles.
++- `finish()` completes the future BEFORE notifying `onFileLoading`,
++  and the notification is guarded: a throwing status listener can
++  neither veto completion nor break supersede/retire. (The `picking`
++  notification still fails fast to the caller before any DOM work.)
+diff --color -ruN -x .swiftpm a/lib/src/platform/web/file_picker_web.dart b/lib/src/platform/web/file_picker_web.dart
+--- a/lib/src/platform/web/file_picker_web.dart
++++ b/lib/src/platform/web/file_picker_web.dart
+@@ -16,6 +16,14 @@
+ 
+   final int _readStreamChunkSize = 1000 * 1000; // 1 MB
+ 
++  // Session of the most recent pick attempt. Supersession retires the
++  // previous session synchronously (listeners off, future resolved as
++  // cancelled) before the next input is installed, so an abandoned pick
++  // can never hang or leak window listeners. Completion paths only ever
++  // remove their own input. (4.0.1 has no supersede path — its
++  // clearer orphans the old future the same way 11.0.3 did.)
++  _PickSession? _activeSession;
++
+   FilePickerWeb._() {
+     _target = _ensureInitialized(_kFilePickerInputsDomId);
+   }
+@@ -32,7 +40,11 @@
+         'flt-file-picker-inputs',
+       )..id = id;
+ 
+-      document.querySelector('body')!.children.add(targetElement);
++      // RD1: `children.add` does not exist on HTMLCollection in
++      // package:web; it resolved to the js_interop `+` operator and
++      // silently never inserted the container. WebKit drops `change`
++      // for inputs outside the document, so the pick hung on Safari.
++      document.body!.appendChild(targetElement);
+       target = targetElement;
+     }
+     return target;
+@@ -69,19 +81,97 @@
+     uploadInput.accept = accept;
+     uploadInput.style.display = 'none';
+ 
+-    bool changeEventTriggered = false;
++    // Settle-once guard shared by the change and cancel paths (RD1).
++    bool settled = false;
+ 
+     if (onFileLoading != null) {
+       onFileLoading(FilePickerStatus.picking);
+     }
+ 
+-    void changeEventListener(Event e) async {
+-      if (changeEventTriggered) {
++    // Cached once and reused for both addEventListener and
++    // removeEventListener: Function.toJS creates a new JS function object
++    // on every call, so freshly-created handles would never match the
++    // added listener and it would stay attached forever (RD1).
++    late final JSFunction changeListener;
++    late final JSFunction cancelListener;
++
++    void cleanupListeners() {
++      window.removeEventListener('focus', cancelListener);
++      uploadInput.removeEventListener('change', changeListener);
++      uploadInput.removeEventListener('cancel', cancelListener);
++    }
++
++    void removeUploadInput() {
++      // Only this attempt's input, and only if no newer attempt has
++      // replaced it since (RD1: superseded attempts stay hands-off).
++      if (identical(_activeSession?.input, uploadInput)) {
++        _activeSession = null;
++        if (uploadInput.parentNode == _target) {
++          _target.removeChild(uploadInput);
++        }
++      }
++    }
++
++    // The single idempotent settlement path. The future is
++    // completed BEFORE the status listener runs, and the listener is
++    // guarded, so a throwing onFileLoading can neither veto completion
++    // nor break supersede/retire. Errors settle with null so the gesture
++    // path still delivers an (empty) result event (RD1).
++    void finish(List<PlatformFile>? files) {
++      if (filesCompleter?.isCompleted ?? true) {
+         return;
+       }
+-      changeEventTriggered = true;
++      removeUploadInput();
++      filesCompleter?.complete(files);
++      if (onFileLoading != null) {
++        try {
++          onFileLoading(FilePickerStatus.done);
++        } catch (_) {
++          // Status listeners never veto completion.
++        }
++      }
++    }
+ 
+-      final FileList files = uploadInput.files!;
++    // The single failure path: every processing failure — sync
++    // read errors, FileReader error/abort, callback exceptions — lands
++    // here and settles the attempt null exactly once. Later events,
++    // timers and in-flight reader callbacks become no-ops via the
++    // settled flag and the completer guard.
++    void failAttempt() {
++      settled = true;
++      cleanupListeners();
++      finish(null);
++    }
++
++    // This attempt's session, retired synchronously if a newer pick
++    // starts while this one is still pending.
++    final _PickSession session = _PickSession(
++      uploadInput,
++      () => failAttempt(),
++    );
++
++    // Future<void> (not void): both settle paths await this (RD1).
++    Future<void> deliverSelection(FileList? files) async {
++      final List<File> selected = [];
++      try {
++        if (files != null) {
++          for (int i = 0; i < files.length; i++) {
++            final File? file = files.item(i);
++            if (file != null) {
++              selected.add(file);
++            }
++          }
++        }
++      } catch (_) {
++        failAttempt();
++        return;
++      }
++      // An empty selection still settles; 11.0.3 hung here (RD1).
++      if (selected.isEmpty) {
++        finish([]);
++        return;
++      }
++
+       final List<PlatformFile> pickedFiles = [];
+ 
+       void addPickedFile(
+@@ -90,102 +180,170 @@
+         String? path,
+         Stream<List<int>>? readStream,
+       ) {
+-        String? blobUrl;
+-        if (bytes != null && bytes.isNotEmpty) {
+-          final blob =
+-              Blob([bytes.toJS].toJS, BlobPropertyBag(type: file.type));
+-
+-          blobUrl = URL.createObjectURL(blob);
++        if (filesCompleter?.isCompleted ?? true) {
++          return;
+         }
+-        pickedFiles.add(PlatformFile(
+-          name: file.name,
+-          path: path ?? blobUrl,
+-          size: bytes != null ? bytes.length : file.size,
+-          bytes: bytes,
+-          readStream: readStream,
+-        ));
++        try {
++          String? blobUrl;
++          if (bytes != null && bytes.isNotEmpty) {
++            final blob =
++                Blob([bytes.toJS].toJS, BlobPropertyBag(type: file.type));
+ 
+-        if (pickedFiles.length >= files.length) {
+-          if (onFileLoading != null) {
+-            onFileLoading(FilePickerStatus.done);
++            blobUrl = URL.createObjectURL(blob);
+           }
+-          filesCompleter?.complete(pickedFiles);
++          pickedFiles.add(PlatformFile(
++            name: file.name,
++            path: path ?? blobUrl,
++            size: bytes != null ? bytes.length : file.size,
++            bytes: bytes,
++            readStream: readStream,
++          ));
++        } catch (_) {
++          failAttempt();
++          return;
+         }
+-      }
+ 
+-      for (int i = 0; i < files.length; i++) {
+-        final File? file = files.item(i);
+-        if (file == null) {
+-          continue;
++        if (pickedFiles.length >= selected.length) {
++          finish(pickedFiles);
+         }
++      }
+ 
+-        if (withReadStream) {
+-          addPickedFile(file, null, null, _openFileReadStream(file));
+-          continue;
++      for (final File file in selected) {
++        // Retired or settled mid-read: stop, the attempt is over.
++        if (filesCompleter?.isCompleted ?? true) {
++          return;
+         }
++        try {
++          if (withReadStream) {
++            addPickedFile(file, null, null, _openFileReadStream(file));
++            continue;
++          }
+ 
+-        if (!withData) {
++          if (!withData) {
++            final FileReader reader = FileReader();
++            // 4.0.1 completes errored reads with null bytes; RD1 settles
++            // the attempt null instead — no partial results, and no
++            // error channel on Flet's gesture path. package:web
++            // exposes no onError stream on FileReader, so use
++            // addEventListener like 4.0.1 does.
++            void failRead(Event _) => failAttempt();
++            reader.addEventListener('error', failRead.toJS);
++            reader.addEventListener('abort', failRead.toJS);
++            reader.onLoadEnd.listen((e) {
++              try {
++                String? result = (reader.result as JSString?)?.toDart;
++                addPickedFile(file, null, result, null);
++              } catch (_) {
++                failAttempt();
++              }
++            });
++            reader.readAsDataURL(file);
++            continue;
++          }
++
++          final syncCompleter = Completer<void>();
++          void completeSync() {
++            if (!syncCompleter.isCompleted) {
++              syncCompleter.complete();
++            }
++          }
+           final FileReader reader = FileReader();
++          void failRead(Event _) {
++            failAttempt();
++            completeSync();
++          }
++          reader.addEventListener('error', failRead.toJS);
++          reader.addEventListener('abort', failRead.toJS);
+           reader.onLoadEnd.listen((e) {
+-            String? result = (reader.result as JSString?)?.toDart;
+-            addPickedFile(file, null, result, null);
++            try {
++              ByteBuffer? byteBuffer =
++                  (reader.result as JSArrayBuffer?)?.toDart;
++              addPickedFile(
++                  file, byteBuffer?.asUint8List(), null, null);
++            } catch (_) {
++              failAttempt();
++            } finally {
++              // Always release readSequential, even on failure.
++              completeSync();
++            }
+           });
+-          reader.readAsDataURL(file);
+-          continue;
++          reader.readAsArrayBuffer(file);
++          if (readSequential) {
++            await syncCompleter.future;
++          }
++        } catch (_) {
++          // Sync read errors settle the attempt null: 11.0.3
++          // hung here and RD1 made a phantom file instead.
++          failAttempt();
++          return;
+         }
++      }
++    }
+ 
+-        final syncCompleter = Completer<void>();
+-        final FileReader reader = FileReader();
+-        reader.onLoadEnd.listen((e) {
+-          ByteBuffer? byteBuffer = (reader.result as JSArrayBuffer?)?.toDart;
+-          addPickedFile(file, byteBuffer?.asUint8List(), null, null);
+-          syncCompleter.complete();
+-        });
+-        reader.readAsArrayBuffer(file);
+-        if (readSequential) {
+-          await syncCompleter.future;
+-        }
++    void changeEventListener(Event e) async {
++      if (settled) {
++        return;
+       }
++      settled = true;
++      cleanupListeners();
++      // 4.0.1 catches processFiles failures around completion; RD1
++      // settles null through the same single path.
++      try {
++        await deliverSelection(uploadInput.files);
++      } catch (_) {
++        failAttempt();
++      }
+     }
+ 
+     void cancelledEventListener(Event _) {
+-      window.removeEventListener('focus', cancelledEventListener.toJS);
++      window.removeEventListener('focus', cancelListener);
+ 
+-      // This listener is called before the input changed event,
+-      // and the `uploadInput.files` value is still null
+-      // Wait for results from js to dart
+-      Future.delayed(Duration(seconds: 1)).then((value) {
+-        if (!changeEventTriggered) {
+-          changeEventTriggered = true;
+-          filesCompleter?.complete(null);
++      // The focus/cancel signal can arrive before change (Safari fires
++      // focus first once the dialog closes). Wait briefly for results to
++      // travel from JS to Dart, then deliver any selection already on the
++      // input instead of reporting a cancellation (RD1).
++      Future.delayed(Duration(seconds: 1)).then((value) async {
++        try {
++          if (settled) {
++            return;
++          }
++          settled = true;
++          cleanupListeners();
++          final FileList? files = uploadInput.files;
++          if (files != null && files.length > 0) {
++            await deliverSelection(files);
++          } else {
++            finish(null);
++          }
++        } catch (_) {
++          failAttempt();
+         }
+       });
+     }
+ 
+-    uploadInput.onChange.listen(changeEventListener);
+-    uploadInput.addEventListener('change', changeEventListener.toJS);
+-    uploadInput.addEventListener('cancel', cancelledEventListener.toJS);
++    changeListener = changeEventListener.toJS;
++    cancelListener = cancelledEventListener.toJS;
+ 
++    // RD1: the old `uploadInput.onChange.listen(...)` duplicate is gone;
++    // the cached addEventListener handle below is removed on settle.
++    uploadInput.addEventListener('change', changeListener);
++    uploadInput.addEventListener('cancel', cancelListener);
++
+     if (cancelUploadOnWindowBlur) {
+       // Listen focus event for cancelled
+-      window.addEventListener('focus', cancelledEventListener.toJS);
++      window.addEventListener('focus', cancelListener);
+     }
+ 
+-    //Add input element to the page body
+-    Node? firstChild = _target.firstChild;
+-    while (firstChild != null) {
+-      _target.removeChild(firstChild);
+-      firstChild = _target.firstChild;
+-    }
+-    _target.children.add(uploadInput);
++    // Attach synchronously inside the user gesture: WebKit only delivers
++    // `change` for inputs in the document. A pending previous attempt is
++    // retired synchronously first — listeners off, future resolved as
++    // cancelled — so it can never hang or disturb this one.
++    final _PickSession? previousSession = _activeSession;
++    previousSession?.retire();
++    _activeSession = session;
++    _target.appendChild(uploadInput);
+     uploadInput.click();
+ 
+-    firstChild = _target.firstChild;
+-    while (firstChild != null) {
+-      _target.removeChild(firstChild);
+-      firstChild = _target.firstChild;
+-    }
+-
+     final List<PlatformFile>? files = await filesCompleter.future;
+     filesCompleter = null;
+ 
+@@ -287,5 +445,30 @@
+         start += _readStreamChunkSize;
+       }
+     }
++  }
++}
++
++/// One pending web pick: its input plus its synchronous retirement.
++/// Supersession retires the previous session before installing the next
++/// input; retirement unregisters that attempt's cached listeners and
++/// resolves it as cancelled, and its later events/timers are ignored.
++/// (4.0.1 has no supersede path.)
++class _PickSession {
++  _PickSession(this.input, this._retireAttempt);
++
++  /// This attempt's attached input.
++  final HTMLInputElement input;
++
++  final void Function() _retireAttempt;
++
++  bool _retired = false;
++
++  /// Synchronously retire this attempt. Idempotent.
++  void retire() {
++    if (_retired) {
++      return;
++    }
++    _retired = true;
++    _retireAttempt();
+   }
+ }
+diff --color -ruN -x .swiftpm a/test/file_picker_web_backport_test.dart b/test/file_picker_web_backport_test.dart
+--- a/test/file_picker_web_backport_test.dart
++++ b/test/file_picker_web_backport_test.dart
+@@ -0,0 +1,328 @@
++@TestOn('browser')
++library;
++
++// RD1 backport tests: the Safari/iOS attachment fix for file_picker 11.0.3.
++// Run with: flutter test --platform chrome test/file_picker_web_backport_test.dart
++// (needs Chrome; headless is fine — no real dialog interaction required).
++
++import 'dart:js_interop';
++
++import 'package:file_picker/src/api/file_picker_types.dart';
++import 'package:file_picker/src/platform/file_picker_platform_interface.dart';
++import 'package:file_picker/src/platform/web/file_picker_web.dart';
++import 'package:flutter_test/flutter_test.dart';
++import 'package:flutter_web_plugins/flutter_web_plugins.dart';
++import 'package:web/web.dart';
++
++// registerWith ignores its argument; this only satisfies the signature.
++class FakeRegistrar implements Registrar {
++  @override
++  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
++}
++
++void main() {
++  FilePickerWeb.registerWith(FakeRegistrar());
++
++  final FilePickerPlatform platform = FilePickerPlatform.instance;
++
++  // Container id from file_picker_web.dart (_kFilePickerInputsDomId).
++  Element target() =>
++      document.querySelector('#__file_picker_web-file-input')!;
++
++  HTMLInputElement attachedInput() =>
++      target().firstChild! as HTMLInputElement;
++
++  void selectFile(HTMLInputElement input, String name) {
++    final transfer = DataTransfer();
++    transfer.items.add(File(<JSAny>[].toJS, name));
++    input.files = transfer.files;
++  }
++
++  test('attaches container and input synchronously while pending', () async {
++    final future = platform.pickFiles();
++    // No await above: these run synchronously in the same task as the pick
++    // call, proving the gesture path attaches the input (WebKit only fires
++    // change for connected inputs).
++    expect(target().isConnected, isTrue);
++    final input = attachedInput();
++    expect(input.isConnected, isTrue);
++
++    selectFile(input, 'a.pdf');
++    input.dispatchEvent(Event('change'));
++
++    final result = await future;
++    expect(result?.files.single.name, 'a.pdf');
++    expect(target().childNodes.length, 0);
++    expect(input.isConnected, isFalse);
++  });
++
++  test('completes with the selected file on change and detaches', () async {
++    final future = platform.pickFiles();
++    final input = attachedInput();
++
++    selectFile(input, 'b.png');
++    input.dispatchEvent(Event('change'));
++
++    final result = await future;
++    expect(result?.files.single.name, 'b.png');
++    expect(target().childNodes.length, 0);
++    expect(input.isConnected, isFalse);
++  });
++
++  test('completes null on input cancel with blur-cancel disabled', () async {
++    final future = platform.pickFiles(cancelUploadOnWindowBlur: false);
++    final input = attachedInput();
++
++    input.dispatchEvent(Event('cancel'));
++
++    expect(await future, isNull);
++    expect(target().childNodes.length, 0);
++    expect(input.isConnected, isFalse);
++  });
++
++  test('delivers the selection when focus precedes change', () async {
++    final future = platform.pickFiles();
++    final input = attachedInput();
++
++    // Safari fires window focus before change once the dialog closes.
++    selectFile(input, 'c.jpg');
++    window.dispatchEvent(Event('focus'));
++
++    final result = await future;
++    expect(result?.files.single.name, 'c.jpg');
++    expect(target().childNodes.length, 0);
++    expect(input.isConnected, isFalse);
++  });
++
++  test('completes null on focus without a selection', () async {
++    final future = platform.pickFiles();
++
++    window.dispatchEvent(Event('focus'));
++
++    expect(await future, isNull);
++    expect(target().childNodes.length, 0);
++  });
++
++  test('completes empty instead of hanging on an empty change', () async {
++    final future = platform.pickFiles();
++    final input = attachedInput();
++
++    // Fresh input holds an empty selection; 11.0.3 never settled here.
++    input.dispatchEvent(Event('change'));
++
++    final result = await future;
++    expect(result, isNotNull);
++    expect(result!.files, isEmpty);
++    expect(target().childNodes.length, 0);
++    expect(input.isConnected, isFalse);
++  });
++
++  test('picks the same file twice', () async {
++    for (var i = 0; i < 2; i++) {
++      final future = platform.pickFiles();
++      final input = attachedInput();
++      selectFile(input, 'same.png');
++      input.dispatchEvent(Event('change'));
++      expect((await future)?.files.single.name, 'same.png');
++      expect(target().childNodes.length, 0);
++    }
++  });
++
++  test('a superseded attempt never removes the newer input', () async {
++    final first = platform.pickFiles();
++    final firstInput = attachedInput();
++
++    final second = platform.pickFiles();
++    final secondInput = attachedInput();
++
++    // The newer session retires the older input at start.
++    expect(firstInput.isConnected, isFalse);
++    expect(secondInput.isConnected, isTrue);
++    expect(target().childNodes.length, 1);
++
++    // The older attempt settles (null) via its own detached input
++    // without touching the newer one. (Window focus is not used here: it
++    // would also arm the newer attempt's focus-cancel timer.)
++    firstInput.dispatchEvent(Event('cancel'));
++    expect(await first, isNull);
++    expect(secondInput.isConnected, isTrue);
++    expect(target().firstChild, same(secondInput));
++
++    selectFile(secondInput, 'newer.pdf');
++    secondInput.dispatchEvent(Event('change'));
++    expect((await second)?.files.single.name, 'newer.pdf');
++    expect(target().childNodes.length, 0);
++  });
++
++  test('repeated cancelled attempts leave no residue', () async {
++    for (var i = 0; i < 3; i++) {
++      final future = platform.pickFiles(cancelUploadOnWindowBlur: false);
++      attachedInput().dispatchEvent(Event('cancel'));
++      expect(await future, isNull);
++      expect(target().childNodes.length, 0);
++    }
++
++    // The picker still works afterwards.
++    final future = platform.pickFiles();
++    final input = attachedInput();
++    selectFile(input, 'after.pdf');
++    input.dispatchEvent(Event('change'));
++    expect((await future)?.files.single.name, 'after.pdf');
++    expect(target().childNodes.length, 0);
++  });
++
++  group('supersede retires synchronously', () {
++    for (final blurCancel in [true, false]) {
++      test('second pick alone resolves the first (blurCancel=$blurCancel)',
++          () async {
++        final first =
++            platform.pickFiles(cancelUploadOnWindowBlur: blurCancel);
++        final firstInput = attachedInput();
++
++        final second =
++            platform.pickFiles(cancelUploadOnWindowBlur: blurCancel);
++
++        // No event was dispatched on the old input, yet the first pick
++        // resolves as cancelled instead of hanging.
++        expect(await first.timeout(const Duration(seconds: 2)), isNull);
++        expect(firstInput.isConnected, isFalse);
++
++        // Late events on the retired input are ignored.
++        selectFile(firstInput, 'late-$blurCancel.png');
++        firstInput.dispatchEvent(Event('cancel'));
++        firstInput.dispatchEvent(Event('change'));
++
++        // The new pick stays attached and succeeds.
++        final secondInput = attachedInput();
++        expect(secondInput.isConnected, isTrue);
++        selectFile(secondInput, 'second-$blurCancel.png');
++        secondInput.dispatchEvent(Event('change'));
++        expect((await second)?.files.single.name,
++            'second-$blurCancel.png');
++        expect(target().childNodes.length, 0);
++      });
++    }
++
++    test('a focus-armed timer cannot disturb the superseding pick',
++        () async {
++      final first = platform.pickFiles(cancelUploadOnWindowBlur: true);
++      final firstInput = attachedInput();
++
++      // Arm the old attempt's 1s focus timer, then supersede immediately.
++      window.dispatchEvent(Event('focus'));
++      final second = platform.pickFiles(cancelUploadOnWindowBlur: true);
++
++      expect(await first.timeout(const Duration(seconds: 2)), isNull);
++
++      // Let the old timer fire into the void.
++      await Future.delayed(const Duration(milliseconds: 1200));
++      expect(firstInput.isConnected, isFalse);
++
++      final secondInput = attachedInput();
++      expect(secondInput.isConnected, isTrue);
++      selectFile(secondInput, 'after-timer.png');
++      secondInput.dispatchEvent(Event('change'));
++      expect((await second)?.files.single.name, 'after-timer.png');
++      expect(target().childNodes.length, 0);
++    });
++  });
++
++  group('processing failures settle through one path', () {
++    test('Flet read-stream path delivers a consumable stream', () async {
++      final future = platform.pickFiles(withReadStream: true);
++      final input = attachedInput();
++      // Non-empty file so the chunk loop yields real bytes.
++      final transfer = DataTransfer();
++      transfer.items
++          .add(File(['rd34-stream-bytes'.toJS].toJS, 'data.bin'));
++      input.files = transfer.files;
++      input.dispatchEvent(Event('change'));
++
++      final result = await future.timeout(const Duration(seconds: 5));
++      final file = result?.files.single;
++      expect(file?.name, 'data.bin');
++      expect(file?.readStream, isNotNull);
++      final bytes = await file!.readStream!
++          .fold<List<int>>([], (all, chunk) => all..addAll(chunk));
++      expect(String.fromCharCodes(bytes), 'rd34-stream-bytes');
++      expect(target().childNodes.length, 0);
++      expect(input.isConnected, isFalse);
++    });
++
++    test('a throwing done listener cannot veto success', () async {
++      var calls = 0;
++      final future = platform.pickFiles(onFileLoading: (_) {
++        calls++;
++        if (calls > 1) throw StateError('synthetic done failure');
++      });
++      final input = attachedInput();
++      selectFile(input, 'ok.png');
++      input.dispatchEvent(Event('change'));
++
++      final result = await future.timeout(const Duration(seconds: 5));
++      expect(result?.files.single.name, 'ok.png');
++      expect(calls, 2); // picking + done (done threw, swallowed)
++      expect(target().childNodes.length, 0);
++    });
++
++    test('a throwing done listener cannot veto cancel', () async {
++      var calls = 0;
++      final future = platform.pickFiles(
++        cancelUploadOnWindowBlur: false,
++        onFileLoading: (_) {
++          calls++;
++          if (calls > 1) throw StateError('synthetic done failure');
++        },
++      );
++      attachedInput().dispatchEvent(Event('cancel'));
++      expect(await future.timeout(const Duration(seconds: 5)), isNull);
++      expect(calls, 2);
++      expect(target().childNodes.length, 0);
++    });
++
++    test('a throwing picking listener fails fast with no residue',
++        () async {
++      await expectLater(
++        platform.pickFiles(
++            onFileLoading: (_) =>
++                throw StateError('synthetic picking failure')),
++        throwsA(isA<StateError>()),
++      );
++      expect(target().childNodes.length, 0);
++    });
++
++    test('retire during pending delivery settles null without hanging',
++        () async {
++      final first = platform.pickFiles();
++      final firstInput = attachedInput();
++      selectFile(firstInput, 'inflight.png');
++      firstInput.dispatchEvent(Event('change'));
++      // Supersede before the change microtasks run.
++      final second = platform.pickFiles();
++
++      expect(await first.timeout(const Duration(seconds: 2)), isNull);
++
++      final secondInput = attachedInput();
++      selectFile(secondInput, 'next.png');
++      secondInput.dispatchEvent(Event('change'));
++      expect((await second)?.files.single.name, 'next.png');
++      expect(target().childNodes.length, 0);
++    });
++
++    test('duplicate settle signals complete once', () async {
++      final future = platform.pickFiles();
++      final input = attachedInput();
++      selectFile(input, 'once.png');
++      input.dispatchEvent(Event('change'));
++      input.dispatchEvent(Event('cancel'));
++      window.dispatchEvent(Event('focus'));
++
++      final result = await future.timeout(const Duration(seconds: 5));
++      expect(result?.files.single.name, 'once.png');
++      // No late timer mischief after the dust settles.
++      await Future.delayed(const Duration(milliseconds: 1200));
++      expect(target().childNodes.length, 0);
++      expect(input.isConnected, isFalse);
++    });
++  });
++}

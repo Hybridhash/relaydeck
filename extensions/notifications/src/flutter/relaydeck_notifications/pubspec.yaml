@@ -1,0 +1,21 @@
+name: relaydeck_notifications
+description: RelayDeck push + app-link extension for Flet (FCM bridge)
+version: 0.1.0
+publish_to: none
+
+environment:
+  sdk: '>=3.3.0 <4.0.0'
+  flutter: ">=3.19.0"
+
+dependencies:
+  flet: ^1.0.3
+  flutter:
+    sdk: flutter
+  firebase_core: ^4.15.0
+  firebase_messaging: ^16.7.0
+  app_links: ^7.2.1
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.0

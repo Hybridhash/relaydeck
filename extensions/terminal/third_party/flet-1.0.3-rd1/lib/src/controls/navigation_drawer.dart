@@ -1,0 +1,78 @@
+import 'package:flet/src/extensions/control.dart';
+import 'package:flutter/material.dart';
+
+import '../models/control.dart';
+import '../utils/borders.dart';
+import '../utils/colors.dart';
+import '../utils/edge_insets.dart';
+import '../utils/numbers.dart';
+import 'base_controls.dart';
+import 'control_widget.dart';
+
+class NavigationDrawerControl extends StatefulWidget {
+  final Control control;
+
+  NavigationDrawerControl({Key? key, required this.control})
+      : super(key: key ?? ValueKey("control_${control.id}"));
+
+  @override
+  State<NavigationDrawerControl> createState() =>
+      _NavigationDrawerControlState();
+}
+
+class _NavigationDrawerControlState extends State<NavigationDrawerControl> {
+  int _selectedIndex = 0;
+
+  void _destinationChanged(int index) {
+    _selectedIndex = index;
+    debugPrint("Selected index: $_selectedIndex");
+    widget.control
+        .updateProperties({"selected_index": _selectedIndex}, notify: true);
+    widget.control.triggerEvent("change", _selectedIndex);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    debugPrint("NavigationDrawerControl build: ${widget.control.id}");
+
+    var selectedIndex = widget.control.getInt("selected_index", 0)!;
+    if (_selectedIndex != selectedIndex) {
+      _selectedIndex = selectedIndex;
+    }
+
+    final width = widget.control.getDouble("width");
+
+    var drawer = NavigationDrawer(
+      elevation: widget.control.getDouble("elevation"),
+      indicatorColor: widget.control.getColor("indicator_color", context),
+      indicatorShape: widget.control
+          .getOutlinedBorder("indicator_shape", Theme.of(context)),
+      backgroundColor: widget.control.getColor("bgcolor", context),
+      selectedIndex: _selectedIndex,
+      shadowColor: widget.control.getColor("shadow_color", context),
+      tilePadding: widget.control.getEdgeInsets(
+          "tile_padding", const EdgeInsets.symmetric(horizontal: 12.0))!,
+      onDestinationSelected: _destinationChanged,
+      children: widget.control.children("controls").map((dest) {
+        dest.notifyParent = true;
+        if (dest.type == "NavigationDrawerDestination") {
+          return NavigationDrawerDestination(
+            enabled: !dest.disabled,
+            label: dest.buildTextOrWidget("label") ?? const Text(""),
+            backgroundColor: dest.getColor("bgcolor", context),
+            icon: dest.buildIconOrWidget("icon", required: true)!,
+            selectedIcon: dest.buildIconOrWidget("selected_icon"),
+          );
+        } else {
+          return ControlWidget(control: dest);
+        }
+      }).toList(),
+    );
+
+    Widget drawerWidget = drawer;
+    if (width != null) {
+      drawerWidget = SizedBox(width: width, child: drawer);
+    }
+    return BaseControl(control: widget.control, child: drawerWidget);
+  }
+}

@@ -1,0 +1,1 @@
+{"read_result": {"accountId": "synthetic-account-1", "rateLimitsByLimitId": {"limit-a": {"planType": "plan-x", "primary": {"usedPercent": "lots"}}}}}

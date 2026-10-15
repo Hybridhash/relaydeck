@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="192" height="192" viewBox="0 0 192 192" role="img" aria-label="RelayDeck logo">
+  <rect width="192" height="192" rx="44" fill="#7357F6"/>
+  <path d="M62 72 L86 94 L62 116" fill="none" stroke="#FFFFFF" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/>
+  <line x1="98" y1="120" x2="130" y2="120" stroke="#FFFFFF" stroke-width="10" stroke-linecap="round"/>
+</svg>

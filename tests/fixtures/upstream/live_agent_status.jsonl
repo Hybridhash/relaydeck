@@ -1,0 +1,2 @@
+{"data":{"agent":"agent-a","agent_status":"idle","pane_id":"w2:p5","workspace_id":"w2"},"event":"pane.agent_status_changed"}
+{"data":{"agent":"agent-a","agent_status":"working","pane_id":"w2:p5","workspace_id":"w2"},"event":"pane.agent_status_changed"}

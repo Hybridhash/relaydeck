@@ -1,0 +1,1 @@
+{"description": "CJK wide chars and emoji decode to the same text", "lines": ["AB中文C", "😀 done"]}

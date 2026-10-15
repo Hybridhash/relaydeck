@@ -1,0 +1,1 @@
+{"description": "EL clears 'hello', CR returns, 'world' rewrites", "lines": ["world"]}

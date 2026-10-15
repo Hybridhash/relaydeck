@@ -1,0 +1,4 @@
+{"data":{"tab":{"agent_status":"unknown","focused":false,"label":"rd-probe","number":13,"pane_count":1,"tab_id":"w2:tD","workspace_id":"w2"},"type":"tab_created"},"event":"tab_created"}
+{"data":{"pane":{"agent_status":"unknown","cwd":"/redacted","focused":false,"foreground_cwd":"/redacted","pane_id":"w2:pD","revision":0,"scroll":{"max_offset_from_bottom":0,"offset_from_bottom":0,"viewport_rows":49},"tab_id":"w2:tD","terminal_id":"term_x","workspace_id":"w2"},"type":"pane_created"},"event":"pane_created"}
+{"data":{"pane_id":"w2:pD","agent_status":"blocked"},"event":"pane_agent_status_changed"}
+{"data":{"tab_id":"w2:tD","type":"tab_closed","workspace_id":"w2"},"event":"tab_closed"}

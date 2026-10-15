@@ -1,0 +1,116 @@
+[project]
+name = "relaydeck"
+version = "0.2.0"
+description = "Watch and drive your Herdr terminal sessions from phone, tablet and browser"
+readme = "README.md"
+requires-python = ">=3.13,<3.14"
+license = { text = "MIT" }
+# Runtime dependencies. Every third-party module the client, connector and usage packages import is
+# here; the companion and gateway server packages are the `companion` extra below, so the mobile build
+# (scripts/build_native.py) keeps its server-free dependency list. tests/unit/test_packaging_metadata.py
+# checks every runtime import against these two lists. The two extension packages ship inside this
+# wheel (see [tool.hatch.build.targets.wheel]).
+dependencies = [
+  "flet==1.0.3",
+  "flet-secure-storage==1.0.3",
+  "httpx>=0.28,<0.29",
+  "websockets==16.0",
+  "cryptography==48.0.0",
+]
+
+[project.optional-dependencies]
+# The companion's server side: `relaydeck[companion]` is what the docs install.
+companion = [
+  "fastapi>=0.115,<0.118",
+  "starlette>=0.46,<0.49",
+  "anyio>=4,<5",
+  "uvicorn>=0.34,<0.36",
+  "flet-web==1.0.3",
+  "Pillow==12.3.0",
+  "qrcode==8.2",
+  "msgpack>=1.1,<2",
+]
+
+[tool.uv.sources]
+# Development only: the editable extension packages for the source checkout (see dev group below).
+relaydeck-terminal = { path = "extensions/terminal", editable = true }
+relaydeck-notifications = { path = "extensions/notifications", editable = true }
+
+[tool.flet.dev_packages]
+relaydeck-terminal = "extensions/terminal"
+relaydeck-notifications = "extensions/notifications"
+
+[tool.flet]
+org = "dev.relaydeck"
+product = "RelayDeck"
+company = "RelayDeck"
+copyright = "Copyright (C) 2026 RelayDeck"
+
+[dependency-groups]
+dev = [
+  "relaydeck-terminal",
+  "relaydeck-notifications",
+  "flet-cli==1.0.3",
+  "flet-web==1.0.3",
+  "flet-desktop==1.0.3",
+  "pytest>=8.3,<9",
+  "ruff>=0.11,<0.13",
+  "mypy>=1.15,<2",
+]
+
+[project.scripts]
+relaydeck = "relaydeck.cli:main"
+relaydeck-gateway = "relaydeck.gateway.cli:main"
+relaydeck-connector = "relaydeck.connector.cli:main"
+relaydeck-companion = "relaydeck.companion.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+# The extension Python packages are part of the wheel: one artifact installs everything the
+# companion imports. Their Flutter sources are not packaged; `flet build` reads them from dev_packages.
+packages = [
+  "src/relaydeck",
+  "extensions/terminal/src/relaydeck_terminal",
+  "extensions/notifications/src/relaydeck_notifications",
+]
+
+[tool.hatch.build.targets.wheel.force-include]
+"src/relaydeck/usage/resources/statusline_limits_hook.py" = "relaydeck/usage/resources/statusline_limits_hook.py"
+"src/relaydeck/usage/resources/hook_manifest.json" = "relaydeck/usage/resources/hook_manifest.json"
+"src/relaydeck/client/theme.toml" = "relaydeck/client/theme.toml"
+
+[tool.flet.app]
+path = "src/relaydeck/client"
+module = "main"
+
+[tool.ruff]
+line-length = 100
+exclude = ["examples", ".venv"]
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.mypy]
+python_version = "3.13"
+strict = true
+packages = ["relaydeck"]
+
+[[tool.mypy.overrides]]
+module = "flet_secure_storage.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "qrcode.*"
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+markers = [
+  "auto_takeover: run with automatic control-on-open enabled (UI default is watch-first in tests)",
+  "open_hold: keep the open hold of a new terminal (UI default releases it at once in tests)",
+]

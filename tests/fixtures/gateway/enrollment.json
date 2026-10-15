@@ -1,0 +1,8 @@
+{
+  "id": "enr_fixture01",
+  "code": "ABCDEFGHJKLM",
+  "qr": "RELAYDECK-ENROLL:1:eyJndyI6Imh0dHBzOi8vZ3cuZXhhbXBsZSIsImlkIjoiZW5yX2ZpeHR1cmUwMSIsImNvZGUiOiJBQkNERUZHSEpLTE0iLCJleHAiOiIyMDI2LTEwLTAzVDA3OjAwOjAwWiIsInYiOjF9",
+  "fingerprint": "SHA256:ZsrOVCtcb1bouzun0GIHz5vL5oCjVhVIQ3jfIBIgZ8g",
+  "expires_at": "2026-10-03T07:00:00Z",
+  "host_label": "Home Mac"
+}

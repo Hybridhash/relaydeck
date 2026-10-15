@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex">
+  <title>RelayDeck offline cache</title>
+  <style>
+    body { margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center;
+      background: #130F26; color: #fff; font: 16px system-ui, sans-serif; text-align: center; }
+    main { padding: 24px; max-width: 360px; }
+    a { color: #fff; min-height: 44px; display: inline-flex; align-items: center; }
+  </style>
+</head>
+<body>
+  <main>
+    <p id="status">Clearing the offline cache…</p>
+    <p><a href="/">Back to RelayDeck</a></p>
+  </main>
+  <script>
+    // Network-only kill switch: unregisters the RelayDeck worker and deletes only its shell caches.
+    (async () => {
+      const status = document.getElementById('status');
+      try {
+        if ('serviceWorker' in navigator) {
+          const scope = new URL('/', location.href).href;
+          for (const registration of await navigator.serviceWorker.getRegistrations()) {
+            if (registration.scope === scope) await registration.unregister();
+          }
+        }
+        if ('caches' in window) {
+          for (const key of await caches.keys()) {
+            if (key.startsWith('relaydeck-shell-')) await caches.delete(key);
+          }
+        }
+        status.textContent = 'Offline cache cleared \u2014 reopen RelayDeck';
+      } catch (error) {
+        status.textContent = 'Could not clear the offline cache. Reopen RelayDeck.';
+      }
+    })();
+  </script>
+</body>
+</html>

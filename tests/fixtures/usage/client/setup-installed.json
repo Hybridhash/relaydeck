@@ -1,0 +1,166 @@
+{
+  "coverage": [
+    {
+      "coverage": "complete",
+      "kind": "kind-a",
+      "observed_ms": 1791699000000,
+      "unmapped_sessions": 2
+    },
+    {
+      "coverage": "unverified",
+      "kind": "kind-b",
+      "observed_ms": null,
+      "unmapped_sessions": 0
+    }
+  ],
+  "generated_ms": 1791700000000,
+  "host_id": "host-a",
+  "kinds": [
+    {
+      "display_name": "Kind A",
+      "kind": "kind-a",
+      "limits_setup": {
+        "checked_ms": 1791699900000,
+        "state": "installed"
+      },
+      "tokens_reported": true
+    }
+  ],
+  "limits": [
+    {
+      "kind": "kind-a",
+      "observed_ms": 1791699700000,
+      "quota_key": "quota-x",
+      "status": "fresh",
+      "windows": [
+        {
+          "resets_at_ms": 1791720000000,
+          "status": "fresh",
+          "used_percent": 42.0,
+          "window_key": "primary",
+          "window_minutes": 300
+        },
+        {
+          "resets_at_ms": 1791900000000,
+          "status": "fresh",
+          "used_percent": 88.0,
+          "window_key": "secondary",
+          "window_minutes": 10080
+        }
+      ]
+    },
+    {
+      "kind": "kind-b",
+      "observed_ms": 1791600000000,
+      "quota_key": "quota-y",
+      "status": "expired",
+      "windows": [
+        {
+          "resets_at_ms": 1791610000000,
+          "status": "expired",
+          "used_percent": 97.0,
+          "window_key": "primary",
+          "window_minutes": 300
+        }
+      ]
+    }
+  ],
+  "next_cursor": null,
+  "price_table_date": "2026-09-01",
+  "rows": [
+    {
+      "cost_micro_usd": 1500000,
+      "counters": {
+        "cache_read": 5000,
+        "cache_write_long": 0,
+        "cache_write_short": 0,
+        "cache_write_unknown": 0,
+        "input_uncached": 1000,
+        "output": 200,
+        "reasoning": 40
+      },
+      "day": "2026-10-11",
+      "kind": "kind-a",
+      "model": "model-a",
+      "price_snapshot": "snap-a",
+      "scope": "overall",
+      "sessions": 2,
+      "workspace_id": null
+    },
+    {
+      "cost_micro_usd": null,
+      "counters": {
+        "cache_read": 0,
+        "cache_write_long": 0,
+        "cache_write_short": 0,
+        "cache_write_unknown": 0,
+        "input_uncached": 300,
+        "output": 50,
+        "reasoning": 0
+      },
+      "day": "2026-10-11",
+      "kind": "kind-b",
+      "model": "model-a",
+      "price_snapshot": null,
+      "scope": "overall",
+      "sessions": 1,
+      "workspace_id": null
+    },
+    {
+      "cost_micro_usd": 900000,
+      "counters": {
+        "cache_read": 2000,
+        "cache_write_long": 0,
+        "cache_write_short": 0,
+        "cache_write_unknown": 0,
+        "input_uncached": 600,
+        "output": 100,
+        "reasoning": 10
+      },
+      "day": "2026-10-11",
+      "kind": "kind-a",
+      "model": "model-a",
+      "price_snapshot": "snap-a",
+      "scope": "workspace",
+      "sessions": 1,
+      "workspace_id": "space-a"
+    },
+    {
+      "cost_micro_usd": 300000,
+      "counters": {
+        "cache_read": 0,
+        "cache_write_long": 0,
+        "cache_write_short": 0,
+        "cache_write_unknown": 0,
+        "input_uncached": 50,
+        "output": 10,
+        "reasoning": 0
+      },
+      "day": "2026-10-11",
+      "kind": "kind-a",
+      "model": "model-a",
+      "price_snapshot": "snap-b",
+      "scope": "not_linked",
+      "sessions": 1,
+      "workspace_id": null
+    }
+  ],
+  "schema_version": 1,
+  "snapshot_labels": [
+    {
+      "date": "2026-09-01",
+      "label": "snap-a"
+    },
+    {
+      "date": "2026-08-01",
+      "label": "snap-b"
+    }
+  ],
+  "timezone": "UTC",
+  "workspaces": [
+    {
+      "label": "Space A",
+      "workspace_id": "space-a"
+    }
+  ]
+}

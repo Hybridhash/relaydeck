@@ -1,0 +1,14 @@
+{
+  "protocol": "relaydeck.gateway.v1",
+  "command_id": "cmd-20241003-001",
+  "host_id": "home-mac",
+  "host_epoch": "epoch-7",
+  "kind": "agent.prompt",
+  "target": {
+    "agent_id": "term-1"
+  },
+  "payload": {
+    "text": "Continue with the plan."
+  },
+  "expires_at": "2026-10-03T06:20:00Z"
+}

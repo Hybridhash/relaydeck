@@ -1,0 +1,1 @@
+{"message": {"id": "msg-4", "model": "model-a", "usage": {"input_tokens": 6, "output_tokens": 1}}, "requestId": "req-4", "sessionId": "sess-two-id", "timestamp": "2026-10-11T10:07:00Z", "type": "assistant"}

@@ -1,0 +1,345 @@
+#!/usr/bin/env python3
+"""RelayDeck Herdr plugin launcher: a thin, standard-library-only entry point.
+
+Started by `bin/relaydeck-plugin.sh` with the validated tool interpreter as `python -I`.
+Modes: `setup`, `pair`, `status`, `build`.
+The plugin never installs anything and never approves a pairing; it passes no confirmation flag. It
+finds the
+installed `relaydeck` or `relaydeck-companion` executable, validates it, and runs it with a fixed
+argv.
+Herdr's context JSON and any selected text are never read, passed, printed or logged.
+"""
+
+from __future__ import annotations
+
+import os
+import shutil
+import stat
+import subprocess
+import sys
+from pathlib import Path
+from typing import NoReturn
+
+EXIT_OK = 0
+EXIT_USAGE = 2
+EXIT_NOT_READY = 3
+
+# The public repository and the release tag the install hint points at.
+REPO_URL = "https://github.com/Hybridhash/relaydeck"
+TAG = "v0.2.0"
+
+# Never forwarded to a child process, whatever the parent environment holds.
+DROPPED_ENV = ("HERDR_PLUGIN_CONTEXT_JSON",)
+
+
+def _child_env() -> dict[str, str]:
+    return {key: value for key, value in os.environ.items() if key not in DROPPED_ENV}
+
+
+def _uv_tool_bin() -> str | None:
+    """The uv tool bin directory, from `uv tool dir --bin` (argv only, no shell). The `uv` found on
+    PATH is validated first and the validated, resolved path is the one that runs."""
+    uv, _reason = safe_uv()
+    if uv is None:
+        return None
+    try:
+        result = subprocess.run(
+            [str(uv), "tool", "dir", "--bin"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+            env=_child_env(),
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    directory = result.stdout.strip()
+    if result.returncode != 0 or not directory.startswith("/"):
+        return None
+    return directory
+
+
+def candidate_paths(name: str) -> list[Path]:
+    """Absolute candidate locations: the uv tool bin directory first, then ~/.local/bin."""
+    directories: list[Path] = []
+    tool_bin = _uv_tool_bin()
+    if tool_bin is not None:
+        directories.append(Path(tool_bin))
+    directories.append(Path(os.path.expanduser("~")) / ".local" / "bin")
+    return [directory / name for directory in directories]
+
+
+def _owner_ok(info: os.stat_result) -> bool:
+    return info.st_uid in (os.getuid(), 0)
+
+
+def _directory_refusal(directory: Path) -> str | None:
+    """Why a directory on the way to an executable cannot be trusted. It must be owned by this user
+    or root and not writable by group or others. A sticky directory (like /tmp) is accepted: others
+    cannot replace or remove entries they do not own there."""
+    try:
+        info = os.stat(directory)  # follows a link: its target is the directory that matters
+    except OSError:
+        return f"{directory} cannot be read"
+    if not stat.S_ISDIR(info.st_mode):
+        return f"{directory} is not a directory"
+    if not _owner_ok(info):
+        return f"directory {directory} is not owned by the current user or root"
+    if info.st_mode & (stat.S_IWGRP | stat.S_IWOTH) and not info.st_mode & stat.S_ISVTX:
+        return f"directory {directory} is group- or world-writable"
+    return None
+
+
+def _ancestry_refusal(path: Path) -> str | None:
+    """Every directory from the root down to `path`'s parent, as written (links are followed one
+    component at a time by the operating system, so each listed directory is what is walked)."""
+    for parent in reversed(path.parents):
+        reason = _directory_refusal(parent)
+        if reason is not None:
+            return reason
+    return None
+
+
+def _refusal(path: Path) -> str | None:
+    """Why a regular file must not be run, or None when it is safe. `path` is already resolved."""
+    try:
+        info = os.lstat(path)
+    except OSError:
+        return "missing"
+    if stat.S_ISLNK(info.st_mode):
+        return "symbolic link"
+    if not stat.S_ISREG(info.st_mode):
+        return "not a regular file"
+    if info.st_uid != os.getuid():
+        return "not owned by the current user"
+    if info.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+        return "group- or world-writable"
+    directory = os.stat(path.parent)
+    if directory.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+        return "its directory is group- or world-writable"
+    if not os.access(path, os.X_OK):
+        return "not executable"
+    return None
+
+
+def resolve_safe(path: Path) -> tuple[Path | None, str | None]:
+    """Validate `path` and return the fully resolved absolute path that is safe to run.
+
+    - every directory along the original path must be trusted (owner and write bits), so a link in
+      a writable directory is refused even when its target is private;
+    - a link itself must be owned by this user or root;
+    - the resolved target is a regular file owned by this user, not group/world-writable, and every
+      directory in its own ancestry is trusted too.
+
+    The caller runs the returned path, never the original link, so a link that is swapped after
+    this check cannot redirect the run."""
+    try:
+        info = os.lstat(path)
+    except OSError:
+        return None, "missing"
+    reason = _ancestry_refusal(path)
+    if reason is not None:
+        return None, reason
+    is_link = stat.S_ISLNK(info.st_mode)
+    if is_link and not _owner_ok(info):
+        return None, "symbolic link not owned by the current user or root"
+    resolved = Path(os.path.realpath(path))
+    if not resolved.is_absolute():
+        return None, "path cannot be resolved"
+    reason = _ancestry_refusal(resolved)
+    if reason is None:
+        reason = _refusal(resolved)
+    if reason is not None:
+        return None, f"symbolic link to an unsafe target ({reason})" if is_link else reason
+    return resolved, None
+
+
+def validate(path: Path) -> str | None:
+    """The refusal reason for `path`, or None when it may run."""
+    return resolve_safe(path)[1]
+
+
+def safe_uv() -> tuple[Path | None, str | None]:
+    """The `uv` executable from PATH, validated before anything runs it. (None, None) when there
+    is no uv; (None, reason) when one exists and is refused."""
+    found = shutil.which("uv")
+    if found is None:
+        return None, None
+    path = Path(found)
+    if not path.is_absolute():
+        return None, f"{found}: not an absolute path"
+    resolved, reason = resolve_safe(path)
+    if resolved is None:
+        return None, f"{found}: {reason}"
+    return resolved, None
+
+
+def find_executable(name: str) -> tuple[Path | None, list[str]]:
+    """The first safe executable for `name`, and the refusal reasons of the unsafe candidates."""
+    refusals: list[str] = []
+    for path in candidate_paths(name):
+        if not path.is_absolute():
+            continue
+        try:
+            os.lstat(path)
+        except OSError:
+            continue
+        resolved, reason = resolve_safe(path)
+        if resolved is not None:
+            return resolved, refusals  # the resolved path runs, never the original link
+        refusals.append(f"{path}: {reason}")
+    return None, refusals
+
+
+def print_missing_guidance() -> None:
+    print("RelayDeck is not installed for this user. Install it once, then run the action again.")
+    print("Git route (a published tag):")
+    print(f'  uv tool install "relaydeck[companion] @ git+{REPO_URL}@{TAG}"')
+    print("Local clone of the same tag:")
+    print('  uv tool install ".[companion]"')
+    print("Nothing was installed by this plugin.")
+
+
+def _report_refusals(refusals: list[str]) -> None:
+    print("RelayDeck was found, but the launcher refused to run it:")
+    for line in refusals:
+        print(f"  {line}")
+    print("Fix the ownership or permissions, or reinstall the tool, then run the action again.")
+
+
+def _resolve(name: str) -> Path | int:
+    path, refusals = find_executable(name)
+    if path is not None:
+        return path
+    if refusals:
+        _report_refusals(refusals)
+        return EXIT_NOT_READY
+    print_missing_guidance()
+    return EXIT_NOT_READY
+
+
+def _exec(binary: Path, args: list[str]) -> NoReturn:
+    """Replace this process with the RelayDeck command. Output is flushed first: exec drops
+    buffers."""
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os.execve(str(binary), [str(binary), *args], _child_env())
+
+
+def run_setup() -> int:
+    binary = _resolve("relaydeck")
+    if isinstance(binary, int):
+        return binary
+    # Interactive: the popup's terminal answers the prompts. No confirmation flag is ever passed.
+    _exec(binary, ["setup"])
+
+
+def run_pair() -> int:
+    binary = _resolve("relaydeck-companion")
+    if isinstance(binary, int):
+        return binary
+    print("Pairing opens a bounded window on this Mac.")
+    print("Compare the code shown on your device with the request here, then approve or deny it.")
+    print("The plugin never approves a device for you.")
+    _exec(binary, ["pairing", "open"])
+
+
+def run_status() -> int:
+    """Read-only: the `status` command, then the `doctor` command without its network probe."""
+    binary = _resolve("relaydeck-companion")
+    if isinstance(binary, int):
+        return binary
+    worst = EXIT_OK
+    for argv in ([str(binary), "status"], [str(binary), "doctor"]):
+        result = subprocess.run(argv, env=_child_env(), check=False)
+        worst = worst or result.returncode
+    return worst
+
+
+def run_build() -> int:
+    """Checks only: uv and Python 3.13 must exist. Installs nothing."""
+    uv, refused = safe_uv()
+    if refused is not None:
+        print(f"uv was found, but the launcher refused to run it: {refused}")
+        print("Fix the ownership or permissions, then run this again. Nothing was run.")
+        return EXIT_NOT_READY
+    if uv is None:
+        print("uv is not installed. Install it from https://docs.astral.sh/uv/ and run this again.")
+        print("Nothing was installed by this plugin.")
+        return EXIT_NOT_READY
+    try:
+        found = subprocess.run(
+            [str(uv), "python", "find", "3.13"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+            env=_child_env(),
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        found = None
+    if found is None or found.returncode != 0:
+        print("Python 3.13 was not found. Run: uv python install 3.13")
+        print("Nothing was installed by this plugin.")
+        return EXIT_NOT_READY
+    print("uv and Python 3.13 are available. Nothing was installed by this plugin.")
+    return EXIT_OK
+
+
+POPUP_ENTRYPOINTS = ("setup", "pair", "status")
+PLUGIN_ID = "relaydeck"
+
+
+def _herdr_binary() -> Path | str:
+    """Herdr's own executable from HERDR_BIN_PATH, which Herdr sets for plugin commands. It must be
+    an
+    absolute path that passes the same ownership and permission checks as the RelayDeck
+    executables."""
+    value = os.environ.get("HERDR_BIN_PATH", "")
+    if not value:
+        return "HERDR_BIN_PATH is not set"
+    path = Path(value)
+    if not path.is_absolute():
+        return "HERDR_BIN_PATH is not an absolute path"
+    resolved, reason = resolve_safe(path)
+    if resolved is None:
+        return f"HERDR_BIN_PATH is refused: {reason}"
+    return resolved
+
+
+def run_open(entrypoint: str) -> int:
+    """The action side: Herdr actions run without a terminal, so this only asks Herdr to open the
+    popup
+    pane. The pane itself runs the RelayDeck command in the popup's TTY. Nothing else is run
+    here."""
+    herdr = _herdr_binary()
+    if isinstance(herdr, str):
+        print(f"{herdr}. Open RelayDeck from Herdr, or run it from a terminal.")
+        print("Nothing was run.")
+        return EXIT_NOT_READY
+    argv = [str(herdr), "plugin", "pane", "open", "--plugin", PLUGIN_ID, "--entrypoint", entrypoint]
+    _exec(herdr, argv[1:])
+
+
+MODES = {
+    "setup": run_setup,
+    "pair": run_pair,
+    "status": run_status,
+    "build": run_build,
+}
+
+
+def main(argv: list[str]) -> int:
+    if len(argv) == 2 and argv[0] == "open" and argv[1] in POPUP_ENTRYPOINTS:
+        return run_open(argv[1])
+    if len(argv) != 1 or argv[0] not in MODES:
+        print(
+            "usage: relaydeck-plugin {setup|pair|status|build|open <setup|pair|status>}",
+            file=sys.stderr,
+        )
+        return EXIT_USAGE
+    return MODES[argv[0]]()
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

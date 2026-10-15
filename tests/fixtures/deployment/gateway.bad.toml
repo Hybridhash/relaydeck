@@ -1,0 +1,21 @@
+# Synthetic FAILING deployment config (deployment verifier trip-wire).
+# Each section below violates at least one production-safety rule; the
+# verifier must exit 1 naming every violation. All values are fake.
+
+[secrets]
+cursor_secret = ""
+cookie_secret = "changeme-please-replace-this-value-now-0000"
+
+[server]
+bind = "0.0.0.0"
+port = 8000
+workers = 2
+public_origin = "http://relaydeck-synth.invalid"
+auth_callback_allowlist = []
+allow_exec = true
+
+[tls]
+mode = "off"
+
+[database]
+journal_path = ""

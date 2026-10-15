@@ -1,0 +1,51 @@
+# Local scratch space
+/temp/
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+.coverage
+htmlcov/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+
+# Flutter / Dart / native build outputs
+flutter_*.log
+**/build/
+**/.dart_tool/
+**/.flutter-plugins
+**/.flutter-plugins-dependencies
+*.apk
+*.aab
+*.ipa
+*.app/
+
+# Secrets and local state (never commit)
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.mobileprovision
+*.keystore
+*.jks
+:memory:
+
+# Upstream example media in the vendored file_picker (not needed to build)
+extensions/terminal/third_party/file_picker-11.0.3-rd1/example/screenshots/
+extensions/terminal/third_party/file_picker-11.0.3-rd1/test/test_files/
+
+# Local files and tool folders at the root (only README.md and CHANGELOG.md are tracked)
+/*.md
+!/README.md
+!/CHANGELOG.md
+/.*/
+!/.github/

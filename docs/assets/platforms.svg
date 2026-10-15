@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="164" viewBox="0 0 720 164" role="img" aria-label="Platforms: web app available; native Android in progress; native iOS in progress">
+  <style>
+    .card { fill: #17132b; stroke: #2e2752; }
+    .title { font: 600 13px -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; fill: #a9a3c9; letter-spacing: 0.08em; }
+    .name { font: 700 18px -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; fill: #ffffff; }
+    .sub { font: 400 12px -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; fill: #a9a3c9; }
+    .pill { font: 700 11px -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; letter-spacing: 0.06em; }
+  </style>
+  <rect class="card" x="0.5" y="0.5" width="719" height="163" rx="16"/>
+  <text class="title" x="24" y="30">PLATFORMS</text>
+
+  <g transform="translate(24 46)">
+    <rect width="212" height="98" rx="12" fill="#221c3d"/>
+    <circle cx="23" cy="25" r="6" fill="#4ade80"/>
+    <text class="name" x="38" y="31">Web app</text>
+    <rect x="16" y="44" width="92" height="22" rx="11" fill="#4ade80" fill-opacity="0.16"/>
+    <text class="pill" x="62" y="59" text-anchor="middle" fill="#4ade80">AVAILABLE</text>
+    <text class="sub" x="16" y="84">Any browser and Home Screen</text>
+  </g>
+
+  <g transform="translate(254 46)">
+    <rect width="212" height="98" rx="12" fill="#221c3d"/>
+    <circle cx="23" cy="25" r="6" fill="#fbbf24"/>
+    <text class="name" x="38" y="31">Android</text>
+    <rect x="16" y="44" width="112" height="22" rx="11" fill="#fbbf24" fill-opacity="0.16"/>
+    <text class="pill" x="72" y="59" text-anchor="middle" fill="#fbbf24">IN PROGRESS</text>
+    <text class="sub" x="16" y="84">Native app</text>
+  </g>
+
+  <g transform="translate(484 46)">
+    <rect width="212" height="98" rx="12" fill="#221c3d"/>
+    <circle cx="23" cy="25" r="6" fill="#fbbf24"/>
+    <text class="name" x="38" y="31">iOS</text>
+    <rect x="16" y="44" width="112" height="22" rx="11" fill="#fbbf24" fill-opacity="0.16"/>
+    <text class="pill" x="72" y="59" text-anchor="middle" fill="#fbbf24">IN PROGRESS</text>
+    <text class="sub" x="16" y="84">Native app for iPhone and iPad</text>
+  </g>
+</svg>

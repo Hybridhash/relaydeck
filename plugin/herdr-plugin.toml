@@ -1,0 +1,60 @@
+id = "relaydeck"
+name = "RelayDeck"
+version = "0.2.0"
+min_herdr_version = "0.7.5"
+description = "Set up, pair and check the RelayDeck companion on this Mac"
+platforms = ["macos"]
+
+# Checks only: confirms uv and Python 3.13 exist. Installs nothing. Consent to install belongs to the
+# setup wizard, which runs in the popup's terminal. Every entry starts from /bin/sh so a Mac without
+# Python never starts the developer-tools installer.
+[[build]]
+command = ["/bin/sh", "bin/relaydeck-plugin.sh", "build"]
+
+[[actions]]
+id = "setup"
+title = "RelayDeck: Set up"
+description = "Run the RelayDeck first-run setup in a popup"
+contexts = ["global"]
+# Herdr runs actions without a terminal: this only asks Herdr to open the popup pane (see [[panes]]).
+command = ["/bin/sh", "bin/relaydeck-plugin.sh", "open", "setup"]
+
+[[actions]]
+id = "pair"
+title = "RelayDeck: Pair a device"
+description = "Open a bounded pairing window in a popup; you approve each device"
+contexts = ["global"]
+# Herdr runs actions without a terminal: this only asks Herdr to open the popup pane (see [[panes]]).
+command = ["/bin/sh", "bin/relaydeck-plugin.sh", "open", "pair"]
+
+[[actions]]
+id = "status"
+title = "RelayDeck: Status"
+description = "Show the companion status and doctor output (read-only)"
+contexts = ["global"]
+# Herdr runs actions without a terminal: this only asks Herdr to open the popup pane (see [[panes]]).
+command = ["/bin/sh", "bin/relaydeck-plugin.sh", "open", "status"]
+
+[[panes]]
+id = "setup"
+title = "RelayDeck setup"
+placement = "popup"
+width = "100%"
+height = "100%"
+command = ["/bin/sh", "bin/relaydeck-plugin.sh", "setup"]
+
+[[panes]]
+id = "pair"
+title = "Pair a device"
+placement = "popup"
+width = "100%"
+height = "100%"
+command = ["/bin/sh", "bin/relaydeck-plugin.sh", "pair"]
+
+[[panes]]
+id = "status"
+title = "RelayDeck status"
+placement = "popup"
+width = "100%"
+height = "100%"
+command = ["/bin/sh", "bin/relaydeck-plugin.sh", "status"]

@@ -1,0 +1,17 @@
+{
+  "kind": "command.dispatch",
+  "command_id": "cmd-synthetic-001",
+  "principal": "synthetic-account",
+  "host_id": "home-mac",
+  "host_epoch": "epoch-7",
+  "gateway_kind": "agent.prompt",
+  "target": {
+    "agent_id": "term-1"
+  },
+  "payload": {
+    "text": "Synthetic reviewed prompt"
+  },
+  "generation": 43,
+  "expires_ms": 1791008400000,
+  "digest": "e6e5591dba9950aeac04c374f48fb9ae58b15e051291378d55b86237e184b13f"
+}

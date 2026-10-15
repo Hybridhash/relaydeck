@@ -1,0 +1,1 @@
+{"noise_before_init": ["NOT JSON AT ALL", "{\"jsonrpc\":\"2.0\",\"method\":\"ping\"}"], "noise_before_read": ["\u0009", "{\"jsonrpc\":\"2.0\",\"method\":\"progress\",\"params\":{}}"], "read_result": {"accountId": "synthetic-account-1", "rateLimitsByLimitId": {"limit-a": {"planType": "plan-x", "primary": {"usedPercent": 41, "windowDurationMins": 10080, "resetsAt": 1791820000}}}}}

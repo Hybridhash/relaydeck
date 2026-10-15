@@ -1,0 +1,166 @@
+import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
+
+import '../extensions/control.dart';
+import '../models/control.dart';
+import '../utils/borders.dart';
+import '../utils/client_actions.dart';
+import '../utils/colors.dart';
+import '../utils/edge_insets.dart';
+import '../utils/misc.dart';
+import '../utils/mouse.dart';
+import '../utils/numbers.dart';
+import '../utils/text.dart';
+import '../utils/theme.dart';
+import '../widgets/flet_store_mixin.dart';
+import 'base_controls.dart';
+
+class ListTileClicks extends InheritedWidget {
+  const ListTileClicks({
+    super.key,
+    required this.notifier,
+    required super.child,
+  });
+
+  final ListTileClickNotifier notifier;
+
+  static ListTileClicks? of(BuildContext context) {
+    return context.dependOnInheritedWidgetOfExactType<ListTileClicks>();
+  }
+
+  @override
+  bool updateShouldNotify(ListTileClicks oldWidget) => true;
+}
+
+class ListTileControl extends StatelessWidget with FletStoreMixin {
+  final Control control;
+
+  final ListTileClickNotifier _clickNotifier = ListTileClickNotifier();
+
+  ListTileControl({super.key, required this.control});
+
+  @override
+  Widget build(BuildContext context) {
+    debugPrint("ListTile build: ${control.id}");
+    var leading = control.buildIconOrWidget("leading");
+    var title = control.buildTextOrWidget("title");
+    var subtitle = control.buildTextOrWidget("subtitle");
+    var trailing = control.buildIconOrWidget("trailing");
+    var onClick = control.hasEventHandler("click");
+    var toggleInputs = control.getBool("toggle_inputs", false)!;
+    Function()? onPressed =
+        (onClick || toggleInputs || control.hasControlActions) &&
+                !control.disabled
+            ? () {
+                if (toggleInputs) {
+                  _clickNotifier.onClick();
+                }
+                runControlActions(context, control);
+                if (onClick) {
+                  control.triggerEvent("click");
+                }
+              }
+            : null;
+
+    Function()? onLongPress =
+        control.hasEventHandler("long_press") && !control.disabled
+            ? () {
+                control.triggerEvent("long_press");
+              }
+            : null;
+
+    Widget tile = ListTile(
+      autofocus: control.getBool("autofocus", false)!,
+      contentPadding: control.getPadding("content_padding"),
+      isThreeLine: control.getBool("is_three_line"),
+      selected: control.getBool("selected", false)!,
+      dense: control.getBool("dense"),
+      onTap: onPressed,
+      onLongPress: onLongPress,
+      enabled: !control.disabled,
+      horizontalTitleGap: control.getDouble("horizontal_spacing"),
+      enableFeedback: control.getBool("enable_feedback"),
+      minLeadingWidth: control.getDouble("min_leading_width"),
+      minVerticalPadding: control.getDouble("min_vertical_padding"),
+      minTileHeight: control.getDouble("min_height"),
+      selectedTileColor: control.getColor("selected_tile_color", context),
+      selectedColor: control.getColor("selected_color", context),
+      focusColor: control.getColor("focus_color", context),
+      tileColor: control.getColor("bgcolor", context),
+      splashColor: control.getColor("splash_color", context),
+      hoverColor: control.getColor("hover_color", context),
+      iconColor: control.getColor("icon_color", context),
+      textColor: control.getColor("text_color", context),
+      mouseCursor: control.getMouseCursor("mouse_cursor"),
+      visualDensity: control.getVisualDensity("visual_density"),
+      shape: control.getShape("shape", Theme.of(context)),
+      titleTextStyle:
+          control.getTextStyle("title_text_style", Theme.of(context)),
+      leadingAndTrailingTextStyle: control.getTextStyle(
+          "leading_and_trailing_text_style", Theme.of(context)),
+      subtitleTextStyle:
+          control.getTextStyle("subtitle_text_style", Theme.of(context)),
+      titleAlignment: control.getListTileTitleAlignment("title_alignment"),
+      style: control.getListTileStyle("style"),
+      onFocusChange: (bool hasFocus) {
+        control.triggerEvent(hasFocus ? "focus" : "blur");
+      },
+      leading: leading,
+      title: title,
+      subtitle: subtitle,
+      trailing: trailing,
+    );
+
+    if (toggleInputs) {
+      tile = ListTileClicks(notifier: _clickNotifier, child: tile);
+    }
+
+    tile = Material(type: MaterialType.transparency, child: tile);
+
+    return LayoutControl(control: control, child: _ListTileWidth(child: tile));
+  }
+}
+
+// ListTile fills the available width, which is infinite for non-flex children
+// of a Row. Use its intrinsic width only in that case, preserving bounded
+// layouts and supporting parents that measure intrinsic sizes.
+class _ListTileWidth extends SingleChildRenderObjectWidget {
+  const _ListTileWidth({required super.child});
+
+  @override
+  RenderObject createRenderObject(BuildContext context) =>
+      _RenderListTileWidth();
+}
+
+class _RenderListTileWidth extends RenderIntrinsicWidth {
+  @override
+  Size computeDryLayout(BoxConstraints constraints) {
+    return constraints.hasBoundedWidth
+        ? child!.getDryLayout(constraints)
+        : super.computeDryLayout(constraints);
+  }
+
+  @override
+  double? computeDryBaseline(
+      BoxConstraints constraints, TextBaseline baseline) {
+    return constraints.hasBoundedWidth
+        ? child!.getDryBaseline(constraints, baseline)
+        : super.computeDryBaseline(constraints, baseline);
+  }
+
+  @override
+  void performLayout() {
+    if (constraints.hasBoundedWidth) {
+      child!.layout(constraints, parentUsesSize: true);
+      size = child!.size;
+    } else {
+      super.performLayout();
+    }
+  }
+}
+
+class ListTileClickNotifier extends ChangeNotifier {
+  void onClick() {
+    notifyListeners();
+  }
+}

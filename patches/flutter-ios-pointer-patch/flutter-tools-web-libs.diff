@@ -1,0 +1,28 @@
+--- a/packages/flutter_tools/lib/src/build_system/targets/web.dart
++++ b/packages/flutter_tools/lib/src/build_system/targets/web.dart
+@@ -170,14 +170,22 @@
+     }
+     final buildMode = BuildMode.fromCliName(buildModeEnvironment);
+     final Artifacts artifacts = environment.artifacts;
+-    final String platformBinariesPath = artifacts
+-        .getHostArtifact(HostArtifact.webPlatformKernelFolder)
++    // RelayDeck: compile dart:ui (web_ui) from the SDK's
++    // patched libraries-spec sources instead of the precompiled
++    // dart2js_platform.dill, so the PR 189608 abandoned-touch backport
++    // in bin/cache/flutter_web_sdk/lib reaches main.dart.js. The CFE
++    // treats libraries-spec and platform dill as alternatives (see
++    // compile.dart: a platform dill makes the spec unnecessary, and
++    // vice versa); dart2js documents --libraries-spec as the SDK
++    // libraries specification. Both dart2js stages share these options.
++    final String librariesSpecPath = artifacts
++        .getHostArtifact(HostArtifact.flutterWebLibrariesJson)
+         .path;
+     final sharedCommandOptions = <String>[
+       artifacts.getArtifactPath(Artifact.engineDartBinary, platform: TargetPlatform.web_javascript),
+       'compile',
+       'js',
+-      '--platform-binaries=$platformBinariesPath',
++      '--libraries-spec=$librariesSpecPath',
+       '--invoker=flutter_tool',
+       ...decodeCommaSeparated(environment.defines, kExtraFrontEndOptions),
+       if (buildMode == BuildMode.profile)

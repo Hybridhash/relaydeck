@@ -1,0 +1,7 @@
+{
+  "origin": "https://test-mac.synthetic-tailnet.ts.net",
+  "host_id": "home-mac",
+  "code_challenge": "iLQEKoaveSqXGrG3CXvMNi8HvlxlQ-yi4O78tRX0kLI",
+  "code_challenge_method": "S256",
+  "device_label": "Synthetic phone"
+}

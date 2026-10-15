@@ -1,0 +1,31 @@
+[project]
+name = "relaydeck-terminal-viewer"
+version = "0.1.0"
+description = "Synthetic VT fixture viewer for the relaydeck-terminal extension"
+requires-python = ">=3.13,<3.14"
+dependencies = [
+  "flet==1.0.3",
+  "relaydeck-terminal",
+]
+
+[tool.uv.sources]
+relaydeck-terminal = { path = "../..", editable = true }
+
+[tool.flet.dev_packages]
+relaydeck-terminal = "../.."
+
+[tool.flet.app]
+path = "src"
+
+# Force file_picker (transitive via flet) to the vendored RD1
+# backport, which keeps the file input attached + focused for iOS/Safari.
+# NOTE: `path` resolves relative to the GENERATED Flutter pubspec at
+# <viewer>/build/flutter/pubspec.yaml (flet build layout, pinned 1.0.3),
+# four levels below extensions/terminal/ -- not relative to this file.
+[tool.flet.flutter.pubspec.dependency_overrides.file_picker]
+path = "../../../../third_party/file_picker-11.0.3-rd1"
+
+# Preserve mounted Control notifiers across register-client snapshots.
+# This path also resolves from the generated build/flutter/pubspec.yaml.
+[tool.flet.flutter.pubspec.dependency_overrides.flet]
+path = "../../../../third_party/flet-1.0.3-rd1"

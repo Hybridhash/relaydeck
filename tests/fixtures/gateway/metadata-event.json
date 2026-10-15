@@ -1,0 +1,16 @@
+{
+  "protocol": "relaydeck.gateway.v1",
+  "event_id": "ev-101",
+  "host_id": "home-mac",
+  "host_epoch": "epoch-7",
+  "sequence": 101,
+  "cursor": "CURSOR",
+  "type": "agent.upserted",
+  "resource_id": "term-1",
+  "resource_revision": 11,
+  "observed_at": "2026-10-03T06:20:00Z",
+  "payload": {
+    "status": "blocked",
+    "state_change_seq": 5
+  }
+}

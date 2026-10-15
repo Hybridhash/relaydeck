@@ -1,0 +1,187 @@
+# RelayDeck CI.
+#
+# Stages: locked dependency resolution; format/lint; static types;
+# unit tests; contract tests; integration + security tests; UI scenario
+# tests (repo pytest harness -- there is no `flet test web` command);
+# secret scan; license inventory; web + Android build jobs.
+#
+# Stages NOT run here: dynamic-web browser tests need an explicit
+# browser harness (none installed) and device tests need Android
+# infrastructure (none available). The UI
+# suite below is headless-only until that infrastructure exists.
+#
+# Toolchain pins: Flet 1.0.3, Python 3.13, Flutter 3.44.8.
+# Action pins below are exact release tags.
+# Build jobs produce UNSIGNED / test packaging only. Production signing
+# (--android-signing-*) and any store upload are explicit manual owner
+# operations (see release.yml) and must never be added here.
+#
+# `flet build web` produces a STATIC Pyodide artifact and is NOT the
+# dynamic deployment; the web job below is a packaging smoke check only.
+
+name: CI
+
+on:
+  push:
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: "3.13"
+  FLUTTER_VERSION: "3.44.8"
+  UV_VERSION: "0.12.15"
+
+jobs:
+  checks:
+    name: lint-type-test-scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - name: Set up Python
+        uses: actions/setup-python@v7.0.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v10.2.0
+        with:
+          version: ${{ env.UV_VERSION }}
+
+      - name: Locked dependency resolution
+        run: uv sync --locked --group dev --group gateway --group web
+
+      - name: Pinned environment check
+        run: uv run python scripts/verify_versions.py
+
+      - name: Lint
+        run: uv run ruff check --no-cache .
+
+      - name: Format check
+        run: uv run ruff format --check --no-cache .
+
+      - name: Static types
+        run: uv run mypy src tests
+
+      - name: Unit tests
+        run: uv run pytest tests/unit -q
+
+      - name: Contract tests
+        run: uv run pytest tests/contracts -q
+
+      - name: Integration and security tests
+        run: uv run pytest tests/integration tests/security -q
+
+      - name: UI scenario tests
+        run: uv run pytest tests/ui -q
+
+      - name: Secret scan
+        run: uv run python scripts/scan_release_secrets.py
+
+      - name: License inventory (fails on unknown)
+        run: uv run python scripts/license_inventory.py --out sbom.json
+
+      - name: Upload SBOM
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: sbom-${{ github.sha }}
+          path: sbom.json
+          retention-days: 30
+
+  build-web:
+    name: web packaging smoke (static Pyodide, NOT dynamic deploy)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    needs: [checks]
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - name: Set up Python
+        uses: actions/setup-python@v7.0.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v10.2.0
+        with:
+          version: ${{ env.UV_VERSION }}
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2.23.0
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
+
+      - name: Locked dependency resolution
+        run: uv sync --locked --group dev --group gateway --group web
+
+      - name: Build static web artifact (smoke only)
+        run: uv run flet build web --yes
+
+      - name: Upload static web bundle
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: web-static-smoke-${{ github.sha }}
+          path: build/web
+          retention-days: 14
+
+  build-android:
+    name: android unsigned packaging (AAB)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    needs: [checks]
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - name: Set up Python
+        uses: actions/setup-python@v7.0.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v10.2.0
+        with:
+          version: ${{ env.UV_VERSION }}
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v6.0.1
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v4.0.4
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2.23.0
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
+
+      - name: Locked dependency resolution
+        run: uv sync --locked --group dev --group gateway --group web
+
+      - name: Build unsigned AAB (test packaging only)
+        # No --android-signing-* flags: this is unsigned/test packaging.
+        # Production signing is a manual owner operation (see release.yml).
+        # `flet build aab` builds a package; it never publishes to a store.
+        run: uv run flet build aab --python-version 3.13 --yes
+
+      - name: Emit build manifest with AAB hash
+        run: |
+          AAB=$(ls build/aab/*.aab | head -n 1)
+          uv run python scripts/build_manifest.py --aab "$AAB" --out build-manifest.json
+          cat build-manifest.json
+
+      - name: Upload unsigned AAB + manifest
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: android-unsigned-aab-${{ github.sha }}
+          path: |
+            build/aab/*.aab
+            build-manifest.json
+          retention-days: 30
