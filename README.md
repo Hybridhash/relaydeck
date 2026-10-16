@@ -9,35 +9,57 @@
 </p>
 
 <p align="center">
-  <a href="LICENSE">MIT License</a> ·
-  <a href="docs/runbooks/install.md">Install guide</a> ·
-  <a href="docs/runbooks/companion.md">Operations</a>
+  <a href="https://github.com/Hybridhash/relaydeck/actions/workflows/ci.yml"><img src="https://github.com/Hybridhash/relaydeck/actions/workflows/ci.yml/badge.svg" alt="CI status"></a>
 </p>
 
----
+<p align="center">
+  <a href="LICENSE">MIT License</a> ·
+  <a href="docs/runbooks/install.md">Install guide</a> ·
+  <a href="docs/runbooks/companion.md">Operations</a> ·
+  <a href="CHANGELOG.md">Changelog</a>
+</p>
+
+<p align="center">
+  <img src="docs/assets/screenshot-hero.webp" width="100%" alt="RelayDeck on a laptop and a phone: the Console lists agents by status, and a blocked agent asks for approval in its terminal">
+</p>
 
 RelayDeck is a remote control for [Herdr](https://herdr.dev), the terminal workspace manager for AI coding
 agents. Herdr keeps your agents and shells running on your Mac; RelayDeck lets you follow them, answer them
-and start new ones from anywhere on your private network.
+and start new ones from your phone, tablet or browser, anywhere on your private network.
 
-Everything runs on your own Mac. A small **companion** process bridges your devices and Herdr. There is no
-RelayDeck cloud service and no account to create.
+<table>
+  <tr>
+    <td width="33%" valign="top"><b>Unblock agents from anywhere</b><br>See which agent is waiting, read its terminal and answer it in a tap, without walking back to your desk.</td>
+    <td width="33%" valign="top"><b>Nothing leaves your Mac</b><br>No RelayDeck cloud and no account. Devices reach your Mac over your own tailnet, and each one is approved on the Mac.</td>
+    <td width="33%" valign="top"><b>Know what your agents cost</b><br>Tokens, estimated cost and plan limits per tool and per space, read from each tool's own local logs.</td>
+  </tr>
+</table>
 
 ## Features
+
+<p align="center">
+  <img src="docs/assets/screenshot-phones.webp" width="100%" alt="Three phone screens: the Console, an agent terminal asking for approval with the phone key toolbar, and the Usage screen">
+</p>
 
 - **Console**: every Herdr space, agent and shell at a glance, with live status (working, blocked, done).
 - **Real terminals**: full terminal rendering with selection, copy, safe paste, control keys and a
   keyboard toolbar built for phones.
 - **Three ways to type**: an agent composer for writing prompts, direct input for answering an agent's
   question, and an ordinary shell terminal. Unsent drafts are kept when you switch.
-- **Usage**: tokens, estimated cost and plan limits per tool and per Herdr space, read from each tool's own
-  local logs, with hourly, 7-day, 30-day and 90-day charts.
+- **Usage**: tokens, estimated cost and plan limits per tool and per Herdr space, with hourly, 7-day,
+  30-day and 90-day charts.
 - **Notifications**: a push notification when an agent is blocked or finished (Web Push, per-device
   choices).
 - **Runs anywhere you are**: a web app for any browser, installable to the iPhone or iPad Home Screen.
   Native Android and iOS apps are in progress (see [Native apps](#native-apps-in-progress)).
 
-## How it stays private
+## How it works
+
+<p align="center">
+  <img src="docs/assets/how-it-works.svg" width="100%" alt="Your devices connect over private tailnet-only HTTPS to the RelayDeck companion on your Mac, which talks to Herdr and its agents and shells">
+</p>
+
+Everything runs on your own Mac. A small **companion** process bridges your devices and Herdr.
 
 - The companion listens on **loopback only** (`127.0.0.1`) and opens **no inbound port** on your Mac or
   router.
@@ -46,6 +68,27 @@ RelayDeck cloud service and no account to create.
 - Every device must be **approved on the Mac** with a matching pairing code before it gets in.
 - Usage data is read from local files and stays in a local database. Only numbers are kept; conversation
   text is never stored or sent anywhere.
+
+## Usage tracking
+
+<p align="center">
+  <img src="docs/assets/screenshot-usage.webp" width="100%" alt="The Usage screen: tokens used, estimated cost, daily tokens by tool and plan limits with reset times">
+</p>
+
+`relaydeck setup` offers each supported coding CLI it finds on your Mac as a usage source. Each tool shows
+only what it really provides:
+
+- **Tokens and estimated cost** from the tool's own local session logs.
+- **Credits** for credit-metered tools.
+- **Plan limits** (percent used and reset time) where the tool exposes them. For tools that show limits
+  only on their own `/usage` screen, a refresh button reads them on demand.
+
+RelayDeck reads these local files itself and stores only numbers, never conversation text. Plan limits come from
+sources you enable: a tool's own cached status (through an optional hook that setup offers to install) or,
+for tools that provide one, an on-demand query that runs that tool's own local command under your existing
+login. RelayDeck does not store vendor credentials or send usage data to any vendor.
+
+<sub>Screenshots use a synthetic demo workspace; no real sessions or usage are shown.</sub>
 
 ## Requirements
 
@@ -67,7 +110,7 @@ yourself. Steps 1 to 6 give a working host; the full walkthrough with every opti
 
 ### 1. Install the companion
 
-From the public repository at the first public tag:
+From the public repository at the latest tag:
 
 ```sh
 uv tool install --managed-python --python 3.13 \
@@ -107,11 +150,18 @@ Setup does not create credentials or enroll the connector, so the host is not re
 Follow these parts of the install guide:
 
 1. Create the two secret files named in `companion.toml` (`cookie_secret_file`, `cursor_secret_file`): mode
-   0600, each at least 32 bytes, different from each other, provided through a secure channel
-   ([install guide §3](docs/runbooks/install.md#3-create-the-private-configuration)).
+   0600, each at least 32 bytes, different from each other
+   ([install guide §3](docs/runbooks/install.md#3-create-the-private-configuration)). With the default
+   paths, generated on the Mac itself:
+
+   ```sh
+   (umask 077; openssl rand -hex 32 > ~/.config/relaydeck/cookie.secret)
+   (umask 077; openssl rand -hex 32 > ~/.config/relaydeck/cursor.secret)
+   ```
+
 2. Enroll the connector: `relaydeck-connector keygen`, `relaydeck-gateway issue-enrollment`, then
    `relaydeck-connector enroll` ([install guide §6](docs/runbooks/install.md#6-enroll-the-connector-keygen--issue-enrollment--enroll)).
-   These tools come from the checkout (`uv run ...` inside the clone).
+   Both commands are installed with RelayDeck in step 1.
 
 ### 4. Build and install the web app
 
@@ -186,6 +236,9 @@ companion from the Mac with `relaydeck status`, stop it with `relaydeck stop`, a
 
 ## Updating
 
+<details>
+<summary>How to update to a new tag</summary>
+
 ```sh
 uv tool install --managed-python --python 3.13 --force \
   "relaydeck[companion] @ git+https://github.com/Hybridhash/relaydeck@<new-tag>"
@@ -199,7 +252,12 @@ Rebuild and reinstall the web bundle from the same tag (step 4), then
 Release files, when published, are signed with [minisign](https://jedisct1.github.io/minisign/). Verify one
 with the public key in [`minisign.pub`](minisign.pub): `minisign -Vm <file> -p minisign.pub`.
 
+</details>
+
 ## Uninstall
+
+<details>
+<summary>How to remove RelayDeck completely</summary>
 
 ```sh
 relaydeck service uninstall --yes --unload      # only if you installed the login service
@@ -209,7 +267,12 @@ uv tool uninstall relaydeck
 rm -rf ~/.config/relaydeck "$HOME/Library/Application Support/RelayDeck"   # config, sign-ins, usage data
 ```
 
+</details>
+
 ## Troubleshooting
+
+<details>
+<summary>Common checks and where the logs are</summary>
 
 - `relaydeck setup --check` prints a read-only readiness report with the next step for each check.
 - `relaydeck-companion doctor` reports the companion, Herdr socket, Tailscale and pairing state as JSON
@@ -222,22 +285,12 @@ rm -rf ~/.config/relaydeck "$HOME/Library/Application Support/RelayDeck"   # con
 - A device that cannot reach the address needs to be signed in to the same tailnet; the address is never
   public.
 
-## Usage tracking
-
-`relaydeck setup` offers each supported coding CLI it finds on your Mac as a usage source. Each tool shows
-only what it really provides:
-
-- **Tokens and estimated cost** from the tool's own local session logs.
-- **Credits** for credit-metered tools.
-- **Plan limits** (percent used and reset time) where the tool exposes them. For tools that show limits
-  only on their own `/usage` screen, a refresh button reads them on demand.
-
-RelayDeck reads these local files itself and stores only numbers, never conversation text. Plan limits come from
-sources you enable: a tool's own cached status (through an optional hook that setup offers to install) or,
-for tools that provide one, an on-demand query that runs that tool's own local command under your existing
-login. RelayDeck does not store vendor credentials or send usage data to any vendor.
+</details>
 
 ## Development
+
+<details>
+<summary>Tests, lint and the local dev server</summary>
 
 ```sh
 uv sync --locked --extra companion --group dev
@@ -256,12 +309,15 @@ uv run python -m relaydeck.client.serve --dev-secret --dev-login --dev-demo-sess
 Native Android and iOS builds (in progress): see [patches/README.md](patches/README.md) and
 `scripts/build_native.py`.
 
+</details>
+
 ## Documentation
 
 - [Install guide](docs/runbooks/install.md)
 - [Companion operations](docs/runbooks/companion.md)
 - [Device pairing](docs/runbooks/device-pairing.md)
 - [All runbooks](docs/runbooks/)
+- [Changelog](CHANGELOG.md)
 - [Third-party software and licences](docs/acknowledgements.md)
 
 ## License

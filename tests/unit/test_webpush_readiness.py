@@ -101,7 +101,9 @@ def test_the_check_never_creates_or_changes_the_store(home: Path) -> None:
     _item(config)
     outbox_counts(config.state_dir)
     after = {p.name: p.read_bytes() for p in directory.iterdir() if p.is_file()}
-    assert set(after) == set(before)  # no new file
+    # Some SQLite builds leave their own WAL sidecars after a read-only open.
+    sidecars = {"webpush.db-wal", "webpush.db-shm"}
+    assert set(after) - sidecars == set(before) - sidecars  # no new file
     assert after["webpush.db"] == before["webpush.db"]
 
 

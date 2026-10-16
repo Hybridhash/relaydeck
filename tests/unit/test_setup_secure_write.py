@@ -50,7 +50,8 @@ def test_creation_through_a_symlinked_parent_is_refused(tmp_path: Path) -> None:
 def test_creation_under_a_group_writable_directory_is_refused(tmp_path: Path) -> None:
     root = tmp_path.resolve()
     loose = root / "loose"
-    loose.mkdir(mode=0o775)
+    loose.mkdir()
+    loose.chmod(0o775)  # mkdir's mode is masked by the umask.
     message = setup.ensure_config(loose / "companion.toml")
     assert "not created" in message
     assert oct(os.stat(loose).st_mode & 0o777) == "0o775"

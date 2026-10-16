@@ -27,13 +27,13 @@ jobs:
     name: lint-type-test-scan
     runs-on: macos-15
     timeout-minutes: 60
+    # The documented install uses uv's managed Python; the usage hook refuses the runner's shared
+    # tool-cache interpreter.
+    env:
+      UV_PYTHON: "3.13"
+      UV_PYTHON_PREFERENCE: only-managed
     steps:
       - uses: actions/checkout@v7.0.1
-
-      - name: Set up Python
-        uses: actions/setup-python@v7.0.0
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Set up uv
         uses: astral-sh/setup-uv@v10.2.0

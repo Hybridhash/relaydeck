@@ -109,8 +109,8 @@ def _event_key(event_id: str) -> str:
 
 
 def outbox_counts(state_dir: Path) -> tuple[int, int] | None:
-    """(queued, retrying) web push messages, read without creating or changing anything. None when
-    the store does not exist yet. A message that failed and is retrying has attempts > 0."""
+    """(queued, retrying) web push messages, read-only: the store is never created or changed. None
+    when it does not exist yet. A message that failed and is retrying has attempts > 0."""
     path = state_dir / "webpush" / "webpush.db"
     if not path.is_file():
         return None

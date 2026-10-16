@@ -1,0 +1,54 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="880" height="260" viewBox="0 0 880 260" role="img" aria-label="How it works: your phone, tablet or browser connects over your private Tailscale network to the RelayDeck companion on your Mac, which talks to Herdr and its agents and shells. Nothing goes through a cloud service.">
+  <style>
+    .card { fill: #17132b; stroke: #2e2752; }
+    .box { fill: #221c3d; }
+    .mac { fill: #1d1838; stroke: #4c3fa0; stroke-dasharray: 6 5; }
+    .title { font: 600 12px -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; fill: #a9a3c9; letter-spacing: 0.08em; }
+    .name { font: 700 17px -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; fill: #ffffff; }
+    .sub { font: 400 12px -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; fill: #a9a3c9; }
+    .link { font: 600 11px -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; fill: #c4b5fd; letter-spacing: 0.04em; }
+    .line { stroke: #7c5cff; stroke-width: 2; fill: none; }
+  </style>
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0L10 5L0 10z" fill="#7c5cff"/>
+    </marker>
+  </defs>
+  <rect class="card" x="0.5" y="0.5" width="879" height="259" rx="16"/>
+
+  <g transform="translate(24 64)">
+    <rect class="box" width="196" height="132" rx="12"/>
+    <text class="name" x="18" y="34">Your devices</text>
+    <text class="sub" x="18" y="60">Phone, tablet or any</text>
+    <text class="sub" x="18" y="78">browser, signed in to</text>
+    <text class="sub" x="18" y="96">your tailnet and paired</text>
+    <text class="sub" x="18" y="114">on the Mac</text>
+  </g>
+
+  <path class="line" d="M226 130H316" marker-start="url(#a)" marker-end="url(#a)"/>
+  <text class="link" x="271" y="116" text-anchor="middle">PRIVATE HTTPS</text>
+  <text class="link" x="271" y="152" text-anchor="middle">TAILNET ONLY</text>
+
+  <rect class="mac" x="324" y="48" width="532" height="164" rx="14"/>
+  <text class="title" x="342" y="72">YOUR MAC</text>
+
+  <g transform="translate(342 84)">
+    <rect class="box" width="210" height="112" rx="12"/>
+    <text class="name" x="18" y="34">RelayDeck companion</text>
+    <text class="sub" x="18" y="60">Listens on 127.0.0.1 only</text>
+    <text class="sub" x="18" y="78">No inbound ports</text>
+    <text class="sub" x="18" y="96">Pairing approved here</text>
+  </g>
+
+  <path class="line" d="M558 140H620" marker-start="url(#a)" marker-end="url(#a)"/>
+
+  <g transform="translate(626 84)">
+    <rect class="box" width="212" height="112" rx="12"/>
+    <text class="name" x="18" y="34">Herdr</text>
+    <text class="sub" x="18" y="60">Your coding agents</text>
+    <text class="sub" x="18" y="78">and shells keep running</text>
+    <text class="sub" x="18" y="96">on the Mac</text>
+  </g>
+
+  <text class="sub" x="440" y="242" text-anchor="middle">No RelayDeck cloud service, no account. Usage data stays in a local database.</text>
+</svg>

@@ -516,6 +516,8 @@ def test_an_oversize_document_is_skipped_and_partial(tmp_path: Path) -> None:
 
 def test_a_large_document_is_the_first_unit_then_the_pass_ends_partial(tmp_path: Path) -> None:
     root = _copy(tmp_path, "turns")
+    # The reader visits newest first; checkout order must not decide which document that is.
+    os.utime(root / "sessions" / "cli" / "turns-two.json", (1_000_000_000, 1_000_000_000))
     tiny = Budget(max_bytes=10)
     first = _run(TURNS, root, budget=tiny)
     assert first.coverage is Coverage.PARTIAL and len(first.events) == 3
