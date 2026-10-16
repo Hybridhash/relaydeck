@@ -57,6 +57,7 @@ def build_state_panels(
     on_reconnect: Callable[[], Any] | None,
     on_takeover: Callable[[], Any],
     phone: bool,
+    reconnecting: bool = False,
     takeover_disclosure: str | None,
     tokens: dict[str, str],
     window: str,
@@ -122,6 +123,10 @@ def build_state_panels(
                     take_over_key=AGENT_TAKEOVER_KEY,
                 )
             )
+    elif window == STATE_DISCONNECTED and reconnecting:
+        bottom.append(
+            ft.Text("Reconnecting…", key="agent-reconnecting", color=tokens["muted"], size=13)
+        )
     elif window == STATE_DISCONNECTED:
         bottom.append(
             NoticePanel(

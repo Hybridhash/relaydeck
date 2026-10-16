@@ -40,6 +40,9 @@ def test_actual_web_on_connect_resumes_only_same_verified_identity(
                 controller=controller,
                 close=close,
                 resume_terminals=lambda **kwargs: terminal_resumes.append(kwargs),
+                mark_page_visible=lambda: None,
+                note_hidden=lambda: None,
+                activate=lambda reason, **kw: None,
                 fence_replaced_transport=lambda transport: None,
             )
 

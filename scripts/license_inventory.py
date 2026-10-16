@@ -78,6 +78,10 @@ DART_LICENSES = {
         "Apache-2.0",
         "flet-dev/flet LICENSE at a87ca7fc (Apache-2.0)",
     ),
+    "web": (
+        "BSD-3-Clause",
+        "pub.dev archive web-1.1.1 LICENSE (BSD, (c) 2023 Dart project authors)",
+    ),
     "flutter_lints": (
         "BSD-3-Clause",
         "dart-lang/lints LICENSE (BSD, (c) 2021 Dart project authors)",

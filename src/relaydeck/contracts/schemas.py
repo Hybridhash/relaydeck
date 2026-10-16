@@ -74,24 +74,16 @@ ERROR_CODES = (
 )
 
 # Deliberate error mappings:
-# - Malformed JSON / schema violations / unknown fields -> 400 + forbidden
-#   with details.reason (HTTP status carries "bad request"; the code stays
-#   in the stable table and is never retried blindly).
-# - Unknown operation kinds -> 400 + unsupported_capability.
-# - Missing capability -> 403 + unsupported_capability.
+# - Malformed JSON, schema violations, unknown fields -> 400 + forbidden (details.reason).
+# - Unknown operation kinds -> 400 + unsupported_capability; missing capability -> 403 + same.
 # - Unknown host/command/agent/pane/tab/workspace -> 404 + not_found.
-# - Invalid/expired/forged cursor -> 409 + stale_epoch, details.reason=cursor
-#   (same recovery as epoch change: resnapshot from scratch).
-# - Stale writer generation -> 409 + stale_revision (generations are
-#   revisions of the lease writer).
-# - Herdr transport failures -> 503 + host_offline (retryable).
-# - Herdr protocol drift -> 500 + upstream_incompatible (not retryable).
-# - Herdr command outcomes (agent_blocked, agent_not_ready, agent_not_found,
-#   pane_not_found, ...) are NOT envelope codes: they ride command records
-#   and event payloads as details.upstream_code so the UI can branch on
-#   them without widening the envelope table.
-# - Unhandled gateway faults -> 500 + upstream_incompatible with a safe
-#   correlation id and no internal detail.
+# - Invalid/expired/forged cursor -> 409 + stale_epoch, details.reason=cursor (resnapshot).
+# - Stale writer generation -> 409 + stale_revision.
+# - Herdr transport failure -> 503 + host_offline (retryable); protocol drift -> 500 +
+#   upstream_incompatible (not retryable).
+# - Herdr command outcomes (agent_blocked, agent_not_ready, pane_not_found, ...) are not envelope
+#   codes: they ride command records and event payloads as details.upstream_code.
+# - Unhandled gateway faults -> 500 + upstream_incompatible with a safe correlation id only.
 ERROR_STATUS = {
     "unauthenticated": 401,
     "forbidden": 400,
@@ -845,11 +837,8 @@ def validate(schema_id: str, value: Any) -> None:
     _validate(root, value, root, "$")
 
 
-# "one exact schema per event", expressed as load-bearing rules.
-# Extra payload keys are tolerated (forward compatibility); missing
-# load-bearing keys reject the event. This is the explicit compatibility
-# rule: unknown *types* cannot arrive (closed enum), unknown *keys* are
-# ignored, absent *required* keys fail closed.
+# Compatibility rule: unknown event types cannot arrive (closed enum), unknown payload keys are
+# ignored, and absent load-bearing keys reject the event.
 _EVENT_RESOURCE_REQUIRED = (
     "workspace.upserted",
     "tab.upserted",

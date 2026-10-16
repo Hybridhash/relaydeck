@@ -457,6 +457,45 @@ def test_an_auth_failure_suppresses_even_an_identified_account(tmp_path: Path) -
         store.close()
 
 
+def test_a_transient_error_never_revives_an_older_unknown_reading(tmp_path: Path) -> None:
+    clock = FakeClock(NOW)
+    unknown = ProviderResult((snapshot(NOW, (window(used=90.0),), account=None),))
+    named = ProviderResult((snapshot(NOW + 400_000, (window(used=30.0),), account="account-a"),))
+    scheduler, _, store = make_scheduler(
+        tmp_path, clock, [unknown, named, ProviderResult(error=LimitError.UNAVAILABLE)]
+    )
+    try:
+        for step in range(3):
+            clock.now = NOW + step * 400_000
+            scheduler.run_once(clock.now)
+        shown = _shown(store)
+        assert [s.account_ref for s in shown] == ["account-a"]
+        assert [w.used_percent for s in shown for w in s.windows] == [30.0]
+    finally:
+        store.close()
+
+
+def test_a_transient_error_after_an_unknown_reading_never_revives_a_named_one(
+    tmp_path: Path,
+) -> None:
+    clock = FakeClock(NOW)
+    named = ProviderResult((snapshot(NOW, (window(used=60.0),), account="account-a"),))
+    unknown = ProviderResult((snapshot(NOW + 400_000, (window(used=50.0),), account=None),))
+    scheduler, _, store = make_scheduler(
+        tmp_path, clock, [named, unknown, ProviderResult(error=LimitError.UNAVAILABLE)]
+    )
+    try:
+        for step in range(3):
+            clock.now = NOW + step * 400_000
+            scheduler.run_once(clock.now)
+        shown = _shown(store)
+        assert [s.account_ref for s in shown] == [None]
+        assert shown[0].windows == ()
+        assert shown[0].error == "unavailable"
+    finally:
+        store.close()
+
+
 def test_the_status_line_source_is_not_touched_by_a_plane_failure(tmp_path: Path) -> None:
     """A status-line reading has no account and source "": a provider block's failure never
     removes it, and it is still returned with its own freshness."""

@@ -45,6 +45,9 @@ class UsageLimitsConfig:
     enabled: bool = True
     # manual-only blocks are never time-due (min_interval ignored).
     on_demand: bool = False
+    # An on-demand block is also read in the background, at most this often and only when its tool
+    # was used after the last reading; 0 = manual only.
+    auto_interval_seconds: int = 0
 
 
 @dataclass(frozen=True)
@@ -144,8 +147,11 @@ USAGE_LIMITS_KEYS = frozenset(
         "timeout_seconds",
         "enabled",
         "on_demand",
+        "auto_interval_seconds",
     }
 )
+PANE_LIMITS_FORMAT = "tui-usage-pane-v1"
+DEFAULT_PANE_AUTO_SECONDS = 6 * 3600
 
 
 def usage_from(value: Any, kinds: tuple[str, ...]) -> UsageConfig | None:
@@ -269,9 +275,22 @@ def usage_from(value: Any, kinds: tuple[str, ...]) -> UsageConfig | None:
             # alone can take ~12 s); the approved bound is 90 s within 30..300.
             if on_demand and not 30 <= timeout <= 300:
                 raise ValueError
+            auto = row.get(
+                "auto_interval_seconds",
+                DEFAULT_PANE_AUTO_SECONDS if limit_format == PANE_LIMITS_FORMAT else 0,
+            )
+            if type(auto) is not int or auto < 0:
+                raise ValueError
             scheduled.append(
                 UsageLimitsConfig(
-                    limit_kind, limit_format, command, interval, timeout, enabled, on_demand
+                    limit_kind,
+                    limit_format,
+                    command,
+                    interval,
+                    timeout,
+                    enabled,
+                    on_demand,
+                    auto,
                 )
             )
         inferred_linking = value.get("inferred_linking", True)

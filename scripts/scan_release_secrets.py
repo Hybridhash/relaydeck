@@ -102,7 +102,7 @@ PATTERNS: tuple[SecretPattern, ...] = (
         allow_dirs=("tests",),
     ),
     SecretPattern(
-        "task-024-canary",
+        "test-canary-marker",
         r"canary-(?:pw|draft|clipboard|push|token|event)-[0-9a-f]{8}",
         "Canary marker outside its home in tests/security.",
         allow_dirs=("tests/security",),

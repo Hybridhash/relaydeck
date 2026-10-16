@@ -18,6 +18,11 @@ Python -> Dart (output and commands), first byte is the kind:
   0x0E RELEASE_KEYBOARD (no body; hide the soft keyboard and disarm touch
        input; never writes to the PTY)
   0x0F KEYBOARD_BUTTON 0x00/0x01 (show the native keyboard button in the view)
+  0x10 CANCEL_SCROLL u32be seq (retire widget scroll motion — wheel queue,
+       momentum coast, pending release velocity — then ack the seq with
+       0x8A. Sent before a server-side key/paste write so stale wheel rows
+       already in flight drop instead of landing after the key. Only
+       sent to a viewer that proved it acks: see 0x8A seq 0.)
 
 Dart -> Python:
   0x81 INPUT origin u8 + u32be length + bytes from the emulator:
@@ -41,6 +46,10 @@ Dart -> Python:
        bit2 mouse reporting on (sent on change only, once per frame)
   0x87 RESUME_REPORT u32be req + u64be instance + u32be resets + u64be
        applied (reply to 0x0C; req 0 is the unsolicited mount hello)
+  0x8A SCROLL_CANCELLED u32be seq (the widget retired its scroll motion
+       for the 0x10 with that seq; wheel reports after the matching ack
+       belong to a fresh gesture. Seq 0, sent unsolicited at mount, is
+       the capability advertisement and releases nothing.)
   0x89 KEYBOARD_TRACE event u8 + flags u8 + visual viewport height u16be
        (touch only; fixed keyboard metadata, 0xFFFF = unavailable)
   0xFF ACK u64be cumulative applied output bytes (backpressure)
@@ -63,6 +72,8 @@ through Dart. There is intentionally no Python->Dart key packet.
 from __future__ import annotations
 
 import codecs
+import contextvars
+import re
 import struct
 from dataclasses import dataclass
 
@@ -78,6 +89,7 @@ RESUME_PROBE = 0x0C
 RESUME_VERIFIED = 0x0D
 RELEASE_KEYBOARD = 0x0E
 KEYBOARD_BUTTON = 0x0F
+CANCEL_SCROLL = 0x10
 
 INPUT = 0x81
 SIZE_REPORT = 0x82
@@ -87,6 +99,7 @@ MODE_REPORT = 0x85
 VIEW_REPORT = 0x86
 KEYBOARD_STATE = 0x88
 KEYBOARD_TRACE = 0x89
+SCROLL_CANCELLED = 0x8A
 RESUME_REPORT = 0x87
 ACK = 0xFF
 
@@ -106,6 +119,12 @@ SWIPE_UP = 0
 SWIPE_DOWN = 1
 MAX_SWIPE_COUNT = 255
 MAX_SWIPE_PAGES = 2
+
+# Cancel epoch of the INPUT packet being dispatched, stamped synchronously so async handlers
+# can tell a wheel report accepted before a cancel from a fresh gesture. -1: unstamped.
+input_cancel_epoch: contextvars.ContextVar[int] = contextvars.ContextVar(
+    "input_cancel_epoch", default=-1
+)
 
 
 def encode_write(data: bytes) -> bytes:
@@ -156,6 +175,32 @@ def decode_keyboard_trace(payload: bytes) -> tuple[int, int, int]:
 
 def encode_reset() -> bytes:
     return struct.pack(">B", RESET)
+
+
+def encode_cancel_scroll(seq: int) -> bytes:
+    """Encode a CANCEL_SCROLL packet: the caller\'s nonzero cancel sequence."""
+    if isinstance(seq, bool) or not isinstance(seq, int):
+        raise ValueError(f"bad cancel seq {seq!r}")
+    if not 1 <= seq <= 0xFFFFFFFF:
+        raise ValueError(f"bad cancel seq {seq!r}")
+    return struct.pack(">BI", CANCEL_SCROLL, seq)
+
+
+def encode_scroll_cancelled(seq: int) -> bytes:
+    """Encode a SCROLL_CANCELLED packet (mirrors the Dart encoder; seq 0
+    is the mount capability advertisement)."""
+    if isinstance(seq, bool) or not isinstance(seq, int):
+        raise ValueError(f"bad cancel seq {seq!r}")
+    if not 0 <= seq <= 0xFFFFFFFF:
+        raise ValueError(f"bad cancel seq {seq!r}")
+    return struct.pack(">BI", SCROLL_CANCELLED, seq)
+
+
+def decode_scroll_cancelled(payload: bytes) -> int:
+    """Split a SCROLL_CANCELLED payload into its cancel sequence."""
+    if len(payload) != 4:
+        raise ValueError(f"bad SCROLL_CANCELLED payload length {len(payload)}")
+    return struct.unpack(">I", payload)[0]
 
 
 def encode_request_snapshot(req_id: int) -> bytes:
@@ -214,6 +259,30 @@ def decode_input(payload: bytes) -> tuple[int, bytes]:
     return payload[0], payload[1:]
 
 
+def is_wheel_report(data: bytes) -> bool:
+    """True for one vertical mouse wheel frame (SGR, urxvt or X10 byte
+    forms): the same byte contract `scrolling.is_scroll_input` accepts
+    without its view-state gate. Tells stale wheel rows from fresh
+    widget input when releasing the wheel block."""
+    try:
+        text = data.decode("utf-8", errors="strict")
+    except UnicodeDecodeError:
+        return False
+    sgr = re.fullmatch(r"\x1b\[<(\d+);(\d+);(\d+)M", text)
+    urxvt = re.fullmatch(r"\x1b\[(\d+);(\d+);(\d+)M", text)
+    if sgr or urxvt:
+        match = sgr or urxvt
+        assert match is not None
+        button, x, y = map(int, match.groups())
+        if urxvt:
+            button -= 32
+    elif text.startswith("\x1b[M") and len(text) == 6:
+        button, x, y = (ord(char) - 32 for char in text[3:])
+    else:
+        return False
+    return button & ~28 in (64, 65) and 0 < x <= 65535 and 0 < y <= 65535
+
+
 def encode_size_report(cols: int, rows: int) -> bytes:
     return struct.pack(">BHH", SIZE_REPORT, cols, rows)
 
@@ -270,16 +339,11 @@ def encode_ack(applied: int) -> bytes:
     return struct.pack(">BQ", ACK, applied)
 
 
-# After authenticated session reuse, probe continuity before rebinding the
-# retained native engine to the replacement transport without a generation bump.
-# The probe carries a
-# nonzero request id; the report echoes it with the Dart native
-# instance id (minted per engine mount), the Dart applied-reset count,
-# and cumulative applied output bytes. Req id 0 is the unsolicited
-# mount hello (same shape), which records the baseline identity; a
-# resume with no recorded baseline fails closed unless the terminal
-# is provably zero-traffic. No declared length is trusted for
-# allocation: the report is fixed-size and length-checked exactly.
+# Resume probe: after session reuse, verify continuity before rebinding the retained engine.
+# The report echoes a nonzero request id with the Dart native instance id, applied-reset count
+# and applied output bytes; id 0 is the mount hello that records the baseline. A resume with
+# no baseline fails closed unless the terminal is provably zero-traffic. The report is
+# fixed-size and length-checked exactly, so no declared length drives allocation.
 RESUME_REPORT_LEN = 24
 
 
@@ -365,7 +429,7 @@ def decode_packets(buffer: bytearray) -> list[DecodedPacket]:
                 break
             out.append(DecodedPacket(kind, bytes(view[offset + 1 : offset + 2])))
             offset += 2
-        elif kind in (REQUEST_SNAPSHOT, RESUME_PROBE):
+        elif kind in (REQUEST_SNAPSHOT, RESUME_PROBE, CANCEL_SCROLL, SCROLL_CANCELLED):
             if len(view) - offset < 5:
                 break
             out.append(DecodedPacket(kind, bytes(view[offset + 1 : offset + 5])))

@@ -121,6 +121,16 @@ def _PhoneComposerField(
     return field
 
 
+STATUS_ROW_KEY = "phone-composer-status"
+STATUS_ROW_HEIGHT = 16.0
+
+
+def _status_text(text: str, key: str) -> ft.Text:
+    return ft.Text(
+        text, key=key, size=12, max_lines=1, overflow=ft.TextOverflow.ELLIPSIS, expand=True
+    )
+
+
 def _phone_composer(
     *,
     draft: str,
@@ -174,14 +184,15 @@ def _phone_composer(
     controls: list[Any] = [ft.Row(key=composer_ui.FOOTER_KEY, spacing=6, controls=row)]
     if chips is not None:
         controls.append(chips)
+    # Status lines share one fixed-height row: a notice arriving after send
+    # must not change the dock's height (that resizes the terminal again).
+    status: list[Any] = []
     staged = composer_ui.markers_line(markers)
     if staged:
-        controls.append(ft.Text(staged, key=composer_ui.MARKERS_KEY, size=12))
+        status.append(_status_text(staged, composer_ui.MARKERS_KEY))
     # An empty draft needs no extra line; meaningful unresolved content does.
     if blockers and blockers != ("empty",) and not can_send and error is None and review is None:
-        controls.append(
-            ft.Text(composer_ui.UNRESOLVED_HINT, key=composer_ui.VALIDATION_KEY, size=12)
-        )
+        status.append(_status_text(composer_ui.UNRESOLVED_HINT, composer_ui.VALIDATION_KEY))
     if error is not None and submission in (SUBMISSION_FAILED, SUBMISSION_UNKNOWN):
         controls.append(
             ft.Row(
@@ -197,7 +208,7 @@ def _phone_composer(
         SUBMISSION_PROGRESS: "Agent is working on your message.",
     }.get(submission)
     if message:
-        controls.append(ft.Text(message, key=composer_ui.NOTICE_KEY, size=12))
+        status.append(_status_text(message, composer_ui.NOTICE_KEY))
     if review is not None:
         controls.append(
             ft.Column(
@@ -241,7 +252,14 @@ def _phone_composer(
             )
         )
     if input_mode == INPUT_MODE_TOOLS_KEYS:
-        controls.append(ft.Text("Tools keys", key=composer_ui.MODE_KEY, size=12))
+        status.append(_status_text("Tools keys", composer_ui.MODE_KEY))
+    controls.append(
+        ft.Container(
+            key=STATUS_ROW_KEY,
+            height=STATUS_ROW_HEIGHT,
+            content=ft.Row(spacing=8, controls=status),
+        )
+    )
     return ft.Column(
         key=composer_ui.COMPOSER_KEY,
         visible=visible,

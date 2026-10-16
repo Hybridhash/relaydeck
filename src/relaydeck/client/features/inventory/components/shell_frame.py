@@ -162,14 +162,9 @@ def build_body(
             controls=list(retained_views),
         ),
     )
-    # Inactive engines stay mounted behind the opaque inventory. The active
-    # surface paints last; hidden surfaces cannot intercept its pointer events.
-    # Fixed order: reordering these two children remounted the native
-    # terminal engine on the Dart side whenever the active surface
-    # toggled (Console -> Terminals -> Console came back "Viewer
-    # restarted; reattach explicitly"). The split paints on top; while a
-    # retained surface is active its detail slot is an empty transparent
-    # placeholder that is hidden, so pointer events reach the terminal.
+    # Inactive engines stay mounted behind the opaque inventory; the active surface paints last and
+    # hidden ones cannot take its pointer events. Keep this child order: swapping it remounts the
+    # native terminal engine when the active surface toggles.
     layers: list[ft.Control] = [retained_layer, split]
     body.append(
         ft.Container(

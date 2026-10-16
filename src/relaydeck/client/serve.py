@@ -60,6 +60,7 @@ from relaydeck.client.features.auth.web_recovery import (
     RECOVERY_SCRIPT,
     BrowserRecoveryMiddleware,
 )
+from relaydeck.client.features.terminal.diagnostics import diagnostics_logger
 from relaydeck.contracts.schemas import validate
 from relaydeck.devtools.dev_server import (  # noqa: F401  (re-exported for tests and the runner)
     _DEV_HOSTS,
@@ -88,6 +89,7 @@ WS_PATH = "/ws"
 REGISTER_ACTION = 1  # flet.messaging.protocol.MessageAction.REGISTER_CLIENT
 REGISTER_TIMEOUT_S = 10.0
 MAX_REGISTER_BYTES = 64 * 1024
+MAX_VISIBILITY_BYTES = 512
 FLET_HANDOFF_TIMEOUT_S = 5.0
 
 # Web sign-in lifetime. Sliding: 30 days without use; every verified live use (the access-token
@@ -144,6 +146,15 @@ class _FletTransport:
     flet_id: str = ""
 
 
+@dataclass
+class _PageVisibility:
+    identity: WebIdentity
+    session: Any
+    report: Callable[[str, bool], None]
+    since: float = float("-inf")
+    count: int = 0
+
+
 _PrivateResult = TypeVar("_PrivateResult")
 
 
@@ -174,11 +185,14 @@ class WebSessionStore:
     pairing_ready: dict[str, tuple[int, dict[str, Any], dict[str, Any], int]] = field(
         default_factory=dict
     )
+    pairing_tasks: dict[tuple[str, str, int], Any] = field(default_factory=dict, repr=False)
     _denied_sids: set[str] = field(default_factory=set, repr=False)
     _draft_tabs: dict[str, str] = field(default_factory=dict, repr=False)
     _tab_claims: dict[tuple[str, str, str], str] = field(default_factory=dict, repr=False)
     _pending_revocations: dict[str, _WebSession] = field(default_factory=dict, repr=False)
     _cookie_expiry: dict[str, int] = field(default_factory=dict, repr=False)
+    _visibility_pages: dict[str, _PageVisibility] = field(default_factory=dict, repr=False)
+    _visibility_clock: Callable[[], float] = field(default=time.monotonic, repr=False)
 
     async def run_private(self, operation: Callable[[], _PrivateResult]) -> _PrivateResult:
         if self.persistence is not None:
@@ -284,7 +298,9 @@ class WebSessionStore:
             return session.expires_ms, session.extended_ms
         return moved, now
 
-    def _current_session(self, sid: str, *, restore: bool = False) -> _WebSession | None:
+    def _current_session(
+        self, sid: str, *, restore: bool = False, strict: bool = False
+    ) -> _WebSession | None:
         if sid in self._denied_sids:
             return None
         session = self._sessions.get(sid)
@@ -294,6 +310,8 @@ class WebSessionStore:
             try:
                 stored = self._read_web(sid)
             except StorageUnavailable:
+                if strict:
+                    raise  # a read-only observer must tell "unavailable" from "signed out"
                 return None
             if stored is None:
                 return None
@@ -623,6 +641,16 @@ class WebSessionStore:
             return None
         return session.identity
 
+    def observe(self, cookie: str) -> tuple[WebIdentity, str] | None:
+        """Signed-in lookup for a read-only check; raises StorageUnavailable, never hides it."""
+        sid = self.signed_sid(cookie)
+        if sid is None:
+            return None
+        session = self._current_session(sid, restore=True, strict=True)
+        if session is None or session.expires_ms < self.now_ms():
+            return None
+        return session.identity, session.access_token
+
     def take_session(self, sid: str) -> tuple[str, str] | None:
         """Pop a session's gateway tokens (logout path)."""
         session = self._current_session(sid)
@@ -651,6 +679,7 @@ class WebSessionStore:
                         del self._tab_claims[claim]
                 del self._owners[flet_id]
                 self._handshakes.pop(flet_id, None)
+                self._visibility_pages.pop(flet_id, None)
         self._closers.pop(sid, None)
 
     async def ensure_access(
@@ -1495,6 +1524,106 @@ def build_web_app(
             status_code=401, headers={**store.clear_cookie_headers(), "Cache-Control": "no-store"}
         )
 
+    @app.post("/v1/auth/session/check")
+    async def session_check(request: Request) -> Response:
+        """Read-only: is this browser signed in right now. Never tears down or clears."""
+        import httpx
+
+        headers = {"Cache-Control": "no-store"}
+        if request.headers.getlist("origin") != [store.public_origin]:
+            return Response(status_code=403, headers=headers)
+        try:
+            seen = await store.run_private(
+                lambda: store.observe(_cookies(dict(request.headers)).get(COOKIE_NAME, ""))
+            )
+        except StorageUnavailable:
+            return Response(status_code=503, headers=headers)
+        if seen is None:
+            return Response(status_code=401, headers=headers)
+        identity, access = seen
+        try:
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=gateway_app), base_url="http://gw"
+            ) as http:
+                response = await http.get("/v1/me", headers={"Authorization": f"Bearer {access}"})
+            if response.status_code in (401, 403):
+                return Response(status_code=401, headers=headers)
+            if response.status_code != 200:
+                return Response(status_code=503, headers=headers)
+            principal = response.json()
+            validate("relaydeck/gateway/v1/me", principal)
+        except Exception:  # noqa: BLE001 - authority could not be established right now
+            return Response(status_code=503, headers=headers)
+        if (principal["account"], principal["device_id"]) != (
+            identity.account,
+            identity.device_id,
+        ):
+            return Response(status_code=401, headers=headers)
+        return Response(status_code=204, headers=headers)
+
+    @app.post("/v1/ui/visibility")
+    async def ui_visibility(request: Request) -> Response:
+        response = Response(status_code=204, headers={"Cache-Control": "no-store"})
+        if request.headers.getlist("origin") != [store.public_origin]:
+            return response
+        raw = bytearray()
+        try:
+            async for part in request.stream():
+                if len(raw) + len(part) > MAX_VISIBILITY_BYTES:
+                    return response
+                raw.extend(part)
+
+            def unique(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+                result: dict[str, Any] = {}
+                for key, value in pairs:
+                    if key in result:
+                        raise ValueError
+                    result[key] = value
+                return result
+
+            body = json.loads(raw, object_pairs_hook=unique)
+            if (
+                not isinstance(body, dict)
+                or set(body) != {"state", "persisted", "flet"}
+                or body["state"] not in ("visible", "hidden")
+                or type(body["persisted"]) is not bool
+                or not isinstance(body["flet"], str)
+            ):
+                return response
+            cookie = _cookies(dict(request.headers)).get(COOKIE_NAME, "")
+            seen = await store.run_private(lambda: store.observe(cookie))
+        except (ValueError, StorageUnavailable):
+            return response
+        if seen is None:
+            return response
+        identity, _access = seen
+        flet_id = body["flet"]
+        binding = store._visibility_pages.get(flet_id)
+        unique_key = store.unique_key(flet_id)
+        if binding is None or binding.identity != identity or unique_key is None:
+            return response
+        try:
+            current = await store.run_private(lambda: store.observe(cookie))
+        except StorageUnavailable:
+            return response
+        live = await flet_fastapi.app_manager.get_session(unique_key)
+        if (
+            current is None
+            or current[0] != identity
+            or store.owner_of(flet_id) != identity.sid
+            or store._visibility_pages.get(flet_id) is not binding
+            or live is not binding.session
+            or store.unique_key(flet_id) != unique_key
+        ):
+            return response
+        now = store._visibility_clock()
+        if now - binding.since >= 1.0:
+            binding.since, binding.count = now, 0
+        if binding.count < 4:
+            binding.count += 1
+            binding.report(body["state"], body["persisted"])
+        return response
+
     @app.get("/v1/auth/pairing/finish")
     async def pairing_finish() -> Response:
         # No credential/id interpolated into HTML or URL. Existing per-tab Flet
@@ -1510,26 +1639,44 @@ def build_web_app(
     @app.get("/v1/auth/pairing/finish.js")
     async def pairing_finish_script() -> Response:
         return Response(
-            """(async () => {try {
- const id = window.sessionStorage.getItem('_flet_session_id');
- const r = await fetch('/v1/auth/pairing/complete', {
-   method:'POST',credentials:'same-origin',cache:'no-store',
-   headers:{'Content-Type':'application/json'},body:JSON.stringify({flet_session_id:id})});
- if (!r.ok) throw new Error('pairing failed');
- window.sessionStorage.removeItem('_flet_session_id'); window.location.replace('/');
- } catch (_) {try {window.sessionStorage.removeItem('_flet_session_id');} catch (_) {}
- document.getElementById('status').textContent=
-   'Connection expired or changed. Return to RelayDeck and explicitly pair again.';
- const a=document.createElement('a');a.href='/';a.textContent='Return to Connect';
- document.body.append(a);}})();""",
+            """(() => {
+ const status = document.getElementById('status');
+ const drop = () => {try {window.sessionStorage.removeItem('_flet_session_id');} catch (_) {}};
+ const link = () => {const a=document.createElement('a');a.href='/';
+   a.textContent='Return to Connect';document.body.append(a);};
+ const refused = () => {drop();
+   status.textContent='Connection expired or changed. '
+     +'Return to RelayDeck and explicitly pair again.';
+   link();};
+ const retryable = () => {
+   status.textContent="Couldn't reach RelayDeck. Check the connection and try again.";
+   const b=document.createElement('button');b.textContent='Retry';
+   b.onclick=() => {b.remove();status.textContent='Opening protected Console…';run();};
+   document.body.append(b);};
+ const home = () => {drop(); window.location.replace('/');};
+ const run = async () => {
+  try {
+   const id = window.sessionStorage.getItem('_flet_session_id');
+   const r = await fetch('/v1/auth/pairing/complete', {
+     method:'POST',credentials:'same-origin',cache:'no-store',
+     headers:{'Content-Type':'application/json'},body:JSON.stringify({flet_session_id:id})});
+   if (r.ok) return home();
+   if (r.status !== 404 && r.status !== 403) return retryable();
+   // Another completer of this attempt may have finished first: signed in is success.
+   const s = await fetch('/v1/auth/session/check', {
+     method:'POST',credentials:'same-origin',cache:'no-store'});
+   if (s.status === 204) return home();
+   if (s.status === 401) return refused();
+   retryable();
+  } catch (_) {retryable();}
+ };
+ run();})();""",
             media_type="application/javascript",
             headers={"Cache-Control": "no-store"},
         )
 
     @app.post("/v1/auth/pairing/complete")
     async def pairing_complete(request: Request) -> Any:
-        import httpx
-
         if request.headers.getlist("origin") != [store.public_origin]:
             return JSONResponse(status_code=403, content={"code": "forbidden"})
         try:
@@ -1556,34 +1703,87 @@ def build_web_app(
         except ValueError:
             return JSONResponse(status_code=400, content={"code": "forbidden"})
         browser = store.browser_identity(_cookies(dict(request.headers)).get("rd_browser", ""))
-        if browser and (
-            store.browser_pages.get(flet_id) != browser or flet_id not in store.pairing_ready
-        ):
-            # A resumed phone tab (app switch, live connection dropped) can
-            # come back as a NEW Flet session id. Accept the held result of
-            # another page of the SAME browser (same HttpOnly binding), most
-            # recent first; other browsers still never match.
-            owned = [
-                page_id
-                for page_id, holder in store.browser_pages.items()
-                if holder == browser
-                and page_id in store.pairing_ready
-                and store.pairing_ready[page_id][3] > store.now_ms()
-            ]
-            if owned:
-                flet_id = max(owned, key=lambda page_id: store.pairing_ready[page_id][3])
-        flow = store.pairing_flows.get(flet_id)
-        held = store.pairing_ready.get(flet_id)
-        if (
-            not browser
-            or store.browser_pages.get(flet_id) != browser
-            or flow is None
-            or held is None
-            or held[0] != flow.generation
-            or held[3] <= store.now_ms()
-        ):
+        if not browser:
             return JSONResponse(status_code=404, content={"code": "not_found"})
-        store.pairing_ready.pop(flet_id)  # consume before awaiting the authority check
+        # Join the exact operation still running for this caller, even after its held result
+        # was consumed; an authenticated page never reaches another page's attempt.
+        cookie_sid = await store.run_private(
+            lambda: store.verify_cookie(_cookies(dict(request.headers)).get(COOKIE_NAME, ""))
+        )
+        authenticated = (
+            store.identity(store.owner_of(flet_id)) is not None
+            or await store.run_private(lambda: store.identity(cookie_sid)) is not None
+        )
+        selected = _select_attempt(browser, flet_id, authenticated)
+        if selected is None:
+            return JSONResponse(status_code=404, content={"code": "not_found"})
+        if isinstance(selected, asyncio.Future):
+            running = selected
+        else:
+            page_id, held = selected
+            # Callers of the same attempt share one completion; another attempt never
+            # shares work or a cookie.
+            key = (browser, page_id, held[0])
+            running = asyncio.ensure_future(_complete_pairing(browser, page_id, held))
+            store.pairing_tasks[key] = running
+            running.add_done_callback(lambda _t: store.pairing_tasks.pop(key, None))
+        status, content, sid = await asyncio.shield(running)
+        headers = {"Cache-Control": "no-store"}
+        if sid is not None:
+            headers.update(store.cookie_headers(sid))
+        return JSONResponse(content, status_code=status, headers=headers)
+
+    def _select_attempt(browser: str, flet_id: str, authenticated: bool) -> Any:
+        """One resolver: a running task or a held attempt, exact and never ambiguous.
+
+        The page's current flow generation decides; older generations are never used. A
+        page that is not signed in may take over another page's attempt only when exactly
+        one candidate exists in this browser.
+        """
+
+        def current(page_id: str) -> int | None:
+            flow = store.pairing_flows.get(page_id)
+            return flow.generation if flow is not None else None
+
+        def candidates(page_id: str) -> list[Any]:
+            if store.browser_pages.get(page_id) != browser:
+                return []
+            generation = current(page_id)
+            if generation is None:
+                return []
+            found: list[Any] = []
+            # Same generation means the same attempt: a running task is joined before its
+            # held result (still present until the authority check) can start a second one.
+            task = store.pairing_tasks.get((browser, page_id, generation))
+            if task is not None and not task.done():
+                found.append(task)
+            held = store.pairing_ready.get(page_id)
+            if held is not None and held[0] == generation and held[3] > store.now_ms():
+                found.append((page_id, held))
+            # One attempt per page and generation, counted once (task first).
+            return found[:1]
+
+        own = candidates(flet_id)
+        if own:
+            return own[0]
+        if authenticated:
+            return None
+        others = [
+            item
+            for page_id, holder in tuple(store.browser_pages.items())
+            if holder == browser and page_id != flet_id
+            for item in candidates(page_id)
+        ]
+        return others[0] if len(others) == 1 else None
+
+    async def _complete_pairing(
+        browser: str, flet_id: str, held: tuple[int, dict[str, Any], dict[str, Any], int]
+    ) -> tuple[int, dict[str, Any], str | None]:
+        import httpx
+
+        flow = store.pairing_flows.get(flet_id)
+        if flow is None or store.browser_pages.get(flet_id) != browser:
+            return 404, {"code": "not_found"}, None
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app=gateway_app), base_url="http://gw"
         ) as http:
@@ -1594,9 +1794,17 @@ def build_web_app(
             principal = me.json()
             validate("relaydeck/gateway/v1/me", principal)
         except (ValueError, TypeError):
-            return JSONResponse(status_code=403, content={"code": "unauthenticated"})
-        if me.status_code != 200 or principal != held[2] or flow.generation != held[0]:
-            return JSONResponse(status_code=403, content={"code": "unauthenticated"})
+            return 403, {"code": "unauthenticated"}, None
+        if (
+            me.status_code != 200
+            or principal != held[2]
+            or flow.generation != held[0]
+            or held[3] <= store.now_ms()
+            or store.pairing_ready.get(flet_id) is not held
+        ):
+            return 403, {"code": "unauthenticated"}, None
+        # Consumed only after the authority check passed.
+        store.pairing_ready.pop(flet_id, None)
         tokens = held[1]
         sid = await store.run_private(
             lambda: store.create_session(
@@ -1607,9 +1815,7 @@ def build_web_app(
                 store.now_ms() + tokens["expires_in"] * 1000,
             )
         )
-        return JSONResponse(
-            {"ok": True}, headers={**store.cookie_headers(sid), "Cache-Control": "no-store"}
-        )
+        return 200, {"ok": True}, sid
 
     if dev_login:
         app.get("/v1/auth/dev-login")(_dev_login)
@@ -1795,9 +2001,7 @@ def make_relaydeck_main(
                                 snapshot,
                                 phase="failed",
                                 busy=False,
-                                message=(
-                                    "Protected browser handoff unavailable. Explicitly pair again."
-                                ),
+                                message=("Return to RelayDeck to finish pairing, or pair again."),
                             )
                         )
 
@@ -1959,6 +2163,35 @@ def make_relaydeck_main(
                 draft_store=draft_store,
             )
             rendered["resources"] = resources
+
+            def visibility(state: str, persisted: bool) -> None:
+                if (
+                    resources is None
+                    or rendered.get("resources") is not resources
+                    or rendered.get("identity") != current
+                    or getattr(resources, "closing", False)
+                ):
+                    return
+                if state == "hidden":
+                    resources.note_hidden()
+                diagnostics_logger().info(
+                    "ui_visibility state=%s persisted=%s since_hide_ms=%s",
+                    state,
+                    persisted,
+                    resources.hidden_elapsed_ms(),
+                )
+                if state == "visible" and getattr(page.session, "connection", None) is not None:
+                    # The report arrives over HTTP, outside the page's context;
+                    # activation re-renders, so it must run as a page task. Without a
+                    # live socket the reconnect handler activates instead.
+                    async def activate() -> None:
+                        resources.activate("visible")
+
+                    page.run_task(activate)
+
+            store._visibility_pages[page.session.id] = _PageVisibility(
+                current, page.session, visibility
+            )
             if current is not None:
                 store.add_closer(current.sid, resources.close)
 
@@ -1977,12 +2210,8 @@ def make_relaydeck_main(
             resources = rendered.get("resources")
             if resources is not None:
                 resources.fence_replaced_transport(_current_transport.get())
-            # Adopt ownership on reattach: the cookie presented by THIS
-            # handshake wins (login elsewhere, logout, server restart).
-            # Re-render only when the verified page identity changed, so
-            # ordinary reconnects never reset app state (destination,
-            # sheets, drafts). Found by a live browser run: without this,
-            # a session bound pre-login stays on the login prompt.
+            # Adopt ownership on reattach: this handshake's cookie wins. Re-render only when the
+            # verified identity changed, so ordinary reconnects keep app state.
             await rebind_on_connect(store, page)
             identity = await store.run_private(lambda: identity_for_page(store, page))
             if not _transport_is_live():
@@ -2015,12 +2244,32 @@ def make_relaydeck_main(
                                 and page.session.connection is connection
                             )
 
+                        # A session reconnect is itself proof the page is displayed; no
+                        # lifecycle event is guaranteed to accompany it.
+                        resources.mark_page_visible()
                         resources.resume_terminals(
                             transport=transport, current=current, closed=transport.closed
                         )
+                        resources.activate("connect", probe=False)
                     resources.controller.resume_ui()
 
         page.on_connect = on_reconnect
+
+        def on_lifecycle(event: Any) -> None:
+            # Web focus loss reports hide while the page stays on screen, so a lifecycle hide
+            # is not authoritative; transport loss signals a real background. Only show or resume
+            # counts as life.
+            resources = rendered.get("resources")
+            if resources is None:
+                return
+            if event.state in set(ft.AppLifecycleState):
+                diagnostics_logger().info("ui_lifecycle state=%s", event.state.value)
+            if event.state in {ft.AppLifecycleState.HIDE, ft.AppLifecycleState.PAUSE}:
+                resources.note_hidden()
+            elif event.state in {ft.AppLifecycleState.SHOW, ft.AppLifecycleState.RESUME}:
+                resources.activate(event.state.value)
+
+        page.on_app_lifecycle_state_change = on_lifecycle
         refresh(verified_initial)
 
     if store.persistence is not None:

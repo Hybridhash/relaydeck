@@ -64,7 +64,7 @@ def test_phone_focus_mode_and_keyboard_keep_confirmed_native_channel_and_output(
             binding = session._viewer_binding
             assert binding == (term, 1)
             channels[41]._deliver(protocol.encode_size_report(33, 19))
-            await asyncio.sleep(agent_hooks.OPEN_HOLD_S + 0.05)
+            await asyncio.sleep(agent_hooks.OPEN_HOLD_S + agent_hooks.RESIZE_SETTLE_S + 0.05)
             await app.settle()
             resize = terminal_wire.decode_input(factory.sockets[0].sent_bytes[-1])
             assert (resize.kind, resize.cols, resize.rows) == ("resize", 33, 19)

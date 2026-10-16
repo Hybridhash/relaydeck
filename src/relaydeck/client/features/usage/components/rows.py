@@ -276,6 +276,29 @@ def _refresh_control(
                 width=44, height=44, alignment=ft.Alignment.CENTER, content=content
             ),
         )
+    if refresh.cooldown_minutes is not None:
+        wait = f"{refresh.cooldown_minutes} min" if refresh.cooldown_minutes else "<1 min"
+        # Not an icon button: a paused refresh must not look tappable.
+        return ft.Semantics(
+            key=f"limit-refresh-{refresh.kind}",
+            label=f"{refresh.label}, available in {wait}",
+            disabled=True,
+            content=ft.Container(
+                width=44,
+                height=44,
+                alignment=ft.Alignment.CENTER,
+                content=ft.Column(
+                    spacing=0,
+                    tight=True,
+                    alignment=ft.MainAxisAlignment.CENTER,
+                    horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                    controls=[
+                        ft.Icon(ft.Icons.SCHEDULE, size=16, color=tokens["text_muted"]),
+                        ui(wait, color=tokens["text_muted"], size=10, weight=600, max_lines=1),
+                    ],
+                ),
+            ),
+        )
     return ft.IconButton(
         key=f"limit-refresh-{refresh.kind}",
         icon=ft.Icons.REFRESH,

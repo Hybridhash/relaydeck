@@ -1,0 +1,5 @@
+# Logged model names that a price table lists under a provider-prefixed key.
+# Explicit pairs only; a name with its own rate is never aliased.
+[aliases]
+"muse-spark-1.3" = "meta/muse-spark-1.3"
+"muse-spark-1.2" = "meta/muse-spark-1.2"

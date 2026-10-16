@@ -1,3 +1,225 @@
+--- a/lib/src/flet_backend.dart
++++ b/lib/src/flet_backend.dart
+@@ -37,9 +37,12 @@
+ import 'utils/platform.dart';
+ import 'utils/platform_utils_web.dart'
+     if (dart.library.io) "utils/platform_utils_non_web.dart";
++import 'utils/reconnect_policy.dart';
+ import 'utils/session_store_web.dart'
+     if (dart.library.io) "utils/session_store_non_web.dart";
+ import 'utils/uri.dart';
++import 'utils/wake_web.dart'
++    if (dart.library.io) "utils/wake_stub.dart";
+ import 'utils/weak_value_map.dart';
+ 
+ /// FletBackend - Handles business logic, provides data, and acts as ChangeNotifier
+@@ -86,6 +89,10 @@
+   final int? _reconnectTimeoutMs;
+   int _reconnectStarted = 0;
+   int _reconnectDelayMs = 0;
++  int _channelGeneration = 0;
++  Timer? _retryTimer;
++  final ReconnectPolicy _policy = ReconnectPolicy();
++  void Function()? _cancelWakeSources;
+   FletBackendChannel? _backendChannel;
+   final FletBackendChannelBuilder? _channelBuilder;
+   late final DataChannelFactory _dataChannelFactory;
+@@ -193,6 +200,11 @@
+         });
+       }
+     }
++
++    if (controlId == null) {
++      // Root app only: an embedded app never owns the page lifecycle.
++      _cancelWakeSources = WakeSources.install(onWake: wake);
++    }
+   }
+ 
+   static FletBackend of(BuildContext context) {
+@@ -280,12 +292,15 @@
+ 
+   @override
+   void dispose() {
++    _cancelWakeSources?.call();
++    _cancelWakeSources = null;
+     debugPrint("Disposing Flet backend.");
+     _failIdle("The embedded app was closed.");
+     _disposed = true;
+     _page.removeListener(_onPageUpdated);
+     _page.dispose();
+     _backendChannel?.disconnect();
++    _retryTimer?.cancel();
+     if (_ownsBootStatus) {
+       bootStatus.dispose();
+     }
+@@ -293,6 +308,25 @@
+   }
+ 
+   Future<void> connect() async {
++    if (_disposed) {
++      return;
++    }
++    // Each channel gets a generation; a retired socket's late close event or
++    // packets are then stale and cannot schedule work or mutate state.
++    final gen = ++_channelGeneration;
++    // Packets, like disconnects, are only valid from the current generation.
++    void onPacket(Uint8List packet) {
++      if (gen == _channelGeneration && !_disposed) {
++        _onPacket(packet);
++      }
++    }
++
++    // This attempt's own channel: by the time it settles, _backendChannel may
++    // already point at a newer attempt, which must never be dropped here. It
++    // lives outside `try` so the error paths below can clean it up too.
++    FletBackendChannel? channel;
++    bool retired() => _disposed || gen != _channelGeneration;
++
+     debugPrint("Connecting to Flet backend $pageUri...");
+     try {
+       final builder = _channelBuilder;
+@@ -300,20 +334,34 @@
+         // Embedder-supplied transport (e.g. serious_python's in-process FFI
+         // bridge). The builder is responsible for the entire transport
+         // lifecycle; we just wire its callbacks to ours.
+-        _backendChannel =
+-            builder(onDisconnect: _onDisconnect, onPacket: _onPacket);
++        channel = builder(
++            onDisconnect: () => _onDisconnect(gen), onPacket: onPacket);
+       } else {
+-        _backendChannel = FletBackendChannel(
++        channel = FletBackendChannel(
+             address: pageUri.toString(),
+             args: args ?? {},
+             forcePyodide: forcePyodide == true,
+             embedded: controlId != null,
+-            onDisconnect: _onDisconnect,
+-            onPacket: _onPacket);
++            onDisconnect: () => _onDisconnect(gen),
++            onPacket: onPacket);
+       }
+-      await _backendChannel!.connect();
++      _backendChannel = channel;
++      await channel.connect();
++      if (_disposed || gen != _channelGeneration) {
++        // Retired while opening (or disposed): drop it, never register.
++        try {
++          channel.disconnect();
++        } catch (_) {}
++        return;
++      }
+       _registerClient();
+     } on FletAppStartupException catch (e) {
++      if (retired()) {
++        try {
++          channel?.disconnect();
++        } catch (_) {}
++        return;
++      }
+       debugPrint("Flet app failed to start: $e");
+       isLoading = false;
+       error = e.toString();
+@@ -321,12 +369,40 @@
+       errorsHandler?.onError(error);
+       _failIdle(error);
+     } catch (e) {
++      if (retired()) {
++        try {
++          channel?.disconnect();
++        } catch (_) {}
++        return;
++      }
+       debugPrint("Error connecting to Flet backend: $e");
+       error = e.toString();
+-      _onDisconnect();
++      _onDisconnect(gen);
+     }
+   }
+ 
++  /// Page returned (visible, pageshow or online): if a retry is already
++  /// scheduled, run it now instead of waiting for the timer. Otherwise do
++  /// nothing: this never opens a connection pristine Flet would not open.
++  void wake(String source) {
++    if (_disposed) {
++      return;
++    }
++    // Bare literal: compiled-output evidence for the marker gate. The detail
++    // lines below interpolate, which would not leave a quoted literal.
++    debugPrint("flet_reconnect_wake_rd1");
++    final pending = _retryTimer;
++    if (pending == null || !pending.isActive) {
++      debugPrint('flet_reconnect_wake_rd1 action=none source=$source');
++      return;
++    }
++    pending.cancel();
++    _retryTimer = null;
++    _policy.reset();
++    debugPrint('flet_reconnect_wake_rd1 action=retry_now source=$source');
++    connect();
++  }
++
+   /// Opens a dedicated [DataChannel] for high-throughput byte traffic from a
+   /// widget. In embedded mode this is backed by a fresh `PythonBridge`; in
+   /// dev / web modes it is a logical channel multiplexed over the active
+@@ -397,6 +473,7 @@
+       }
+       isLoading = false;
+       _reconnectDelayMs = 0;
++      _policy.reset();
+       error = "";
+ 
+       page.update(resp.patch, shouldNotify: true);
+@@ -771,33 +848,36 @@
+     notifyListeners();
+   }
+ 
+-  _onDisconnect() {
+-    if (_disposed) {
++  _onDisconnect(int gen) {
++    if (_disposed || gen != _channelGeneration) {
+       return;
+     }
+ 
+-    var nextReconnectDelayMs = _reconnectDelayMs;
+-    if (nextReconnectDelayMs == 0) {
++    if (_reconnectDelayMs == 0) {
+       _reconnectStarted = DateTime.now().millisecondsSinceEpoch;
+     }
+ 
+-    // set/update timeout
+-    nextReconnectDelayMs = nextReconnectDelayMs == 0 ||
+-            _backendChannel!.isLocalConnection
+-        ? _reconnectIntervalMs ?? _backendChannel!.defaultReconnectIntervalMs
+-        : nextReconnectDelayMs * 2;
++    final channel = _backendChannel;
++    final isLocal = channel?.isLocalConnection ?? false;
++    final delay = isLocal
++        ? Duration(
++            milliseconds: _reconnectIntervalMs ??
++                channel?.defaultReconnectIntervalMs ??
++                500)
++        : _policy.nextDelay();
+ 
+     if (_reconnectTimeoutMs == null ||
+         (DateTime.now().millisecondsSinceEpoch - _reconnectStarted) <
+             _reconnectTimeoutMs!) {
+       // re-connect, keeping any error we captured: the boot screen hides it
+       // while loading, but it is what we report if the retries run out.
+-      _reconnect(nextReconnectDelayMs);
++      _reconnect(delay.inMilliseconds);
+ 
+-      debugPrint("Reconnect in $nextReconnectDelayMs milliseconds");
+-      Future.delayed(Duration(milliseconds: nextReconnectDelayMs))
+-          .then((value) async {
+-        await connect();
++      _retryTimer?.cancel();
++      debugPrint("Reconnect in ${delay.inMilliseconds} milliseconds");
++      _retryTimer = Timer(delay, () {
++        _retryTimer = null;
++        connect();
+       });
+     } else {
+       final message = error != ""
 --- a/lib/src/models/control.dart
 +++ b/lib/src/models/control.dart
 @@ -50,6 +50,7 @@
@@ -47,12 +269,10 @@
      if (shouldNotify) {
        for (var c in changedControls) {
          c.notify();
-@@ -237,6 +254,30 @@
-       _parent?.target?.notify();
-     }
+@@ -239,6 +256,30 @@
      return changes.isNotEmpty;
-+  }
-+
+   }
+ 
 +  static void _collectControls(dynamic value, Map<int, Control> controls) {
 +    if (value is Control) {
 +      if (identical(controls[value.id], value)) return;
@@ -75,9 +295,11 @@
 +    if (parent != null && !changedControls.any((c) => identical(c, parent))) {
 +      changedControls.add(parent);
 +    }
-   }
- 
++  }
++
    void _mergeMaps(
+     Control? parent,
+     Map<dynamic, dynamic> dst,
 @@ -246,27 +287,95 @@
      List<String> changes,
      List<Control> changedControls,
@@ -87,23 +309,6 @@
      for (var entry in src.entries) {
        final key = entry.key;
 -      final fullKey = prefix.isEmpty ? key : '$prefix.$key';
--
--      if (dst[key] is Map && entry.value is Map) {
--        _mergeMaps(
--            parent, dst[key], entry.value, changes, changedControls, fullKey);
--      } else if (dst[key] is Control &&
--          entry.value is Map &&
--          (dst[key] as Control).id == entry.value["_i"]) {
--        _mergeMaps(dst[key], dst[key].properties, entry.value, changes,
--            changedControls, fullKey);
--      } else if (dst[key] != entry.value && !["_i", "_c"].contains(key)) {
--        dst[key] = _transformIfControl(entry.value, parent, backend);
--        changes.add(fullKey);
--        if (parent != null && !changedControls.any((c) => c.id == parent.id)) {
--          changedControls.add(parent);
--        }
--      }
--    }
 +      if (["_i", "_c"].contains(key)) continue;
 +      final fullKey = prefix.isEmpty ? key.toString() : '$prefix.$key';
 +      final previous = dst[key];
@@ -120,7 +325,20 @@
 +      }
 +    }
 +  }
-+
+ 
+-      if (dst[key] is Map && entry.value is Map) {
+-        _mergeMaps(
+-            parent, dst[key], entry.value, changes, changedControls, fullKey);
+-      } else if (dst[key] is Control &&
+-          entry.value is Map &&
+-          (dst[key] as Control).id == entry.value["_i"]) {
+-        _mergeMaps(dst[key], dst[key].properties, entry.value, changes,
+-            changedControls, fullKey);
+-      } else if (dst[key] != entry.value && !["_i", "_c"].contains(key)) {
+-        dst[key] = _transformIfControl(entry.value, parent, backend);
+-        changes.add(fullKey);
+-        if (parent != null && !changedControls.any((c) => c.id == parent.id)) {
+-          changedControls.add(parent);
 +  dynamic _mergeValue(
 +    Control? parent,
 +    dynamic dst,
@@ -176,14 +394,14 @@
 +          structuralChange |= !identical(old, value);
 +        } else {
 +          structuralChange |= old != value;
-+        }
-+      }
+         }
+       }
 +      if (structuralChange) {
 +        _recordMergeChange(parent, key, changes, changedControls);
 +        return result;
 +      }
 +      return prior;
-+    }
+     }
 +    if (dst != src) {
 +      _recordMergeChange(parent, key, changes, changedControls);
 +      return _transformIfControl(src, parent, backend);
@@ -200,508 +418,113 @@
      debugPrint("Notify $type($id)");
      if (notifyParent) {
        _parent?.target?.notify();
---- /dev/null
-+++ b/test/widgets/reconnect_merge_test.dart
-@@ -0,0 +1,502 @@
-+import 'package:flet/flet.dart';
-+import 'package:flet/src/widgets/control_inherited_notifier.dart';
-+import 'package:flutter/material.dart';
-+import 'package:flutter_test/flutter_test.dart';
-+import 'package:provider/provider.dart';
+--- a/lib/src/utils/reconnect_policy.dart
++++ b/lib/src/utils/reconnect_policy.dart
+@@ -0,0 +1,56 @@
++import 'dart:math' as math;
 +
-+class _RecordingBackend extends FletBackend {
-+  _RecordingBackend()
-+      : super(
-+          pageUri: Uri.parse('http://localhost/'),
-+          assetsDir: '',
-+          multiView: false,
-+          extensions: const <FletExtension>[],
-+        );
++/// Pure reconnect-delay policy: stepped delays with jitter, plus the absence
++/// threshold that decides keep-or-reconnect on wake.
++///
++/// A page hidden briefly keeps its socket (the close event, if the OS killed
++/// it, is delivered right after resume); only a long absence pays for a
++/// proactive close and reconnect.
++class ReconnectPolicy {
++  ReconnectPolicy({
++    this.steps = const [
++      Duration(milliseconds: 300),
++      Duration(milliseconds: 600),
++      Duration(milliseconds: 1200),
++      Duration(milliseconds: 2000),
++    ],
++    this.jitter = 0.25,
++    this.absenceThreshold = const Duration(seconds: 15),
++    double Function()? random,
++  }) : assert(steps.isNotEmpty, 'ReconnectPolicy needs at least one step'),
++       random = random ?? math.Random().nextDouble;
 +
-+  final events = <Map<String, dynamic>>[];
++  /// Delay steps; the last step repeats forever (the cap).
++  final List<Duration> steps;
 +
-+  @override
-+  void triggerControlEventById(
-+    int controlId,
-+    String eventName, [
-+    dynamic eventData,
-+  ]) {
-+    events.add({'target': controlId, 'name': eventName, 'data': eventData});
-+  }
-+}
++  /// Jitter fraction: each delay is its step x (1 +/- jitter).
++  final double jitter;
 +
-+Map<String, dynamic> _snapshot() => {
-+      '_i': 1,
-+      '_c': 'Page',
-+      'content': {
-+        '_i': 10,
-+        '_c': 'Column',
-+        'controls': [
-+          {
-+            '_i': 11,
-+            '_c': 'Row',
-+            'controls': [
-+              {
-+                '_i': 12,
-+                '_c': 'IconButton',
-+                'disabled': true,
-+                'on_click': true,
-+                'content': {'_i': 13, '_c': 'Text', 'value': 'Send'},
-+              },
-+            ],
-+          },
-+        ],
-+      },
-+    };
++  /// Absence at or above which a wake reconnects instead of keeping the socket.
++  final Duration absenceThreshold;
 +
-+Map<String, dynamic> _button(int id) => {
-+      '_i': id,
-+      '_c': 'IconButton',
-+      'disabled': true,
-+      'on_click': true,
-+      'content': {'_i': id + 100, '_c': 'Text', 'value': 'Send $id'},
-+    };
++  /// Uniform [0, 1) source; injectable for tests.
++  final double Function() random;
 +
-+Map<String, dynamic> _buttons(List<int> ids) => {
-+      '_i': 1,
-+      '_c': 'Page',
-+      'content': {
-+        '_i': 10,
-+        '_c': 'Row',
-+        'controls': ids.map(_button).toList(),
-+      },
-+    };
++  int _step = 0;
 +
-+Future<_RecordingBackend> _mount(
-+    WidgetTester tester, Map<String, dynamic> snapshot) async {
-+  final backend = _RecordingBackend();
-+  addTearDown(backend.dispose);
-+  backend.page.update(snapshot, shouldNotify: true);
-+  await tester.pumpWidget(ChangeNotifierProvider<FletBackend>.value(
-+    value: backend,
-+    child: MaterialApp(
-+      home: Scaffold(
-+        body: withControlInheritedNotifier(
-+          backend.page,
-+          (_) => Column(children: [
-+            if (backend.page.child('content') != null)
-+              backend.page.buildWidget('content')!,
-+            ...backend.page.buildWidgets('overlay'),
-+          ]),
-+        ),
-+      ),
-+    ),
-+  ));
-+  await tester.pumpAndSettle();
-+  return backend;
-+}
-+
-+Future<void> _enableAndTap(
-+    WidgetTester tester, _RecordingBackend backend, int id) async {
-+  backend.controlsIndex.get(id)!.applyPatch([
-+    [0],
-+    [0, 0, 'disabled', false],
-+  ], backend);
-+  await tester.pumpAndSettle();
-+  await tester.tap(find.widgetWithText(IconButton, 'Send $id'));
-+  await tester.pump();
-+}
-+
-+void main() {
-+  testWidgets('reconnect snapshot preserves the live Send notifier', (
-+    tester,
-+  ) async {
-+    final backend = _RecordingBackend();
-+    addTearDown(backend.dispose);
-+    final page = backend.page;
-+    page.update(_snapshot(), shouldNotify: true);
-+    final retained = {
-+      for (final id in [10, 11, 12, 13]) id: backend.controlsIndex.get(id)!,
-+    };
-+    await tester.pumpWidget(
-+      ChangeNotifierProvider<FletBackend>.value(
-+        value: backend,
-+        child: MaterialApp(
-+          home: Scaffold(
-+            body: withControlInheritedNotifier(
-+              page,
-+              (_) => page.buildWidget('content')!,
-+            ),
-+          ),
-+        ),
-+      ),
-+    );
-+    await tester.pumpAndSettle();
-+    expect(
-+      tester.widget<IconButton>(find.byType(IconButton)).onPressed,
-+      isNull,
-+    );
-+
-+    // The register-client response invokes this real full-page merge.
-+    page.update(_snapshot(), shouldNotify: true);
-+    await tester.pumpAndSettle();
-+    // Python's disabled -> enabled replace operation, routed to the button.
-+    page.applyPatch([
-+      [
-+        0,
-+        {
-+          'content': [
-+            2,
-+            {
-+              'controls': [
-+                3,
-+                {
-+                  0: [
-+                    4,
-+                    {
-+                      'controls': [
-+                        5,
-+                        {
-+                          0: [1],
-+                        },
-+                      ],
-+                    },
-+                  ],
-+                },
-+              ],
-+            },
-+          ],
-+        },
-+      ],
-+      [0, 1, 'disabled', false],
-+    ], backend);
-+    await tester.pumpAndSettle();
-+    await tester.tap(find.byType(IconButton));
-+    await tester.pump();
-+    expect(backend.events.where((e) => e['name'] == 'click').toList(), [
-+      {'target': 12, 'name': 'click', 'data': null},
-+    ]);
-+    for (final entry in retained.entries) {
-+      expect(
-+        identical(backend.controlsIndex.get(entry.key), entry.value),
-+        isTrue,
-+      );
++  /// Next retry delay: the current step with jitter, then advance. Stays at
++  /// the last step forever, so a long outage retries at a bounded rate.
++  Duration nextDelay() {
++    final step = steps[_step];
++    if (_step < steps.length - 1) {
++      _step++;
 +    }
-+  });
-+
-+  testWidgets('composer Send suffix survives reconnect and later enabled patch',
-+      (tester) async {
-+    Map<String, dynamic> snapshot() => {
-+          '_i': 1,
-+          '_c': 'Page',
-+          'content': {
-+            '_i': 10,
-+            '_c': 'Column',
-+            'controls': [
-+              {
-+                '_i': 11,
-+                '_c': 'TextField',
-+                'value': 'exact unsent draft',
-+                'suffix_icon': _button(20),
-+              },
-+            ],
-+          },
-+        };
-+    final backend = await _mount(tester, snapshot());
-+    final field = backend.controlsIndex.get(11)!;
-+    final send = backend.controlsIndex.get(20)!;
-+    backend.page.update(snapshot(), shouldNotify: true);
-+    await _enableAndTap(tester, backend, 20);
-+    expect(backend.events.where((e) => e['name'] == 'click').length, 1);
-+    expect(identical(backend.controlsIndex.get(11), field), isTrue);
-+    expect(identical(backend.controlsIndex.get(20), send), isTrue);
-+    expect(tester.widget<TextField>(find.byType(TextField)).controller!.text,
-+        'exact unsent draft');
-+  });
-+
-+  test('identical matching lists keep identity without notifying', () {
-+    final backend = _RecordingBackend();
-+    addTearDown(backend.dispose);
-+    final page = backend.page;
-+    page.update(_snapshot());
-+    final button = backend.controlsIndex.get(12)!;
-+    var notifications = 0;
-+    button.addListener(() => notifications++);
-+    expect(page.update(_snapshot(), shouldNotify: true), isFalse);
-+    expect(identical(backend.controlsIndex.get(12), button), isTrue);
-+    expect(notifications, 0);
-+  });
-+
-+  for (final mismatch in [
-+    'id',
-+    'control-to-data',
-+    'data-to-control',
-+  ]) {
-+    test('$mismatch mismatch replaces the list as before', () {
-+      final backend = _RecordingBackend();
-+      addTearDown(backend.dispose);
-+      final page = backend.page;
-+      final original = <dynamic>[
-+        mismatch == 'data-to-control'
-+            ? 'plain'
-+            : {'_i': 20, '_c': 'Text', 'value': 'old'},
-+      ];
-+      page.update({'items': original});
-+      final retained = page.get('items') as List;
-+      final incoming = <dynamic>[
-+        mismatch == 'control-to-data'
-+            ? 'plain'
-+            : {'_i': mismatch == 'id' ? 21 : 20, '_c': 'Text', 'value': 'new'},
-+      ];
-+      expect(page.update({'items': incoming}), isTrue);
-+      final replaced = page.get('items') as List;
-+      expect(identical(replaced, retained), isFalse);
-+      expect(replaced.length, incoming.length);
-+      if (replaced.first is Control) {
-+        expect(identical(replaced.first, retained.first), isFalse);
-+      }
-+    });
++    final factor = 1 + (random() - 0.5) * 2 * jitter;
++    final ms = (step.inMilliseconds * factor).round();
++    return Duration(milliseconds: ms);
 +  }
 +
-+  test('matching mixed lists merge controls and replace ordinary data', () {
-+    final backend = _RecordingBackend();
-+    addTearDown(backend.dispose);
-+    final page = backend.page;
-+    page.update({
-+      'items': [
-+        {'_i': 20, '_c': 'Text', 'value': 'old'},
-+        'old',
-+        {'plain': 'old'},
-+      ],
-+    });
-+    final retained = page.get('items') as List;
-+    final child = retained.first as Control;
-+    var parentNotifications = 0, childNotifications = 0;
-+    page.addListener(() => parentNotifications++);
-+    child.addListener(() => childNotifications++);
-+    expect(
-+      page.update({
-+        'items': [
-+          {'_i': 20, '_c': 'Text', 'value': 'new'},
-+          'new',
-+          {'plain': 'new'},
-+        ],
-+      }, shouldNotify: true),
-+      isTrue,
-+    );
-+    final updated = page.get('items') as List;
-+    expect(identical(updated.first, child), isTrue);
-+    expect(child.get('value'), 'new');
-+    expect(updated[1], 'new');
-+    expect(updated[2], {'plain': 'new'});
-+    expect(parentNotifications, 1);
-+    expect(childNotifications, 1);
-+  });
-+
-+  test('partial update callers retain properties omitted from their maps', () {
-+    final backend = _RecordingBackend();
-+    addTearDown(backend.dispose);
-+    final page = backend.page;
-+    page.update(_snapshot());
-+    final button = backend.controlsIndex.get(12)!;
-+    page.update({'route': '/agents'});
-+    backend.updateControl(12, {'tooltip': 'Send'}, python: false);
-+    final window = page.child('window')!;
-+    page.update({
-+      'window': {'_i': window.id, 'width': 390}
-+    });
-+    expect(identical(page.child('window'), window), isTrue);
-+    expect(window.get('width'), 390);
-+    expect(button.disabled, isTrue);
-+    expect(button.get('on_click'), isTrue);
-+    expect(identical(backend.controlsIndex.get(12), button), isTrue);
-+  });
-+
-+  for (final ids in [
-+    <int>[30, 20],
-+    <int>[15, 20, 30]
-+  ]) {
-+    testWidgets('away reorder or insertion $ids keeps live button notifiers',
-+        (tester) async {
-+      final backend = await _mount(tester, _buttons([20, 30]));
-+      final old20 = backend.controlsIndex.get(20)!;
-+      final old30 = backend.controlsIndex.get(30)!;
-+      backend.page.update(_buttons(ids), shouldNotify: true);
-+      await tester.pumpAndSettle();
-+      for (final id in ids) {
-+        await _enableAndTap(tester, backend, id);
-+      }
-+      expect(
-+          backend.events
-+              .where((e) => e['name'] == 'click')
-+              .map((e) => e['target']),
-+          ids);
-+      expect(identical(backend.controlsIndex.get(20), old20), isTrue);
-+      expect(identical(backend.controlsIndex.get(30), old30), isTrue);
-+      final row = backend.page.child('content')!;
-+      expect(row.children('controls').map((c) => c.id), ids);
-+    });
++  /// Back to the first step: call on wake and on a successful register.
++  void reset() {
++    _step = 0;
 +  }
 +
-+  testWidgets('away visibility change rebuilds the owner for a retained child',
-+      (tester) async {
-+    final initial = _buttons([20]);
-+    final row = initial['content'] as Map;
-+    (row['controls'] as List).single['visible'] = false;
-+    final backend = await _mount(tester, initial);
-+    final button = backend.controlsIndex.get(20)!;
-+    expect(find.text('Send 20'), findsNothing);
-+    final restored = _buttons([20]);
-+    ((restored['content'] as Map)['controls'] as List).single['visible'] = true;
-+    backend.page.update(restored, shouldNotify: true);
-+    await tester.pumpAndSettle();
-+    await _enableAndTap(tester, backend, 20);
-+    expect(backend.events.where((e) => e['name'] == 'click').length, 1);
-+    expect(identical(backend.controlsIndex.get(20), button), isTrue);
-+  });
++  /// Whether a page hidden for [absence] must reconnect on wake.
++  bool shouldReconnectAfter(Duration absence) => absence >= absenceThreshold;
++}
+--- a/lib/src/utils/wake_stub.dart
++++ b/lib/src/utils/wake_stub.dart
+@@ -0,0 +1,9 @@
++/// Non-web wake sources: nothing to listen to. Tests call `wake` directly.
++class WakeSources {
++  /// No-op, kept so the backend installs unconditionally.
++  static void Function() install({
++    required void Function(String source) onWake,
++  }) {
++    return () {};
++  }
++}
+--- a/lib/src/utils/wake_web.dart
++++ b/lib/src/utils/wake_web.dart
+@@ -0,0 +1,36 @@
++import 'dart:js_interop';
 +
-+  testWidgets('away removal retires index entries and stale callbacks',
-+      (tester) async {
-+    final backend = await _mount(tester, _buttons([20, 30]));
-+    final removed = backend.controlsIndex.get(20)!;
-+    final survivor = backend.controlsIndex.get(30)!;
-+    backend.page.update(_buttons([30]), shouldNotify: true);
-+    await tester.pumpAndSettle();
-+    expect(backend.controlsIndex.get(20), isNull);
-+    expect(backend.controlsIndex.get(120), isNull);
-+    expect(find.text('Send 20'), findsNothing);
-+    removed.triggerEvent('click');
-+    removed.triggerEventWithoutSubscribers('click');
-+    expect(backend.events, isEmpty);
-+    await _enableAndTap(tester, backend, 30);
-+    expect(
-+        backend.events
-+            .where((e) => e['name'] == 'click')
-+            .map((e) => e['target']),
-+        [30]);
-+    expect(identical(backend.controlsIndex.get(30), survivor), isTrue);
-+  });
++import 'package:web/web.dart' as web;
 +
-+  testWidgets(
-+      'dialog overlay button keeps its mounted notifier after reconnect',
-+      (tester) async {
-+    Map<String, dynamic> snapshot() => {
-+          '_i': 1,
-+          '_c': 'Page',
-+          'overlay': [
-+            {
-+              '_i': 40,
-+              '_c': 'AlertDialog',
-+              'open': true,
-+              'content': {
-+                '_i': 41,
-+                '_c': 'Column',
-+                'tight': true,
-+                'controls': [_button(20)],
-+              },
-+            },
-+          ],
-+        };
-+    final backend = await _mount(tester, snapshot());
-+    final button = backend.controlsIndex.get(20)!;
-+    backend.page.update(snapshot(), shouldNotify: true);
-+    await tester.pumpAndSettle();
-+    expect(find.byType(AlertDialog), findsOneWidget);
-+    await _enableAndTap(tester, backend, 20);
-+    expect(backend.events.where((e) => e['name'] == 'click').length, 1);
-+    expect(identical(backend.controlsIndex.get(20), button), isTrue);
-+    // Close the route before provider/backend teardown.
-+    backend.updateControl(40, {'open': false}, python: false, notify: true);
-+    await tester.pumpAndSettle();
-+  });
-+
-+  testWidgets('component body preserves identity and parent notifications',
-+      (tester) async {
-+    Map<String, dynamic> snapshot() => {
-+          '_i': 1,
-+          '_c': 'Page',
-+          'content': {
-+            '_i': 10,
-+            '_c': 'Row',
-+            'controls': [
-+              {'_i': 40, '_c': 'C', '_b': _button(20)},
-+            ],
-+          },
-+        };
-+    final backend = await _mount(tester, snapshot());
-+    final component = backend.controlsIndex.get(40)!;
-+    final button = backend.controlsIndex.get(20)!;
-+    backend.page.update(snapshot(), shouldNotify: true);
-+    await _enableAndTap(tester, backend, 20);
-+    expect(backend.events.where((e) => e['name'] == 'click').length, 1);
-+    expect(component.notifyParent, isTrue);
-+    expect(identical(backend.controlsIndex.get(40), component), isTrue);
-+    expect(identical(backend.controlsIndex.get(20), button), isTrue);
-+  });
-+
-+  test('maps and nested lists reconcile moved controls and fix ancestry', () {
-+    final backend = _RecordingBackend();
-+    addTearDown(backend.dispose);
-+    backend.page.update(_buttons([20, 30]));
-+    final button20 = backend.controlsIndex.get(20)!;
-+    final button30 = backend.controlsIndex.get(30)!;
-+    backend.page.update({
-+      'content': {
-+        '_i': 50,
-+        '_c': 'Column',
-+        'disabled': true,
-+        'pockets': [
-+          {
-+            'nested': [
-+              [_button(30), _button(20)..['disabled'] = false]
-+            ]
-+          },
-+        ],
-+      },
-+    }, shouldNotify: true);
-+    expect(backend.controlsIndex.get(10), isNull);
-+    expect(identical(backend.controlsIndex.get(20), button20), isTrue);
-+    expect(identical(backend.controlsIndex.get(30), button30), isTrue);
-+    expect(button20.parent?.id, 50);
-+    expect(button20.get('disabled'), isFalse);
-+    expect(button20.disabled, isTrue);
-+    final nested = ((backend.page.child('content')!.get('pockets') as List)
-+        .single as Map)['nested'] as List;
-+    expect((nested.single as List).map((c) => (c as Control).id), [30, 20]);
-+  });
-+
-+  test(
-+      'type mismatch replaces and retires the old instance without removing its successor',
-+      () {
-+    final backend = _RecordingBackend();
-+    addTearDown(backend.dispose);
-+    backend.page.update(_buttons([20]));
-+    final old = backend.controlsIndex.get(20)!;
-+    backend.page.update({
-+      'content': {
-+        '_i': 10,
-+        '_c': 'Row',
-+        'controls': [
-+          {'_i': 20, '_c': 'Text', 'value': 'replacement'}
-+        ],
-+      },
-+    });
-+    final replacement = backend.controlsIndex.get(20)!;
-+    expect(replacement.type, 'Text');
-+    expect(identical(replacement, old), isFalse);
-+    expect(backend.controlsIndex.get(120), isNull);
-+    old.triggerEvent('click');
-+    expect(backend.events, isEmpty);
-+  });
-+
-+  test(
-+      'explicit empty overlays retire children without clearing unrelated props',
-+      () {
-+    final backend = _RecordingBackend();
-+    addTearDown(backend.dispose);
-+    backend.page.update({
-+      'overlay': [_button(20)],
-+      'route': '/kept'
-+    });
-+    backend.page.update({'overlay': []}, shouldNotify: true);
-+    expect(backend.page.get('overlay'), isEmpty);
-+    expect(backend.controlsIndex.get(20), isNull);
-+    expect(backend.controlsIndex.get(120), isNull);
-+    expect(backend.page.get('route'), '/kept');
-+  });
++/// Browser return-from-background sources for the root app's backend.
++class WakeSources {
++  /// Forwards `visibilitychange` to visible, `pageshow` from the
++  /// back-forward cache, and `online`. Returns a function that removes the
++  /// listeners. Deliberately no `focus`: it fires on every tap-related
++  /// focus change.
++  static void Function() install({
++    required void Function(String source) onWake,
++  }) {
++    final onVisibilityChange = ((web.Event _) {
++      if (!web.document.hidden) {
++        onWake("visible");
++      }
++    }).toJS;
++    final onPageShow = ((web.Event event) {
++      if ((event as web.PageTransitionEvent).persisted) {
++        onWake("pageshow");
++      }
++    }).toJS;
++    final onOnline = ((web.Event _) {
++      onWake("online");
++    }).toJS;
++    web.document.addEventListener("visibilitychange", onVisibilityChange);
++    web.window.addEventListener("pageshow", onPageShow);
++    web.window.addEventListener("online", onOnline);
++    return () {
++      web.document.removeEventListener("visibilitychange", onVisibilityChange);
++      web.window.removeEventListener("pageshow", onPageShow);
++      web.window.removeEventListener("online", onOnline);
++    };
++  }
 +}

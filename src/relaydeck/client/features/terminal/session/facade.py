@@ -8,6 +8,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any
 
+from relaydeck.client import open_timing
 from relaydeck.client.features.shell.ops import AttachmentInfo, LeaseInfo, ShellGatewayOps
 from relaydeck.client.features.terminal.controller import TerminalController
 from relaydeck.client.features.terminal.models import TerminalViewState
@@ -175,6 +176,15 @@ class SessionFacade:
         for listener in list(self._listeners):
             listener(self)
 
+    @property
+    def activations(self) -> int:
+        return getattr(self, "_activations", 0)
+
+    def note_activation(self) -> None:
+        """The user is back: the surface re-settles its geometry once."""
+        self._activations = self.activations + 1
+        self._notify()
+
     # -- input tokens ---------------------------------------------------------------
     @property
     def input_token(self) -> tuple[int, int] | None:
@@ -215,6 +225,9 @@ class SessionFacade:
 
     def bind_view(self, term: Any, *, write: Callable[[Any, bytes], bool] | None = None) -> int:
         """Mount a renderer view (see `RendererBinding.bind_view`)."""
+        timing = open_timing.of(self)
+        if timing is not None:
+            timing.observe(term)
         return self._renderer.bind_view(term, write=write)
 
     def unbind_view(self) -> None:
@@ -275,8 +288,20 @@ class SessionFacade:
         await self._lease_owner.release_stale(lease)
 
     # -- keys / paste / selection (delegates) -------------------------------------------
+    def _cancel_term_scroll(self) -> None:
+        """Retire widget scroll motion before a server-side write, so wheel
+        rows already in flight drop instead of landing after the key.
+        Best-effort: nothing bound means nothing in flight, and a bound
+        view without the scroll channel (older fakes) has nothing to
+        retire. Never raises: input must not depend on the cancel."""
+        term = self.current_term
+        cancel = getattr(term, "cancel_scroll", None)
+        if cancel is not None:
+            cancel()
+
     async def type_text(self, text: str, *, token: int | None = None) -> str:
         """Committed text routed by workflow (see `KeyInput.type_text`)."""
+        self._cancel_term_scroll()
         return await self._key_input.type_text(text, token=token)
 
     async def handle_view_input(
@@ -289,6 +314,7 @@ class SessionFacade:
         self, name: str, *, physical_modifiers: frozenset[str] = frozenset()
     ) -> bool:
         """One tools/dock key through the bound writer (see `KeyInput.press_key`)."""
+        self._cancel_term_scroll()
         return await self._key_input.press_key(name, physical_modifiers=physical_modifiers)
 
     def toggle_modifier(self, modifier: str) -> None:
@@ -305,11 +331,13 @@ class SessionFacade:
         self, text: str, *, require_review: bool = False, from_app: bool = False
     ) -> str:
         """Classify pasted text (see `PasteFlow.request`)."""
+        self._cancel_term_scroll()
         return await self._paste_flow.request(
             text, require_review=require_review, from_app=from_app
         )
 
     async def confirm_paste(self) -> bool:
+        self._cancel_term_scroll()
         return await self._paste_flow.confirm()
 
     def cancel_paste(self) -> None:
@@ -318,6 +346,7 @@ class SessionFacade:
     async def paste_from_clipboard(self) -> str:
         """Paste button: read the clipboard once, then classify through the
         reviewed-paste path. Never implies Enter (see `PasteFlow`)."""
+        self._cancel_term_scroll()
         return await self._paste_flow.from_clipboard()
 
     def stale_review_notice(self) -> str:

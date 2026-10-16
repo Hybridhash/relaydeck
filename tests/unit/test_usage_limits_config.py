@@ -108,3 +108,34 @@ def test_limits_must_be_a_list(tmp_path: Path) -> None:
     source = dict(SOURCE)
     source["root"] = str(tmp_path)
     assert usage_from({"sources": [source], "limits": dict(LIMIT)}, KINDS) is None
+
+
+def pane(**over: Any) -> dict[str, Any]:
+    return {
+        "kind": "kind-a",
+        "format": "tui-usage-pane-v1",
+        "on_demand": True,
+        "timeout_seconds": 90,
+        **over,
+    }
+
+
+def test_a_pane_block_defaults_to_a_six_hour_background_read(tmp_path: Path) -> None:
+    config = parsed(tmp_path, pane())  # a fresh-install block carries no such key
+    assert config is not None and config.limits[0].auto_interval_seconds == 21600
+
+
+def test_auto_interval_can_be_turned_off_or_changed(tmp_path: Path) -> None:
+    for seconds in (0, 3600):
+        config = parsed(tmp_path, pane(auto_interval_seconds=seconds))
+        assert config is not None and config.limits[0].auto_interval_seconds == seconds
+
+
+def test_other_blocks_default_to_no_background_read(tmp_path: Path) -> None:
+    config = parsed(tmp_path, limit())
+    assert config is not None and config.limits[0].auto_interval_seconds == 0
+
+
+def test_a_bad_auto_interval_is_rejected(tmp_path: Path) -> None:
+    for bad in (-1, 1.5, "6h", True):
+        assert parsed(tmp_path, pane(auto_interval_seconds=bad)) is None

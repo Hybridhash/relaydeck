@@ -438,7 +438,7 @@ def test_one_provider_is_one_status_in_the_picker_the_table_and_the_legend() -> 
 def test_a_provider_with_verified_and_unverified_tokens_shows_its_tokens_everywhere() -> None:
     """`unverified` coverage with verified tokens above 0 is not status-only. Its
     tokens and cost show like any provider's, with a small "some sessions not verified" note, and
-    the status is the same in the picker, the legend, the table and the caveat line."""
+    the status is the same in the picker, the legend and the table."""
     kinds = [kind("kind-a", display="Alpha CLI"), kind("kind-d", display="Relay Tool")]
     coverage = [
         {"kind": "kind-d", "coverage": "unverified", "observed_ms": None, "unmapped_sessions": 0}
@@ -458,8 +458,8 @@ def test_a_provider_with_verified_and_unverified_tokens_shows_its_tokens_everywh
     assert values == {"kind-a": "2.0M", "kind-d": "3.0M"}
     assert result.chart is not None
     assert all("not verified" not in name for _role, name in result.chart.legend)
-    assert "Relay Tool" in result.caveat and "Partly verified" in result.caveat
-    assert "do not include" not in result.caveat  # no longer listed as left out
+    # The note lives on the provider row; the headline caveat is for what the totals leave out.
+    assert result.caveat == ""
 
 
 def test_a_provider_with_no_verified_tokens_stays_status_only() -> None:

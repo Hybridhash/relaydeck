@@ -13,6 +13,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from typing import Any
 
+from relaydeck.client import open_timing
 from relaydeck.client.features.sync.controller import TerminalStreamClient
 from relaydeck.client.features.sync.transport import TerminalSocket, TransportError
 from relaydeck.client.features.terminal.keys import KeyInputError
@@ -88,11 +89,8 @@ class TerminalController:
         if self._viewer_lost:
             raise TransportError("viewer_reopened", "Explicit reattach required", False)
         self._detached = False
-        # A (re)opened stream re-establishes liveness from its own first
-        # bytes: without this reset a recovery reopen would leave the
-        # pre-recovery `reconnecting`/`reset` status + notice pinned while
-        # new bytes flow (the only other `_started` writer is the
-        # first-bytes path in `_handle_output`).
+        # A reopened stream re-establishes liveness from its own first bytes; otherwise the
+        # pre-recovery status and notice stay pinned while new bytes flow.
         self._started = False
         self._stream = TerminalByteStream(epoch, offset)
         await self._client.open(self.lease_id, self.generation, ticket, epoch, offset)
@@ -182,8 +180,9 @@ class TerminalController:
         `no_writer` and no byte is delivered. One-way within this
         controller's life: only a replacement controller (takeover /
         reconnect) can produce a live writer again. Idempotent."""
+        if not self._writer_revoked:
+            self._revoke_reason = reason  # the first cause stays; later local fences add none
         self._writer_revoked = True
-        self._revoke_reason = reason
 
     @property
     def writer_revoked(self) -> bool:
@@ -344,6 +343,7 @@ class TerminalController:
     def fence_ui_input(self, fenced: bool) -> None:
         """UI transport verification never changes lease/pause/revocation ownership."""
         self._ui_input_fenced = fenced
+        open_timing.mark_current("unfenced" if not fenced else "fenced")
 
     @property
     def ui_input_fenced(self) -> bool:

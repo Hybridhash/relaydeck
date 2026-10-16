@@ -177,12 +177,8 @@ class _UsageGap:
 # subscriptions means no single quiet subscription may hog the budget.
 _LIVE_SLICE_S = 0.01
 
-# Backoff before retrying a failed per-pane re-subscription (the global
-# subscription keeps serving meanwhile; status freshness degrades, the
-# link does not churn). The gate applies whether or not a subscription
-# is currently held: without it a sick daemon would see a subscribe
-# attempt on every live tick. Jitter is bounded and seeded
-# (pane_sub_seed) so the bound stays deterministic in tests.
+# Backoff before retrying a failed per-pane re-subscription, held or not, so a sick daemon is not
+# hit on every tick. Jitter is seeded (pane_sub_seed) to stay deterministic in tests.
 _PANE_SUB_RETRY_MS = 30_000
 _PANE_SUB_RETRY_JITTER_MS = 5_000
 
@@ -200,13 +196,9 @@ MAX_RELAY_BYTES = 1024 * 1024
 # Resize requests settle this long before one is applied (one repaint for a burst).
 RESIZE_SETTLE_S = 0.15
 
-# Single-phase global subscriptions (no pane ids needed, so one
-# subscribe-ack covers the whole bootstrap with no missed-event
-# window). Per-pane `agent_status_changed` subscriptions open
-# post-snapshot on a second held connection (pane ids exist only then;
-# see _ensure_pane_subscriptions). output_matched/scroll_changed stay
-# unsubscribed: previews must never ride the exact-byte stream, and
-# scroll position is viewer state.
+# Global subscriptions need no pane ids, so one ack covers the bootstrap with no missed-event
+# window; per-pane status subscriptions open post-snapshot (see _ensure_pane_subscriptions).
+# output_matched stays out: previews must not ride the exact-byte stream.
 DEFAULT_SUBSCRIPTIONS: tuple[dict[str, str], ...] = (
     {"type": "workspace.updated"},
     {"type": "tab.created"},
@@ -218,11 +210,9 @@ DEFAULT_SUBSCRIPTIONS: tuple[dict[str, str], ...] = (
     {"type": "layout.updated"},
 )
 
-# Upstream event -> (gateway type, id key, removed?). Only names with
-# evidenced data shapes (golden fixtures + schema $defs) or the
-# universal *_id convention are mapped; everything else is skipped and
-# counted. pane.output_matched is deliberately NOT metadata: its
-# preview text must never ride the exact-byte terminal stream.
+# Upstream event -> (gateway type, id key, removed?). Only evidenced shapes or the *_id convention
+# are mapped; the rest is skipped and counted. pane.output_matched is deliberately excluded: its
+# preview text must not ride the exact-byte stream.
 _EVENT_MAP: dict[str, tuple[str, str, bool]] = {
     "pane.agent_status_changed": ("pane.upserted", "pane_id", False),
     "workspace.created": ("workspace.upserted", "workspace_id", False),
@@ -1842,12 +1832,9 @@ class HerdrSource:
                     continue
             try:
                 if held is not None:
-                    # Dead session still held (it died while
-                    # epoch-unmapped so the pump never saw it): relay
-                    # any last bytes under the gateway-provided epoch,
-                    # then reap so a fresh attach respawns below. Epochs
-                    # are unchanged; no input is replayed, only the
-                    # output tap re-opens.
+                    # A session that died while epoch-unmapped is still held: relay its last bytes
+                    # under the gateway epoch, then reap so a fresh attach respawns. No input is
+                    # replayed.
                     self._drain_dead(held[0], terminal_id, epoch)
                     self._reap_dead(key, terminal_id, held[0].exit_status)
                     if mode == "observe":

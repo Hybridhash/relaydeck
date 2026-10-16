@@ -19,6 +19,7 @@ from relaydeck_terminal.protocol import (
     SWIPE_UP,
     ViewState,
     decode_swipe,
+    input_cancel_epoch,
 )
 
 from relaydeck.client.components.design_system import tokens as console_tokens
@@ -359,11 +360,9 @@ def use_terminal_scroll(
                     session.jump_to_bottom()
 
     async def swipe(data: bytes) -> str:
-        # The bridge tags alt/no-mouse gestures ORIGIN_SWIPE with
-        # a direction+count payload (never PTY bytes). Translate to
-        # bounded PageUp/PageDown through the shared writer transaction;
-        # malformed, out-of-mode or fenced gestures are dropped here and
-        # must never fall through to typed text (never None, never arrows).
+        # Swipe gestures carry direction and count, never PTY bytes. Translate to bounded
+        # PageUp/PageDown; malformed, out-of-mode or fenced gestures drop here, never become typed
+        # text.
         try:
             direction, count = decode_swipe(data)
         except ValueError:
@@ -383,7 +382,22 @@ def use_terminal_scroll(
             return await swipe(data)
         if not is_scroll_input(origin, data, state):
             return None
+        if origin == ORIGIN_MOUSE and getattr(term, "wheel_blocked", False):
+            # A server-side key/paste landed first: this report left the
+            # widget before it saw the cancel, so it is stale. Explicit
+            # arrow keys are fresh input and still flow.
+            return ROUTE_DROPPED
         async with transaction.current:
+            stamped = input_cancel_epoch.get()
+            if (
+                origin == ORIGIN_MOUSE
+                and stamped >= 0
+                and stamped != getattr(term, "cancel_epoch", stamped)
+            ):
+                # Accepted before a cancel that was issued since: the
+                # report predates the viewer handling the cancel, so
+                # it is stale even though the ack already landed.
+                return ROUTE_DROPPED
             return await send(origin, data, terminal_scroll=True, can_input=allowed)
 
     return dict(

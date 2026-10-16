@@ -78,8 +78,7 @@ uv run relaydeck-connector --help
   request per connection, from a fixed allowlist of 18 verified method
   names (`ALLOWED_METHODS` -- `ping`, `session.snapshot`, `agent.*`,
   `pane.*`, `tab.create/close`, `workspace.create/close`,
-  `events.subscribe`). Anything else is refused. Rehearsed check
-  (imports verified by execution):
+  `events.subscribe`). Anything else is refused. Check:
 
 ```sh
 ls -l ~/.config/herdr/herdr.sock   # (sys) socket present, daemon-owned
@@ -226,11 +225,11 @@ bytes every poll tick (see "Live relay" below). Reconnect uses seeded
 exponential backoff; a rejected credential exits instead of retrying;
 repeated initial-push transport failures trip a circuit breaker
 (`push-failed` exit, 5 consecutive by default); SIGINT/SIGTERM shuts
-down gracefully (`bye`, socket close, journal close). Exit codes
-(verified live): 0 clean shutdown or `--once` done, 1 runtime failure
+down gracefully (`bye`, socket close, journal close). Exit codes:
+0 clean shutdown or `--once` done, 1 runtime failure
 (not enrolled, credential dead, retries exhausted, source failure,
-push-failed, snapshot-too-large), 2 usage error. There are no
-launchd/plist/unit files in the tree (verified by search).
+push-failed, snapshot-too-large), 2 usage error. The tree ships
+no launchd, plist or unit files.
 
 Source selection (safety-critical). The link runs against the
 `LinkSource` port with exactly one source flag: `--fixture` (scripted
@@ -272,7 +271,7 @@ failure degrades status freshness with a bounded 30 s + up-to-5 s
 jitter backoff (honored even with no subscription held, so a sick
 daemon sees no hot spin), never the link.
 
-Snapshot size guard (M1). The snapshot frame is measured BEFORE
+Snapshot size guard. The snapshot frame is measured BEFORE
 sending against the 64 KiB tunnel bound. Over-bound snapshots go
 chunked (`snapshot.begin`/`snapshot.chunk`/`snapshot.end`,
 sha256-verified) ONLY when the gateway hello advertised
@@ -399,14 +398,13 @@ token stays live server-side.
   is dead the moment the new invitation binds the new one; keep the old
   gateway enrollment revoked (drill 3), not merely abandoned.
 
-## 9. Connector journal purge (m1)
+## 9. Connector journal purge
 
 The connector journal (`~/.config/relaydeck/connector-journal.db`,
 `CommandJournal`, same sqlite core as the gateway) grows one row per
 dispatched intent plus frame receipts. No CLI or scheduler invokes the
-purge in the tree (verified by search), so run it from owner-approved
-cron against the live path (imports verified by execution, same form
-as the gateway journal line):
+purge, so run it from owner-approved cron against the live path (same
+form as the gateway journal line):
 
 ```sh
 uv run python -c "from relaydeck.journal import CommandJournal;

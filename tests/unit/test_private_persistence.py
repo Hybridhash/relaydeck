@@ -718,7 +718,7 @@ with store.transaction() as tx:
         restored.close()
 
 
-def _r2_keychain_sdk(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> tuple[Any, Any]:
+def _fake_keychain_sdk(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> tuple[Any, Any]:
     import ctypes as ct
 
     from relaydeck.companion import credentials
@@ -885,7 +885,7 @@ def _r2_keychain_sdk(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> tuple[A
 def test_created_items_pin_current_interpreter_legacy_acl(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    provider, sdk = _r2_keychain_sdk(monkeypatch, tmp_path)
+    provider, sdk = _fake_keychain_sdk(monkeypatch, tmp_path)
     assert len(provider.get("probe", create=True, allow_prompt=True)) == 32
     assert sdk.acls == [["current-interpreter"]]
     assert len(provider.get("probe")) == 32 and sdk.ui == [False, True]
@@ -896,7 +896,7 @@ def test_exact_secret_import_and_interrupted_durable_generation(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    provider, sdk = _r2_keychain_sdk(monkeypatch, tmp_path)
+    provider, sdk = _fake_keychain_sdk(monkeypatch, tmp_path)
     material = limits.SecretMaterial(b"\x00COOKIE_CANARY exact bytes\xff" * 3)
     sdk.interrupt = True
     with pytest.raises(KeyUnavailable):
@@ -921,7 +921,7 @@ def test_exact_secret_import_and_interrupted_durable_generation(
 def test_generation_advances_are_serialized(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    provider, sdk = _r2_keychain_sdk(monkeypatch, tmp_path)
+    provider, sdk = _fake_keychain_sdk(monkeypatch, tmp_path)
     provider.restore_generation("auth", create=True, allow_prompt=True)
     results: list[int] = []
     threads = [
@@ -942,7 +942,7 @@ def test_native_acceptance_probes_validate_acl_and_lock_without_ui(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    provider, sdk = _r2_keychain_sdk(monkeypatch, tmp_path)
+    provider, sdk = _fake_keychain_sdk(monkeypatch, tmp_path)
     provider.get("probe", create=True, allow_prompt=True)
     assert provider._backend.trusts_current_application("probe")
     assert not provider._backend.is_locked()
@@ -959,7 +959,7 @@ def test_explicit_setup_temporarily_enables_previously_disabled_ui(
 ) -> None:
     import ctypes as ct
 
-    provider, sdk = _r2_keychain_sdk(monkeypatch, tmp_path)
+    provider, sdk = _fake_keychain_sdk(monkeypatch, tmp_path)
 
     def disabled(pointer: Any) -> int:
         ct.cast(pointer, ct.POINTER(ct.c_ubyte)).contents.value = 0
@@ -976,7 +976,7 @@ def test_import_is_arbitrary_bytes_not_aead_material(
     monkeypatch: pytest.MonkeyPatch,
     raw: bytes,
 ) -> None:
-    provider, sdk = _r2_keychain_sdk(monkeypatch, tmp_path)
+    provider, sdk = _fake_keychain_sdk(monkeypatch, tmp_path)
     material = limits.SecretMaterial(raw)
     assert provider.import_secret("signing", material, allow_prompt=True) == material
     assert provider.import_secret("signing", material) == material

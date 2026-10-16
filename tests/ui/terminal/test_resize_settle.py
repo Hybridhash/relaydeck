@@ -12,6 +12,7 @@ import pytest
 
 from relaydeck.client.features.terminal.surfaces import agent_hooks
 from tests.support.host_harness import render_component, run
+from tests.support.ui.hook_clock import HookClock
 
 pytestmark = pytest.mark.open_hold
 
@@ -189,9 +190,7 @@ def test_cap_due_publication_waits_for_a_busy_writer_with_the_newest_grid(
     run(scenario())
 
 
-async def _opened(monkeypatch: pytest.MonkeyPatch, send: Any) -> tuple[Any, dict[str, Any]]:
-    monkeypatch.setattr(agent_hooks, "OPEN_HOLD_S", 0.05)
-    monkeypatch.setattr(agent_hooks, "OPEN_SETTLE_S", 0.02)
+async def _opened(clock: HookClock, send: Any) -> tuple[Any, dict[str, Any]]:
     out: dict[str, Any] = {}
 
     @ft.component
@@ -201,9 +200,12 @@ async def _opened(monkeypatch: pytest.MonkeyPatch, send: Any) -> tuple[Any, dict
         return ft.Text("held" if held else "shown", key="probe")
 
     app = await render_component(Probe)
+    clock.advance_by(agent_hooks.OPEN_HOLD_S)
+    await app.settle(rounds=1)
     assert not out["held"]
     out["report"](225, 39)
-    await asyncio.sleep(0.18)
+    clock.advance_by(agent_hooks.RESIZE_SETTLE_S)
+    await app.settle(rounds=1)
     return app, out
 
 
@@ -212,22 +214,25 @@ def test_live_burst_forwards_only_the_final_grid_including_return_to_start(
     monkeypatch: pytest.MonkeyPatch, rows: list[int]
 ) -> None:
     async def scenario() -> None:
+        clock = HookClock(monkeypatch, agent_hooks.__name__)
         sent: list[tuple[int, int]] = []
-        app, out = await _opened(monkeypatch, lambda c, r: sent.append((c, r)))
+        app, out = await _opened(clock, lambda c, r: sent.append((c, r)))
         assert sent == [(225, 39)]
         sent.clear()
         interval = 0.175 / 6 if len(rows) == 7 else 0.017 / 3
         for index, row in enumerate(rows):
             if index:
-                await asyncio.sleep(interval)
+                clock.advance_by(interval)
+                await app.settle(rounds=1)
             out["report"](225, row)
             assert not sent
-        await asyncio.sleep(0.19)
+        clock.advance_by(agent_hooks.RESIZE_SETTLE_S)
         await app.settle(rounds=1)
         assert sent == [(225, rows[-1])]
         assert not out["held"]  # No connecting cover during normal resizing.
         out["report"](225, rows[-1])  # A later explicit same-size refresh still repaints.
-        await asyncio.sleep(0.18)
+        clock.advance_by(agent_hooks.RESIZE_SETTLE_S)
+        await app.settle(rounds=1)
         assert sent == [(225, rows[-1]), (225, rows[-1])]
 
     run(scenario())
@@ -237,30 +242,37 @@ def test_a_continuous_drag_makes_bounded_progress_and_sends_its_last_grid(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     async def scenario() -> None:
-        loop = asyncio.get_running_loop()
+        clock = HookClock(monkeypatch, agent_hooks.__name__)
         sent: list[tuple[float, tuple[int, int]]] = []
         latest = [(225, 39)]
 
         def forward(cols: int, rows: int) -> None:
             assert (cols, rows) == latest[0]
-            sent.append((loop.time(), (cols, rows)))
+            sent.append((clock.now, (cols, rows)))
 
-        _, out = await _opened(monkeypatch, forward)
+        app, out = await _opened(clock, forward)
         sent.clear()
-        start = loop.time()
+        start = clock.now
         index = 0
-        while loop.time() - start < 1.16:
+        cap = agent_hooks.RESIZE_MAX_WAIT_S
+        end = start + cap * 2.3
+        while clock.now < end:
             latest[0] = (225, 40 + index % 10)
             out["report"](*latest[0])
             if index == 0:
                 assert not sent
             index += 1
-            await asyncio.sleep(0.035)
+            clock.advance_to(min(end, clock.now + agent_hooks.RESIZE_SETTLE_S / 5))
+            await app.settle(rounds=1)
         during_drag = list(sent)
         assert 2 <= len(during_drag) <= 3
-        assert during_drag[0][0] - start <= 0.57
-        assert all(b[0] - a[0] <= 0.57 for a, b in zip(during_drag, during_drag[1:], strict=False))
-        await asyncio.sleep(0.19)
+        assert during_drag[0][0] - start <= cap + agent_hooks.RESIZE_SETTLE_S / 5
+        assert all(
+            b[0] - a[0] <= cap + agent_hooks.RESIZE_SETTLE_S / 5
+            for a, b in zip(during_drag, during_drag[1:], strict=False)
+        )
+        clock.advance_by(agent_hooks.RESIZE_SETTLE_S)
+        await app.settle(rounds=1)
         assert sent[-1][1] == latest[0]
         assert len(sent) <= 4
 
@@ -271,10 +283,8 @@ def test_a_continuous_drag_makes_bounded_progress_and_sends_its_last_grid(
 def test_pending_geometry_and_stale_callbacks_never_cross_a_lifecycle_boundary(
     monkeypatch: pytest.MonkeyPatch, transition: str
 ) -> None:
-    monkeypatch.setattr(agent_hooks, "OPEN_HOLD_S", 0.05)
-    monkeypatch.setattr(agent_hooks, "OPEN_SETTLE_S", 0.02)
-
     async def scenario() -> None:
+        clock = HookClock(monkeypatch, agent_hooks.__name__)
         sent: list[tuple[int, int]] = []
         out: dict[str, Any] = {}
 
@@ -300,6 +310,8 @@ def test_pending_geometry_and_stale_callbacks_never_cross_a_lifecycle_boundary(
             return Probe(active, ready, binding) if mounted else ft.Text("closed")
 
         app = await render_component(Parent)
+        clock.advance_by(agent_hooks.OPEN_HOLD_S)
+        await app.settle(rounds=1)
         assert not out["held"]
         old_report = out["report"]
         old_report(225, 30)
@@ -313,14 +325,16 @@ def test_pending_geometry_and_stale_callbacks_never_cross_a_lifecycle_boundary(
         out[field](value)
         await app.settle(rounds=1)
         old_report(225, 20)
-        await asyncio.sleep(0.2)
+        clock.advance_by(agent_hooks.OPEN_HOLD_S)
+        await app.settle(rounds=1)
         assert not sent
         if transition != "unmount":
             out["active"](True)
             out["ready"](True)
             await app.settle(rounds=1)
             out["report"](200, 32)
-            await asyncio.sleep(0.18)
+            clock.advance_by(agent_hooks.OPEN_HOLD_S)
+            await app.settle(rounds=1)
             assert sent == [(200, 32)]
 
     run(scenario())
@@ -329,9 +343,8 @@ def test_pending_geometry_and_stale_callbacks_never_cross_a_lifecycle_boundary(
 def test_a_slow_resize_writer_is_serial_and_only_the_latest_waiting_grid_is_sent(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(agent_hooks, "RESIZE_SETTLE_S", 0.02)
-
     async def scenario() -> None:
+        clock = HookClock(monkeypatch, agent_hooks.__name__)
         entered, finish = asyncio.Event(), asyncio.Event()
         sent: list[tuple[int, int]] = []
         busy = [0]
@@ -347,17 +360,21 @@ def test_a_slow_resize_writer_is_serial_and_only_the_latest_waiting_grid_is_sent
             finally:
                 busy[0] -= 1
 
-        _, out = await _opened(monkeypatch, forward)
+        app, out = await _opened(clock, forward)
         sent.clear()
         out["report"](225, 30)
-        await asyncio.wait_for(entered.wait(), 0.3)
+        clock.advance_by(agent_hooks.RESIZE_SETTLE_S)
+        await app.settle(rounds=1)
+        assert entered.is_set()
         out["report"](225, 31)
-        await asyncio.sleep(0.04)  # This settled size is queued behind the blocked write.
+        clock.advance_by(agent_hooks.RESIZE_SETTLE_S)  # Queue behind the blocked write.
+        await app.settle(rounds=1)
         out["report"](225, 32)
         finish.set()  # Before this latest size's quiet timer: do not send stale 31.
-        await asyncio.sleep(0.01)
+        await app.settle(rounds=1)
         assert sent == [(225, 30)]
-        await asyncio.sleep(0.04)
+        clock.advance_by(agent_hooks.RESIZE_SETTLE_S)
+        await app.settle(rounds=1)
         assert sent == [(225, 30), (225, 32)] and busy[0] == 0
 
     run(scenario())
@@ -366,11 +383,8 @@ def test_a_slow_resize_writer_is_serial_and_only_the_latest_waiting_grid_is_sent
 def test_a_retired_writer_cannot_drain_the_replacement_bindings_queue(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(agent_hooks, "OPEN_HOLD_S", 0.05)
-    monkeypatch.setattr(agent_hooks, "OPEN_SETTLE_S", 0.02)
-    monkeypatch.setattr(agent_hooks, "RESIZE_SETTLE_S", 0.02)
-
     async def scenario() -> None:
+        clock = HookClock(monkeypatch, agent_hooks.__name__)
         entered_old, entered_new = asyncio.Event(), asyncio.Event()
         finish_old, finish_new = asyncio.Event(), asyncio.Event()
         retired = asyncio.Event()
@@ -401,22 +415,88 @@ def test_a_retired_writer_cannot_drain_the_replacement_bindings_queue(
         app = await render_component(Probe)
         try:
             out["report"](225, 30)
-            await asyncio.wait_for(entered_old.wait(), 0.3)
+            clock.advance_by(agent_hooks.OPEN_SETTLE_S)
+            await app.settle(rounds=1)
+            assert entered_old.is_set()
             out["binding"](2)
             await app.settle(rounds=1)
-            await asyncio.wait_for(retired.wait(), 0.3)
+            assert retired.is_set()
             out["report"](225, 40)
-            await asyncio.wait_for(entered_new.wait(), 0.3)
+            clock.advance_by(agent_hooks.OPEN_SETTLE_S)
+            await app.settle(rounds=1)
+            assert entered_new.is_set()
             out["report"](225, 41)
-            await asyncio.sleep(0.04)
+            clock.advance_by(agent_hooks.RESIZE_SETTLE_S)
+            await app.settle(rounds=1)
             finish_old.set()
-            await asyncio.sleep(0.01)
+            await app.settle(rounds=1)
             assert calls == [(1, 30), (2, 40)]
             finish_new.set()
-            await asyncio.sleep(0.03)
+            await app.settle(rounds=1)
             assert calls == [(1, 30), (2, 40), (2, 41)]
         finally:
             finish_old.set()
             finish_new.set()
+
+    run(scenario())
+
+
+async def _live_probe(clock: _ResizeClock, sent: list[int]) -> Any:
+    out: dict[str, Any] = {}
+
+    @ft.component
+    def Probe() -> ft.Control:
+        report, _held = agent_hooks.use_open_hold((225, 39), lambda _c, r: sent.append(r))
+        out.update(report=report)
+        return ft.Text("probe")
+
+    app = await render_component(Probe)
+    clock.advance_to(agent_hooks.OPEN_HOLD_S)
+    await app.settle(rounds=1)
+    return out["report"]
+
+
+def test_a_dismissal_with_round_trip_gaps_publishes_one_final_size(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Key bar shown, dock re-measured one round trip later: steps 90 ms and
+    # 210 ms apart are one transition and must reach the PTY once.
+    async def scenario() -> None:
+        clock = _ResizeClock(monkeypatch)
+        sent: list[int] = []
+        report = await _live_probe(clock, sent)
+        assert not sent
+        report(225, 51)
+        clock.advance_to(clock.now + 0.09)
+        await asyncio.sleep(0)  # The writer runs between steps, as on a device.
+        report(225, 48)
+        clock.advance_to(clock.now + 0.21)
+        await asyncio.sleep(0)
+        report(225, 53)
+        last = clock.now
+        clock.advance_to(last + agent_hooks.RESIZE_SETTLE_S - 0.01)
+        await asyncio.sleep(0)
+        assert not sent
+        clock.advance_to(last + agent_hooks.RESIZE_SETTLE_S)
+        await asyncio.sleep(0)
+        assert sent == [53]
+
+    run(scenario())
+
+
+def test_a_same_size_live_burst_still_sends_its_final_grid(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def scenario() -> None:
+        clock = _ResizeClock(monkeypatch)
+        sent: list[int] = []
+        report = await _live_probe(clock, sent)
+        report(225, 42)
+        clock.advance_to(clock.now + 0.05)
+        await asyncio.sleep(0)
+        report(225, 39)
+        clock.advance_to(clock.now + agent_hooks.RESIZE_SETTLE_S)
+        await asyncio.sleep(0)
+        assert sent == [39]
 
     run(scenario())

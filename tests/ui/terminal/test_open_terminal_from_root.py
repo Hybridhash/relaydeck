@@ -304,7 +304,9 @@ def test_global_revocation_closes_fences_clears_and_refuses_saved() -> None:
         assert len(transport.submitted) == 1
         # Stashed drafts were purged: a later sync under this root
         # restores nothing from the revoked identity.
-        controller._set(pre_revoke)
+        # The controller itself refuses to leave revocation, so install the old state directly.
+        controller.state = pre_revoke
+        controller._emit()
         await app.settle()
         await _open_agent(app)
         await app.settle()

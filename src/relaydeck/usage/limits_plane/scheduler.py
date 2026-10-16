@@ -39,6 +39,7 @@ BACKOFF_CAP_MS = 30 * 60_000
 THROTTLE_FLOOR_MS = 60_000  # minimum gap between attempts forced by refresh/expiry
 COOLDOWN_MS = 5 * 60_000  # gap between manual refresh commits, per kind
 _IDLE_SLEEP_S = 60.0  # worker wake interval with nothing due (expiry re-check)
+AUTO_CHECK_MS = 5 * 60_000  # how often the worker weighs a background read of a pane block
 
 
 class LimitsState(TypedDict):
@@ -260,6 +261,9 @@ class _ProviderState:
         "refresh",
         "windows",
         "attempt_id",
+        "last_auto_ms",
+        "last_auto_check_ms",
+        "last_open_ms",
     )
 
     def __init__(self) -> None:
@@ -271,6 +275,11 @@ class _ProviderState:
         self.refresh = False
         self.windows: tuple[LimitWindow, ...] = ()
         self.attempt_id: str | None = None  # in-flight manual attempt
+        # Background reads: the last one started, the last time the worker weighed one, and the
+        # last time a page open did.
+        self.last_auto_ms: int | None = None
+        self.last_auto_check_ms: int | None = None
+        self.last_open_ms: int | None = None
 
 
 class LimitsScheduler:
@@ -389,6 +398,54 @@ class LimitsScheduler:
             state.refresh = True
         self._wake.set()
         return RefreshDecision("started", attempt_id)
+
+    def request_auto_on_open(self) -> int:
+        """A client opened the Usage page: read each pane block whose tool was used since its last
+        reading, without waiting out the background interval. Each block is weighed at most once per
+        cooldown however many devices open the page. Returns how many reads were started."""
+        return self._auto_sweep(self._clock(), on_open=True)
+
+    def _auto_sweep(self, now_ms: int, *, on_open: bool = False) -> int:
+        started = 0
+        for key in sorted(self._specs):
+            spec = self._specs[key]
+            if not (spec.on_demand and spec.tui is not None and spec.auto_interval_ms > 0):
+                continue
+            with self._lock:
+                state = self._states[key]
+                gate = state.last_open_ms if on_open else state.last_auto_check_ms
+                if state.attempt_id is not None or now_ms < state.next_due_ms:
+                    continue  # one read at a time, and a failure's backoff is honoured
+                if gate is not None and now_ms - gate < (COOLDOWN_MS if on_open else AUTO_CHECK_MS):
+                    continue
+                if on_open:
+                    state.last_open_ms = now_ms
+                else:
+                    state.last_auto_check_ms = now_ms
+                last_auto = state.last_auto_ms
+            if not on_open and last_auto is not None and now_ms - last_auto < spec.auto_interval_ms:
+                continue
+            if not self._auto_useful(key, now_ms, wait=not on_open):
+                continue
+            # The button's own path: single flight, cooldown, journal.
+            if self.request_on_demand(key).state == "started":
+                with self._lock:
+                    self._states[key].last_auto_ms = now_ms
+                started += 1
+        return started
+
+    def _auto_useful(self, key: str, now_ms: int, *, wait: bool) -> bool:
+        """The tool was used after its last reading, and (for a timed read) the interval passed."""
+        spec = self._specs[key]
+        host = key.split("/", 1)[0]
+        try:
+            used = self._store.kind_activity(host).get(spec.kind)
+            seen = self._store.limits_observed(host, spec.kind)
+        except Exception:
+            return False
+        if used is None or (seen is not None and used <= seen):
+            return False
+        return not wait or seen is None or now_ms - seen >= spec.auto_interval_ms
 
     def on_demand_key(self, kind: str) -> str | None:
         """First on-demand provider key for a kind (deterministic order), if any."""
@@ -606,6 +663,7 @@ class LimitsScheduler:
 
     def _run(self) -> None:
         while not self._stop.is_set():
+            self._auto_sweep(self._clock())
             self.run_once(self._clock())
             if self._stop.is_set():
                 break

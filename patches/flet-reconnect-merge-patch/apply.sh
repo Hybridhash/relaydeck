@@ -1,18 +1,7 @@
 #!/usr/bin/env bash
-# Materialise the patched flet 1.0.3 (RD1) package from pristine
-# pub.dev sources plus flet-1.0.3-rd1.diff. Reads only; never touches
-# the pub cache. No network, no builds.
-#
-#   apply.sh [--check] [--force] [DEST]
-#
-#   DEST   default: REPO_ROOT/extensions/terminal/third_party/flet-1.0.3-rd1
-#          (the path viewer/pyproject.toml overrides flet with)
-#   --check  build the patched tree in a temp dir and compare it with DEST;
-#            exit 1 on any difference (CI/preflight use). Writes nothing.
-#   --force  replace an existing DEST that differs from the regenerated tree.
-#
-#   PRISTINE source: $RD_FLET_SRC, else
-#   ${PUB_CACHE:-$HOME/.pub-cache}/hosted/pub.dev/flet-1.0.3
+# Materialise the patched flet 1.0.3 package from pristine pub.dev sources plus the diff.
+# Reads only: never touches the pub cache, no network, no builds.
+# Usage: apply.sh [--check] [--force] [--test] [DEST]; options and sources are in README.md.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -21,11 +10,13 @@ DIFF="$HERE/flet-1.0.3-rd1.diff"
 PRISTINE="${RD_FLET_SRC:-${PUB_CACHE:-$HOME/.pub-cache}/hosted/pub.dev/flet-1.0.3}"
 CHECK=0
 FORCE=0
+TEST=0
 DEST=""
 for arg in "$@"; do
   case "$arg" in
     --check) CHECK=1 ;;
     --force) FORCE=1 ;;
+    --test) TEST=1 ;;
     -*) echo "unknown option: $arg" >&2; exit 2 ;;
     *) DEST="$arg" ;;
   esac
@@ -49,6 +40,16 @@ rsync -a --exclude .swiftpm "$PRISTINE/" "$TMP/pkg/"
 (cd "$TMP/pkg" && patch -p1 -s -N < "$DIFF")
 # Upstream examples, tests and contributor docs are not part of the build.
 (cd "$TMP/pkg" && rm -rf README.md test)
+
+if [ "$TEST" = 1 ]; then
+  [ -d "$HERE/test" ] || { echo "no test dir: $HERE/test" >&2; exit 1; }
+  cp -r "$HERE/test" "$TMP/pkg/test"
+  if (cd "$TMP/pkg" && "${FLUTTER:-$HOME/flutter/3.44.8/bin/flutter}" test); then
+    exit 0
+  else
+    exit 1
+  fi
+fi
 
 if [ "$CHECK" = 1 ]; then
   [ -d "$DEST" ] || { echo "missing: $DEST" >&2; exit 1; }

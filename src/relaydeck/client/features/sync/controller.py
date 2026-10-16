@@ -232,6 +232,8 @@ class SyncController:
             )
 
     def _reconnecting(self, reason: str) -> None:
+        if self.state.revoked:
+            return
         self._retry_attempt += 1
         if self._outage_since is None:
             self._outage_since = self.clock()
@@ -290,6 +292,12 @@ class SyncController:
         return granted is not None and host_id not in granted
 
     def _set(self, state: AppState) -> None:
+        # Revocation is terminal: late status or metadata work must not replace it. A new
+        # sign-in builds a new controller.
+        if self.state.revoked and not (
+            state.revoked and state.connection.state == ConnectionState.ACCESS_REVOKED
+        ):
+            return
         self.state = state
         self._emit()
 
@@ -332,13 +340,13 @@ class SyncController:
         self._reset_gap_failures()
         recovered_auth = False
         self._set(reducers.set_connection(self.state, ConnectionState.CONNECTING))
-        while not stop():
+        while not stop() and not self.state.revoked:
             try:
                 self._stream_started = None
                 await self._sync_once(host_id, stop)
                 return self.state
             except TransportError as exc:
-                if stop():
+                if stop() or self.state.revoked:
                     return self.state
                 if self._gap_stalled(host_id, exc.code):
                     self._reconnecting("gap")
@@ -366,7 +374,7 @@ class SyncController:
                                 )
                             )
                             return self.state
-                        if stop():
+                        if stop() or self.state.revoked:
                             return self.state
                         if recovered:
                             if self._host_ungranted(host_id):
@@ -402,6 +410,8 @@ class SyncController:
     async def _sync_once(self, host_id: str, stop: Callable[[], bool]) -> None:
         # A signal received before this fresh snapshot is already covered
         # by it. Keep signals DURING the snapshot/pull: those still recycle.
+        if self.state.revoked:
+            return
         signaled = self._resync_event.is_set()
         self._resync_event.clear()
         if self.state.connection.state != ConnectionState.RECONNECTING:
@@ -417,6 +427,8 @@ class SyncController:
             if prepared is not None and prepared[0] == host_id
             else await self.transport.snapshot(host_id)
         )
+        if self.state.revoked:
+            return
         try:
             validate("relaydeck/gateway/v1/snapshot", raw)
         except SchemaError as exc:
@@ -427,13 +439,11 @@ class SyncController:
         pull_iter = stream.__aiter__()
         try:
             while True:
-                if stop():
+                if stop() or self.state.revoked:
                     return
-                # Race the next frame against the link signal: a parked
-                # pull (half-open socket, zero further frames) must still
-                # recycle. Cancelling the pull leaves no `__anext__` in
-                # flight, so the `finally` close below is always legal and
-                # deterministically releases the current stream.
+                # Race the next frame against the link signal so a parked pull (half-open socket)
+                # still recycles. Cancelling the pull leaves no __anext__ in flight, so the final
+                # close is legal.
                 pull = asyncio.ensure_future(pull_iter.__anext__())
                 wake = asyncio.ensure_future(self._resync_event.wait())
                 watched: set[asyncio.Task[Any]] = {pull, wake}
@@ -446,6 +456,11 @@ class SyncController:
                     wake.cancel()
                     await asyncio.gather(pull, wake, return_exceptions=True)
                     raise
+                if self.state.revoked:
+                    pull.cancel()
+                    wake.cancel()
+                    await asyncio.gather(pull, wake, return_exceptions=True)
+                    return
                 if wake in done:
                     # Link signal: recycle now. Rapid signals coalesce
                     # into this single recovery: the event clears exactly

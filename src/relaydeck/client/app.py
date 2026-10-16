@@ -193,13 +193,7 @@ def App() -> Any:
     return AppShell()
 
 
-# ---------------------------------------------------------------------------
-# Connected root
-#
-# The skeleton above stays as the lifecycle proof. Root is the
-# production tree: SyncController state, route-stored navigation and the
-# creation sheets, all over the inventory/create features.
-# ---------------------------------------------------------------------------
+# Connected root: the production tree over SyncController state, routes and creation sheets.
 
 
 @ft.component

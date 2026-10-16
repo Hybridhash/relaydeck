@@ -43,6 +43,7 @@ from relaydeck.usage.limits_plane.contracts import (
     tui_recipe_from,
 )
 from relaydeck.usage.limits_plane.herdr_seam import SeamError
+from relaydeck.usage.limits_plane.providers import tui_usage_pane
 from relaydeck.usage.limits_plane.providers.tui_usage_pane import (
     FORMAT_ID,
     TuiUsagePaneProvider,
@@ -515,6 +516,82 @@ def test_hint_for_missing_file_is_not_saved(tmp_path: Path) -> None:
 # -- aborts ------------------------------------------------------------------------
 
 
+def test_abort_note_names_no_prompt(tmp_path: Path) -> None:
+    fake = FakeHerdr(prompt="PLEASE SIGN IN")  # tool runs, never the prompt
+    fake.inventory = [_live_pane("w9", KIND, str(tmp_path))]
+    result = TuiUsagePaneProvider().fetch(_ctx(tmp_path, fake))
+    assert result.error == LimitError.TIMEOUT
+    assert result.note == "needs_attention"
+    assert fake.tabs == {}
+
+
+def test_abort_note_names_not_shell_at_start(tmp_path: Path) -> None:
+    fake = FakeHerdr()
+    fake.inventory = [_live_pane("w9", KIND, str(tmp_path))]
+    real_info = fake._process_info
+
+    def info(pane_id: str) -> bytes:
+        raw = real_info(pane_id)
+        if not raw:
+            return b""
+        doc = json.loads(raw)
+        for proc in doc["result"]["process_info"]["foreground_processes"]:
+            proc["argv0"], proc["name"] = "/bin/evil", "evil"
+        return json.dumps(doc).encode()
+
+    fake._process_info = info  # type: ignore[method-assign]
+    result = TuiUsagePaneProvider().fetch(_ctx(tmp_path, fake))
+    assert result.error == LimitError.UNAVAILABLE
+    assert result.note == "not_shell_at_start"
+
+
+def test_abort_note_names_exited_before_prompt(tmp_path: Path) -> None:
+    fake = FakeHerdr()
+    fake.inventory = [_live_pane("w9", KIND, str(tmp_path))]
+
+    def pane_run(pane_id: str, command: str) -> bytes:
+        fake.panes[pane_id]["screen"] = ["command not found: tool-a"]
+        return b""
+
+    fake._pane_run = pane_run  # type: ignore[method-assign]
+    result = TuiUsagePaneProvider().fetch(_ctx(tmp_path, fake, _fresh_recipe()))
+    assert result.error == LimitError.UNAVAILABLE
+    assert result.note == "exited_before_prompt"
+
+
+def test_abort_note_names_pane_list_failed(tmp_path: Path) -> None:
+    fake = FakeHerdr()
+    fake.inventory = [_live_pane("w9", KIND, str(tmp_path))]
+    real_run = fake.run
+
+    def run(argv: Any, timeout_s: float, extra: Any = None) -> bytes:
+        args = [a for a in argv[1:]]
+        if args[:2] == ["pane", "list"]:
+            raise TimeoutError("herdr stalled")
+        return real_run(argv, timeout_s, extra)
+
+    fake.run = run  # type: ignore[method-assign]
+    result = TuiUsagePaneProvider().fetch(_ctx(tmp_path, fake))
+    assert result.error == LimitError.UNAVAILABLE
+    assert result.note == "pane_list_failed"
+
+
+def test_abort_note_names_no_usage_marker(tmp_path: Path) -> None:
+    fake = FakeHerdr(usage=("NOTHING RECOGNIZABLE",))
+    fake.inventory = [_live_pane("w9", KIND, str(tmp_path))]
+    result = TuiUsagePaneProvider().fetch(_ctx(tmp_path, fake))
+    assert result.error == LimitError.TIMEOUT
+    assert result.note == "no_usage_marker"
+
+
+def test_abort_note_names_parse_no_window(tmp_path: Path) -> None:
+    fake = FakeHerdr(usage=("ALLOWANCE", "NO NUMBERS HERE"))
+    fake.inventory = [_live_pane("w9", KIND, str(tmp_path))]
+    result = TuiUsagePaneProvider().fetch(_ctx(tmp_path, fake))
+    assert result.error == LimitError.PARSE
+    assert result.note == "parse_no_window"
+
+
 def test_prompt_never_arrives_aborts_and_closes(tmp_path: Path) -> None:
     fake = FakeHerdr(prompt="SOMETHING ELSE")  # never the prompt marker
     fake.inventory = [_live_pane("w9", KIND, str(tmp_path))]
@@ -596,6 +673,97 @@ def test_a_tool_without_limits_to_show_is_not_reported_rather_than_a_parse_miss(
     assert result.error == LimitError.UNAVAILABLE
     assert result.note == "not_reported"
     assert fake.tabs == {}
+
+
+_IDLE_RECIPE = {"idle": ["ALLOWANCE[^\\n]*\\n[^\\n]*Currently unavailable"]}
+
+
+def _idle_fake(tmp_path: Path) -> FakeHerdr:
+    fake = FakeHerdr(usage=("ALLOWANCE", "Currently unavailable"))
+    fake.inventory = [_live_pane("w9", KIND, str(tmp_path))]
+    return fake
+
+
+def test_an_idle_screen_is_a_zero_percent_reading_not_a_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(tui_usage_pane.time, "sleep", lambda _s: None)
+    fake = _idle_fake(tmp_path)
+    ctx = replace(_ctx(tmp_path, fake, _recipe(**_IDLE_RECIPE)), key_path=tmp_path / "account.key")
+    result = TuiUsagePaneProvider().fetch(ctx)
+    assert result.error is None and result.note == "idle"
+    (snapshot,) = result.snapshots
+    (window,) = snapshot.windows
+    assert (window.used_percent, window.resets_at_ms, window.idle) == (0.0, None, True)
+    assert window.status == LimitStatus.FRESH
+    # Usage was sent twice: the second look covers a screen that lagged behind the start.
+    assert sum(1 for _, kind, payload in fake.sent if payload == "/usage") == 2
+    assert snapshot.account_ref  # a stable identity, so a later failure keeps this reading
+    assert fake.tabs == {}
+
+
+def test_the_second_look_wins_when_the_screen_has_caught_up(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake = _idle_fake(tmp_path)
+
+    def caught_up(_seconds: float) -> None:
+        fake.usage = ["ALLOWANCE", "USED 7 OF 50"]
+
+    monkeypatch.setattr(tui_usage_pane.time, "sleep", caught_up)
+    result = TuiUsagePaneProvider().fetch(_ctx(tmp_path, fake, _recipe(**_IDLE_RECIPE)))
+    (window,) = result.snapshots[0].windows
+    assert window.idle is False and window.used_amount == 7.0 and result.note == ""
+
+
+def test_account_identity_is_stable_per_kind_and_plan(tmp_path: Path) -> None:
+    fake = FakeHerdr(usage=("ALLOWANCE", "PLAN FREE", "USED 3 OF 50"))
+    fake.inventory = [_live_pane("w9", KIND, str(tmp_path))]
+    key = tmp_path / "account.key"
+    first = TuiUsagePaneProvider().fetch(replace(_ctx(tmp_path, fake), key_path=key))
+    fake2 = FakeHerdr(usage=("ALLOWANCE", "PLAN FREE", "USED 4 OF 50"))
+    fake2.inventory = fake.inventory
+    second = TuiUsagePaneProvider().fetch(
+        replace(_ctx(tmp_path, fake2, attempt="attempt-2"), key_path=key)
+    )
+    assert first.snapshots[0].account_ref == second.snapshots[0].account_ref is not None
+
+
+def _tui_reading(store: SqliteUsageStore, account: str | None = "acct") -> None:
+    snapshot = LimitSnapshot(
+        KIND, "plan", NOW, (_good_window(),), LimitStatus.FRESH, FORMAT_ID, account, None, "P"
+    )
+    store.apply_limits(KIND, PROVIDER_KEY, (snapshot,), NOW)
+
+
+def test_a_transient_failure_keeps_the_last_good_pane_reading(tmp_path: Path) -> None:
+    store = SqliteUsageStore(tmp_path / "usage.db", "UTC")
+    try:
+        _tui_reading(store)
+        assert store.record_limits_failure(KIND, PROVIDER_KEY, LimitError.TIMEOUT, NOW + 1) == 0
+        day = _utc_day(NOW)
+        (snapshot,) = store.query(UsageQuery("h1", day, day), NOW).limits
+        assert snapshot.error is None and snapshot.windows[0].used_amount == 3.0
+    finally:
+        store.close()
+
+
+def test_auth_required_still_suppresses_the_pane_reading(tmp_path: Path) -> None:
+    store = SqliteUsageStore(tmp_path / "usage.db", "UTC")
+    try:
+        _tui_reading(store)
+        assert store.record_limits_failure(KIND, PROVIDER_KEY, LimitError.AUTH_REQUIRED, NOW + 1)
+        day = _utc_day(NOW)
+        (snapshot,) = store.query(UsageQuery("h1", day, day), NOW).limits
+        assert snapshot.error == "auth_required" and snapshot.windows == ()
+    finally:
+        store.close()
+
+
+def test_the_packaged_muse_recipe_reads_idle_as_a_reading() -> None:
+    recipes = [e.tui for e in load_catalog().entries if e.limits == FORMAT_ID and e.tui]
+    idle = [recipe for recipe in recipes if recipe.idle]
+    assert len(idle) == 1 and not idle[0].not_reported
 
 
 def test_fast_launch_failure_is_unavailable(tmp_path: Path) -> None:
@@ -867,6 +1035,134 @@ def _od_scheduler(
 
 def _ok_result() -> ProviderResult:
     return ProviderResult((_limit_snapshot(_good_window(), plan_label="P"),))
+
+
+HOUR_MS = 3600_000
+
+
+def _auto_scheduler(
+    tmp_path: Path, results: list[ProviderResult], auto_ms: int = 6 * 3600_000
+) -> tuple[LimitsScheduler, SqliteUsageStore, _Clock]:
+    scheduler, _provider, store, _state, clock = _od_scheduler(tmp_path, results)
+    spec = replace(scheduler._specs[PROVIDER_KEY], auto_interval_ms=auto_ms)
+    scheduler._specs[PROVIDER_KEY] = spec
+
+    class Clocked:
+        """Readings are stamped with the fetch time, as the real providers do."""
+
+        format_id = FORMAT_ID
+
+        def fetch(self, ctx: FetchContext) -> ProviderResult:
+            first = results[0]
+            return replace(
+                first,
+                snapshots=tuple(replace(s, observed_ms=ctx.now_ms) for s in first.snapshots),
+            )
+
+    scheduler._providers[PROVIDER_KEY] = Clocked()
+    clock.now = NOW - 40 * HOUR_MS  # the whole story stays in the past of the real store clock
+    return scheduler, store, clock
+
+
+def _used(store: SqliteUsageStore, at: int) -> None:
+    from tests.support.usage.store import event, write
+
+    write(store, (event(f"e{at}", t=at),))
+
+
+def test_a_background_read_needs_the_interval_and_newer_activity(tmp_path: Path) -> None:
+    scheduler, store, clock = _auto_scheduler(tmp_path, [_ok_result()])
+    try:
+        assert scheduler._auto_sweep(clock()) == 0  # never used: nothing could have changed
+        _used(store, clock.now - HOUR_MS)
+        assert scheduler._auto_sweep(clock()) == 0  # weighed a moment ago: not again yet
+        clock.now += 6 * 60_000
+        assert scheduler._auto_sweep(clock()) == 1  # used, never read
+        assert scheduler.run_once(clock()) == 1
+        start = clock.now
+        clock.now = start + 3 * HOUR_MS
+        assert scheduler._auto_sweep(clock()) == 0  # no use since the reading
+        _used(store, start + HOUR_MS)
+        assert scheduler._auto_sweep(clock()) == 0  # used, but the interval has not passed
+        clock.now = start + 7 * HOUR_MS
+        assert scheduler._auto_sweep(clock()) == 1
+    finally:
+        store.close()
+
+
+def test_a_manual_only_block_is_never_read_in_the_background(tmp_path: Path) -> None:
+    scheduler, store, clock = _auto_scheduler(tmp_path, [_ok_result()], auto_ms=0)
+    try:
+        _used(store, clock.now - HOUR_MS)
+        clock.now += 24 * HOUR_MS
+        assert scheduler._auto_sweep(clock()) == 0
+        assert scheduler.request_auto_on_open() == 0
+    finally:
+        store.close()
+
+
+def test_a_press_and_a_background_read_never_overlap(tmp_path: Path) -> None:
+    scheduler, store, clock = _auto_scheduler(tmp_path, [_ok_result()])
+    try:
+        _used(store, clock.now - HOUR_MS)
+        assert scheduler.request_on_demand(PROVIDER_KEY).state == "started"
+        assert scheduler._auto_sweep(clock()) == 0  # the press is in flight
+        scheduler.run_once(clock())
+        clock.now += 10 * HOUR_MS
+        _used(store, clock.now - HOUR_MS)
+        assert scheduler._auto_sweep(clock()) == 1
+        assert scheduler.request_on_demand(PROVIDER_KEY).state == "in_progress"
+    finally:
+        store.close()
+
+
+def test_page_open_reads_early_but_keeps_the_cooldown_and_asks_once(tmp_path: Path) -> None:
+    scheduler, store, clock = _auto_scheduler(tmp_path, [_ok_result()])
+    try:
+        _used(store, clock.now - HOUR_MS)
+        assert scheduler.request_auto_on_open() == 1
+        assert scheduler.request_auto_on_open() == 0  # a second device, same moment
+        scheduler.run_once(clock())
+        start = clock.now
+        _used(store, start + 60_000)
+        clock.now = start + 120_000
+        assert scheduler.request_auto_on_open() == 0  # within the cooldown
+        clock.now = start + 6 * 60_000
+        assert scheduler._auto_sweep(clock()) == 0  # the interval (hours) is not over
+        assert scheduler.request_auto_on_open() == 1  # a page open does not wait for it
+        assert scheduler.request_auto_on_open() == 0
+    finally:
+        store.close()
+
+
+def test_a_failed_background_read_backs_off(tmp_path: Path) -> None:
+    failed = ProviderResult((), LimitError.TIMEOUT)
+    scheduler, store, clock = _auto_scheduler(tmp_path, [failed])
+    try:
+        _used(store, clock.now - HOUR_MS)
+        assert scheduler._auto_sweep(clock()) == 1
+        scheduler.run_once(clock())
+        clock.now += 30_000
+        assert scheduler.request_auto_on_open() == 0  # inside the backoff
+        assert scheduler._auto_sweep(clock()) == 0
+    finally:
+        store.close()
+
+
+def test_a_model_answer_instead_of_the_panel_aborts_without_retry(tmp_path: Path) -> None:
+    fake = FakeHerdr(usage=("some chat", "I don't have a /usage command here"))
+    fake.inventory = [_live_pane("w9", KIND, str(tmp_path))]
+    recipe = _recipe(refuse=["(?i)don't have a /usage command"])
+    result = TuiUsagePaneProvider().fetch(_ctx(tmp_path, fake, recipe))
+    assert result.error == LimitError.PARSE and result.note == "refused"
+    assert sum(1 for _, _kind, payload in fake.sent if payload == "/usage") == 1
+    assert fake.tabs == {}
+
+
+def test_the_shipped_pane_recipes_carry_the_safety_data() -> None:
+    recipes = {e.id: e.tui for e in load_catalog().entries if e.tui}
+    refusing = [r for r in recipes.values() if r.refuse]
+    assert len(refusing) == 1 and "--agent-engine" in refusing[0].launch_new
 
 
 def test_on_demand_start_join_run_cooldown(tmp_path: Path) -> None:
@@ -1416,3 +1712,47 @@ def test_a_versioned_launcher_binary_counts_as_the_tool() -> None:
     assert not _matches_binary("toolbox", names)
     assert not _matches_binary("zsh", names)
     assert not _matches_binary(None, names)
+
+
+def test_a_limit_reached_panel_is_a_reading_not_a_failure(tmp_path: Path) -> None:
+    """A panel at its limit parses as 100 % used with its reset (the shipped
+    shape), never as a parse failure."""
+    fake = FakeHerdr(
+        usage=(
+            "Subscription",
+            "Current 100% used",
+            "Resets at 7:30 PM",
+            "Weekly 96% used",
+            "Resets Oct 19 at 1:00 PM",
+        )
+    )
+    fake.inventory = [_live_pane("w9", KIND, str(tmp_path))]
+    recipe = _fresh_recipe(
+        usage_marker="Subscription",
+        windows=[
+            {
+                "key": "current",
+                "pattern": "Current\\s+(?P<percent>[0-9]+)% used",
+                "reset_pattern": "Resets at (?P<reset>[0-9]{1,2}:[0-9]{2} [AP]M)",
+                "reset_kind": "clock",
+                "minutes": 300,
+            },
+            {
+                "key": "weekly",
+                "pattern": "Weekly\\s+(?P<percent>[0-9]+)% used",
+                "reset_pattern": (
+                    "Resets (?P<reset>[A-Z][a-z]{2} [0-9]{1,2} at [0-9]{1,2}:[0-9]{2} [AP]M)"
+                ),
+                "reset_kind": "monthday",
+                "minutes": 10080,
+            },
+        ],
+    )
+    result = TuiUsagePaneProvider().fetch(_ctx(tmp_path, fake, recipe))
+    assert result.error is None
+    (snapshot,) = result.snapshots
+    assert [(w.window_key, w.used_percent) for w in snapshot.windows] == [
+        ("current", 100.0),
+        ("weekly", 96.0),
+    ]
+    assert all(w.resets_at_ms is not None for w in snapshot.windows)

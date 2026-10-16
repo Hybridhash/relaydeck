@@ -190,5 +190,6 @@ def test_the_shared_sets_have_exactly_the_documented_members() -> None:
             "enabled",
             # manual-only blocks (a deliberate config extension).
             "on_demand",
+            "auto_interval_seconds",
         }
     )

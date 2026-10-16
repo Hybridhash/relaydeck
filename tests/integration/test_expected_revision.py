@@ -1,4 +1,4 @@
-"""Expected_revision enforcement in JournalBackend (+ m2 bounds).
+"""Expected_revision enforcement in JournalBackend, plus bounded event logs.
 
 A truthy expected_revision on a NEW agent.prompt is a freshness
 assertion against the observed snapshot: unknown agent or revision
@@ -6,7 +6,7 @@ mismatch refuses stale_revision BEFORE anything journals. Absent/zero
 asserts nothing, non-prompt kinds stay journal-only, and replays dedupe
 to their recorded outcome without re-enforcement.
 
-Also covers m2 here (same backends): per-host event logs are bounded
+Also covers per-host event logs, which are bounded
 with an O(1) event_id index on both JournalBackend and FakeBackend.
 Synthetic loopback only; no daemon, no network.
 """
@@ -200,13 +200,13 @@ def test_fake_backend_replay_regression() -> None:
     assert isinstance(backend, FakeBackend)
 
 
-# -- m2: bounded + indexed event logs (both backends) --------------------
+# -- bounded + indexed event logs (both backends) --------------------
 
 
 def _ingest_many(backend: Any, count: int) -> None:
     for seq in range(count):
         out = backend.ingest_event(
-            "home-mac", fixture_event("host.status", f"ev-m2-{seq}"), NOW, SECRET
+            "home-mac", fixture_event("host.status", f"ev-log-{seq}"), NOW, SECRET
         )
         assert out.get("error") is None, out
 
@@ -220,7 +220,7 @@ def test_event_log_bounded_oldest_first(tmp_path: Any) -> None:
         _ingest_many(backend, MAX_EVENT_LOG_PER_HOST + 100)
         log = backend.event_logs["home-mac"]
         assert len(log) == MAX_EVENT_LOG_PER_HOST
-        assert log[0]["event_id"] == "ev-m2-100"
+        assert log[0]["event_id"] == "ev-log-100"
         assert log[-1]["sequence"] == MAX_EVENT_LOG_PER_HOST + 100
     journal.close()
 
@@ -250,7 +250,9 @@ def test_evicted_event_id_may_return(tmp_path: Any) -> None:
     backend = JournalBackend(journal, now_ms=lambda: NOW)
     try:
         _ingest_many(backend, MAX_EVENT_LOG_PER_HOST + 1)
-        out = backend.ingest_event("home-mac", fixture_event("host.status", "ev-m2-0"), NOW, SECRET)
+        out = backend.ingest_event(
+            "home-mac", fixture_event("host.status", "ev-log-0"), NOW, SECRET
+        )
         assert "duplicate" not in out
         assert out["ok"]["sequence"] == MAX_EVENT_LOG_PER_HOST + 2
     finally:

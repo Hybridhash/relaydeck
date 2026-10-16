@@ -101,3 +101,219 @@ def test_existing_packets_unchanged():
     kinds = [p.kind for p in protocol.decode_packets(buf)]
     assert kinds == [0x03, 0x85, 0x82]
     assert len(buf) == 0
+
+
+def test_encode_cancel_scroll():
+    assert protocol.encode_cancel_scroll(1) == bytes([0x10, 0, 0, 0, 1])
+    assert protocol.encode_cancel_scroll(0xFFFFFFFF) == bytes([0x10, 0xFF, 0xFF, 0xFF, 0xFF])
+    for bad in (0, -1, 0x100000000, True, "1"):
+        with pytest.raises(ValueError):
+            protocol.encode_cancel_scroll(bad)  # type: ignore[arg-type]
+
+
+def test_encode_scroll_cancelled():
+    assert protocol.encode_scroll_cancelled(0) == bytes([0x8A, 0, 0, 0, 0])
+    assert protocol.encode_scroll_cancelled(7) == bytes([0x8A, 0, 0, 0, 7])
+    assert protocol.decode_scroll_cancelled(bytes([0, 0, 0, 7])) == 7
+    with pytest.raises(ValueError):
+        protocol.encode_scroll_cancelled(-1)
+
+
+def test_cancel_scroll_framing_round_trip():
+    buf = bytearray(protocol.encode_cancel_scroll(3))
+    packets = protocol.decode_packets(buf)
+    assert len(buf) == 0
+    assert packets == [protocol.DecodedPacket(0x10, bytes([0, 0, 0, 3]))]
+
+
+def test_scroll_cancelled_framing_round_trip():
+    buf = bytearray(protocol.encode_scroll_cancelled(3))
+    packets = protocol.decode_packets(buf)
+    assert len(buf) == 0
+    assert packets == [protocol.DecodedPacket(0x8A, bytes([0, 0, 0, 3]))]
+
+
+def test_cancel_scroll_sends_packet_and_blocks_wheel():
+    term = RelayDeckTerminal()
+    sent: list[bytes] = []
+    term._test_mark_ready(sent)
+    term._test_inject_dart_message(protocol.encode_scroll_cancelled(0))
+    assert term.wheel_blocked is False
+    term.cancel_scroll()
+    assert sent == [protocol.encode_cancel_scroll(1)]
+    assert term.wheel_blocked is True
+
+
+def test_scroll_cancelled_report_releases_wheel_block():
+    term = RelayDeckTerminal()
+    sent: list[bytes] = []
+    term._test_mark_ready(sent)
+    term._test_inject_dart_message(protocol.encode_scroll_cancelled(0))
+    term.cancel_scroll()
+    assert term.wheel_blocked is True
+    term._test_inject_dart_message(protocol.encode_scroll_cancelled(1))
+    assert term.wheel_blocked is False
+
+
+def test_reset_clears_wheel_block():
+    term = RelayDeckTerminal()
+    sent: list[bytes] = []
+    term._test_mark_ready(sent)
+    term._test_inject_dart_message(protocol.encode_scroll_cancelled(0))
+    term.cancel_scroll()
+    assert term.wheel_blocked is True
+    term.reset()
+    assert term.wheel_blocked is False
+
+
+def test_transport_generation_change_clears_wheel_block():
+    term = RelayDeckTerminal()
+    sent: list[bytes] = []
+    term._test_mark_ready(sent)
+    term._test_inject_dart_message(protocol.encode_scroll_cancelled(0))
+    term.cancel_scroll()
+    assert term.wheel_blocked is True
+    term.invalidate_transport(term._transport_generation + 1)
+    assert term.wheel_blocked is False
+
+
+def test_block_survives_non_wheel_input():
+    term = RelayDeckTerminal()
+    sent: list[bytes] = []
+    term._test_mark_ready(sent)
+    term._test_inject_dart_message(protocol.encode_scroll_cancelled(0))
+    term.cancel_scroll()
+    assert term.wheel_blocked is True
+    # In-flight non-wheel input proves nothing about the cancel.
+    term._test_inject_dart_message(protocol.encode_input(b"a", protocol.ORIGIN_KEY))
+    assert term.wheel_blocked is True
+    term._test_inject_dart_message(protocol.encode_input(b"a", protocol.ORIGIN_TEXT))
+    assert term.wheel_blocked is True
+    term._test_inject_dart_message(protocol.encode_scroll_cancelled(1))
+    assert term.wheel_blocked is False
+
+
+def test_cancel_scroll_gated_until_widget_proves_ack():
+    term = RelayDeckTerminal()
+    sent: list[bytes] = []
+    term._test_mark_ready(sent)
+    term.cancel_scroll()
+    assert sent == []
+    assert term.wheel_blocked is False
+    term._test_inject_dart_message(protocol.encode_scroll_cancelled(0))
+    term.cancel_scroll()
+    assert sent == [protocol.encode_cancel_scroll(1)]
+    assert term.wheel_blocked is True
+
+
+def test_two_pending_cancels_require_two_acks():
+    term = RelayDeckTerminal()
+    sent: list[bytes] = []
+    term._test_mark_ready(sent)
+    term._test_inject_dart_message(protocol.encode_scroll_cancelled(0))
+    term.cancel_scroll()
+    term.cancel_scroll()
+    assert sent == [protocol.encode_cancel_scroll(1), protocol.encode_cancel_scroll(2)]
+    term._test_inject_dart_message(protocol.encode_scroll_cancelled(1))
+    assert term.wheel_blocked is True
+    term._test_inject_dart_message(protocol.encode_scroll_cancelled(2))
+    assert term.wheel_blocked is False
+
+
+def test_mount_seq_zero_advertisement_releases_nothing():
+    term = RelayDeckTerminal()
+    sent: list[bytes] = []
+    term._test_mark_ready(sent)
+    term._test_inject_dart_message(protocol.encode_scroll_cancelled(0))
+    term.cancel_scroll()
+    assert term.wheel_blocked is True
+    term._test_inject_dart_message(protocol.encode_scroll_cancelled(0))
+    assert term.wheel_blocked is True
+
+
+def test_click_releases_no_cancel():
+    term = RelayDeckTerminal()
+    sent: list[bytes] = []
+    term._test_mark_ready(sent)
+    term._test_inject_dart_message(protocol.encode_scroll_cancelled(0))
+    term.cancel_scroll()
+    assert term.wheel_blocked is True
+    term._test_inject_dart_message(protocol.encode_input(b"\x1b[<0;12;3M", protocol.ORIGIN_MOUSE))
+    assert term.wheel_blocked is True
+    term._test_inject_dart_message(protocol.encode_scroll_cancelled(1))
+    assert term.wheel_blocked is False
+
+
+def test_blocked_wheel_drops_at_dispatch():
+    term = RelayDeckTerminal()
+    sent: list[bytes] = []
+    term._test_mark_ready(sent)
+    received: list[tuple[int, bytes]] = []
+    term.add_input_listener(lambda origin, data: received.append((origin, data)))
+    term._test_inject_dart_message(protocol.encode_scroll_cancelled(0))
+    term.cancel_scroll()
+    term._test_inject_dart_message(protocol.encode_input(b"\x1b[<64;12;3M", protocol.ORIGIN_MOUSE))
+    assert received == []
+    term._test_inject_dart_message(protocol.encode_scroll_cancelled(1))
+    term._test_inject_dart_message(protocol.encode_input(b"\x1b[<64;12;3M", protocol.ORIGIN_MOUSE))
+    assert received == [(protocol.ORIGIN_MOUSE, b"\x1b[<64;12;3M")]
+
+
+def test_sequence_wrap_still_blocks_and_acks():
+    term = RelayDeckTerminal()
+    sent: list[bytes] = []
+    term._test_mark_ready(sent)
+    term._test_inject_dart_message(protocol.encode_scroll_cancelled(0))
+    term._cancel_sent_seq = term._cancel_acked_seq = 0xFFFFFFFF
+    term.cancel_scroll()
+    assert sent == [protocol.encode_cancel_scroll(1)]
+    assert term.wheel_blocked is True
+    term._test_inject_dart_message(protocol.encode_scroll_cancelled(1))
+    assert term.wheel_blocked is False
+
+
+def test_delayed_pre_wrap_ack_does_not_release_post_wrap_cancel():
+    term = RelayDeckTerminal()
+    sent: list[bytes] = []
+    term._test_mark_ready(sent)
+    term._test_inject_dart_message(protocol.encode_scroll_cancelled(0))
+    term._cancel_sent_seq = term._cancel_acked_seq = 0xFFFFFFFE
+    term.cancel_scroll()  # wire token 0xFFFFFFFF
+    term.cancel_scroll()  # wire token 1 (post-wrap)
+    assert sent == [
+        protocol.encode_cancel_scroll(0xFFFFFFFF),
+        protocol.encode_cancel_scroll(1),
+    ]
+    term._test_inject_dart_message(protocol.encode_scroll_cancelled(0xFFFFFFFF))
+    assert term.wheel_blocked is True
+    term._test_inject_dart_message(protocol.encode_scroll_cancelled(1))
+    assert term.wheel_blocked is False
+
+
+def test_unknown_ack_token_releases_nothing():
+    term = RelayDeckTerminal()
+    sent: list[bytes] = []
+    term._test_mark_ready(sent)
+    term._test_inject_dart_message(protocol.encode_scroll_cancelled(0))
+    term.cancel_scroll()
+    assert term.wheel_blocked is True
+    term._test_inject_dart_message(protocol.encode_scroll_cancelled(99))
+    assert term.wheel_blocked is True
+
+
+def test_rebind_retires_outstanding_tokens():
+    term = RelayDeckTerminal()
+    sent: list[bytes] = []
+    term._test_mark_ready(sent)
+    term._test_inject_dart_message(protocol.encode_scroll_cancelled(0))
+    term.cancel_scroll()  # token 1, epoch 1
+    assert term.wheel_blocked is True
+    term.invalidate_transport(term._transport_generation + 1)
+    assert term.wheel_blocked is False
+    term.cancel_scroll()  # token 2, epoch 2
+    assert term.wheel_blocked is True
+    # The retired binding's token cannot release the new cancel.
+    term._test_inject_dart_message(protocol.encode_scroll_cancelled(1))
+    assert term.wheel_blocked is True
+    term._test_inject_dart_message(protocol.encode_scroll_cancelled(2))
+    assert term.wheel_blocked is False

@@ -1,4 +1,4 @@
-"""Attach targets must use the ids herdr 0.9.1 resolves (verified live).
+"""Attach targets must use the ids herdr 0.9.1 resolves.
 
 `herdr agent attach <TARGET>` resolves pane ids (`w2:p5`); a terminal id
 answers agent_not_found. `herdr terminal attach <TERMINAL_ID>` needs the

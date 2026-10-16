@@ -490,15 +490,9 @@ MOTION_MODAL_MS = 160
 FOCUS_RING_WIDTH = 2
 FOCUS_RING_OFFSET = 2
 SURFACE_RADIUS = 8
-# Glyph fallback for UI text styles: the bundled interface/mono faces
-# lack the dingbats, geometric shapes, misc symbols and braille agents
-# emit (e.g. U+2733 U+25D0-U+25D3 U+2800-U+28FF), which render as tofu
-# without a loaded fallback. The family is registered via page.fonts;
-# styles pass list(TEXT_FONT_FALLBACK) as font_family_fallback (the
-# terminal lists the same family in its Dart fallback chain).
-# Deferred: design_system/__init__ imports tokens, which imports this
-# module; importing fonts only after the tables above exist keeps both
-# import orders working (see tokens.py).
+# Glyph fallback for UI text: the bundled faces lack the dingbats, shapes and braille agents emit.
+# Styles pass list(TEXT_FONT_FALLBACK) as font_family_fallback. Deferred import: design_system
+# imports tokens, which imports this module (see tokens.py).
 from relaydeck.client.components.design_system.fonts import FAMILY_SYMBOLS  # noqa: E402
 
 TEXT_FONT_FALLBACK: tuple[str, ...] = (FAMILY_SYMBOLS,)

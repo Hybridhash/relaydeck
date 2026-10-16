@@ -9,6 +9,7 @@ from typing import Any
 
 import flet as ft
 
+from relaydeck.client import open_timing
 from relaydeck.client.features.composer.domain import StagedMarker  # noqa: F401
 from relaydeck.client.features.terminal.events import spawn
 from relaydeck.client.features.terminal.input_modes import WORKFLOW_AGENT_COMPOSER
@@ -40,11 +41,8 @@ def use_row_metric(
     last_sample: Any = ft.use_ref(None)
 
     def sample_row_metric() -> None:
-        # Sampled only while the dock is closed (the host box is then
-        # independent of this budget) and locked per font after two
-        # consecutive agreeing samples, so a host/report pair that is
-        # momentarily out of step can neither be adopted nor feed back
-        # into the layout (flicker).
+        # Sample only while the dock is closed and lock per font after two agreeing samples, so a
+        # momentarily mismatched host/report pair cannot flicker the layout.
         if dock_open or row_metric[0] == font_size and row_metric[1] is not None:
             return
         measured = measured_row_height(host_height, window_size[1])
@@ -103,8 +101,9 @@ def use_staged_picture_reveal(
 
 OPEN_HOLD_S = 0.6
 OPEN_SETTLE_S = 0.4
-RESIZE_SETTLE_S = 0.15
-RESIZE_MAX_WAIT_S = 0.5
+RESIZE_SETTLE_S = 0.35
+RESIZE_MAX_WAIT_S = 1.0
+ACTIVATION_SETTLE_S = 0.35
 
 
 def use_open_hold(
@@ -115,6 +114,7 @@ def use_open_hold(
     settled: bool = True,
     input_phase: tuple[bool, bool] | None = None,
     binding: Any = None,
+    activation: int = 0,
 ) -> tuple[Callable[[int, int], Any], bool]:
     """One bounded publisher for opening and subsequent geometry bursts.
 
@@ -123,6 +123,8 @@ def use_open_hold(
     Caps start only after readiness and cannot be postponed by reports or input changes.
     Live bursts settle briefly without hiding the surface. Each nonempty burst retains
     one refresh, even if it returns to the starting grid; reports also request repaint.
+    A return to the app re-arms the hold like a binding change, with a shorter quiet window,
+    because the viewport reports a burst of stale intermediate sizes while it re-lays out.
     """
     held, set_held = ft.use_state(True)
     holding: Any = ft.use_ref(True)
@@ -130,16 +132,17 @@ def use_open_hold(
     timer: Any = ft.use_ref(None)
     fallback_timer: Any = ft.use_ref(None)
     previous: Any = ft.use_ref(None)
-    status: Any = ft.use_ref((active, settled, binding))
-    revision = ft.use_ref(0)
-    if status.current != (active, settled, binding):
+    status: Any = ft.use_ref((active, settled, binding, activation))
+    revision: Any = ft.use_ref(0)
+    if status.current != (active, settled, binding, activation):
         revision.current += 1
-        status.current = (active, settled, binding)
+        status.current = (active, settled, binding, activation)
     captured = revision.current
     alive = ft.use_ref(True)
     sender: Any = ft.use_ref(None)
     queued: Any = ft.use_ref(None)
     hide_on_report: Any = ft.use_ref(False)
+    returning: Any = ft.use_ref(False)
     forward_box: Any = ft.use_ref(None)  # a callable initial value would be called as a factory
     forward_box.current = forward
 
@@ -172,8 +175,13 @@ def use_open_hold(
             return
         disarm()
         if holding.current:
+            open_timing.mark_current(
+                "hold_released",
+                session=binding[0] if isinstance(binding, tuple) and binding else None,
+            )
             set_held(False)
         holding.current = False
+        returning.current = False
         latest, pending.current = pending.current, None
         if latest is not None and latest[0] == stamp:
             send(latest[1], cap_due)
@@ -210,12 +218,15 @@ def use_open_hold(
     ft.use_effect(lambda: None, dependencies=[], cleanup=dispose)
 
     def quiet_delay() -> float:
+        if returning.current:
+            return ACTIVATION_SETTLE_S
         return min(OPEN_SETTLE_S, OPEN_HOLD_S) if expected is not None else OPEN_HOLD_S
 
     def follow_activity() -> None:
-        before, previous.current = previous.current, (active, settled, binding)
+        before, previous.current = previous.current, (active, settled, binding, activation)
         if not active:
             holding.current = False
+            returning.current = False
             pending.current = None
             hide_on_report.current = False
             set_held(False)
@@ -227,19 +238,34 @@ def use_open_hold(
         if before is not None and (
             not before[0]
             or before[2] != binding
+            or before[3] != activation
             or before[1]
             and not settled
             and not holding.current
         ):
+            # A return alone re-settles geometry without covering the surface.
+            returning.current = (
+                before[3] != activation
+                and before[0]
+                and before[2] == binding
+                and not (before[1] and not settled and not holding.current)
+            )
             holding.current = True
             pending.current = None
-            hide_on_report.current = True
+            if not returning.current:
+                hide_on_report.current = True
+        if holding.current:
+            open_timing.mark_current(
+                "hold_armed", session=binding[0] if isinstance(binding, tuple) and binding else None
+            )
         if settled and holding.current:
             # A continuous report stream may postpone quiet, never bounded progress.
             arm_cap(OPEN_HOLD_S)
             arm(quiet_delay() if pending.current is not None else OPEN_HOLD_S)
 
-    ft.use_effect(follow_activity, dependencies=[active, settled, binding], cleanup=cancel_work)
+    ft.use_effect(
+        follow_activity, dependencies=[active, settled, binding, activation], cleanup=cancel_work
+    )
 
     def follow_input_phase() -> None:
         # Enabling native input/scroll needs a fresh quiet interval, but

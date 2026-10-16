@@ -28,8 +28,7 @@ Decisions (see ``patches/native-runtime-pins/README.md``):
 * Flutter: plain ``flet build``. Flet resolves ``$HOME/flutter/3.44.8`` and is
   never pointed at a patched SDK: the engine patch in
   ``patches/flutter-ios-pointer-patch`` fixes Flutter *web* on iOS WebKit and
-  has no effect on native apps. ``~/flutter`` is read, never edited. (The
-  untracked scratch launcher under ``temp/probes`` is not used.)
+  has no effect on native apps. ``~/flutter`` is read, never edited.
 * Template: the iOS 15 template patch is applied for iOS only; Android keeps
   Flet's stock template (the patch changes nothing there).
 * iOS simulator: no ``--arch``; all slices are required or Python native

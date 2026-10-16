@@ -475,6 +475,7 @@ class TerminalUIResumes:
                 if not self._lease_live(attempt):
                     session.require_ui_recovery()
                     return ResumeOutcome("incomplete", "lease_expired")
+                open_timing.mark_current("probe_sent", session=session)
                 probe = asyncio.create_task(term.rebind_resumed(timeout=timeout, current=verified))
                 shutdown = asyncio.create_task(closed.wait())
                 await asyncio.wait((probe, shutdown), return_when=asyncio.FIRST_COMPLETED)
@@ -509,6 +510,7 @@ class TerminalUIResumes:
                         )
                         if generation is not None:
                             term.verify_transport(generation)
+                        open_timing.mark_current("probe_verified", session=session)
                         timing = open_timing.of(session)
                         if timing is not None:
                             timing.mark("verified")

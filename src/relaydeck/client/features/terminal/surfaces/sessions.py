@@ -40,11 +40,8 @@ DRIVE_REFUSED_EXITED = "refused-exited"
 
 SEND_BLOCKED_IME = "blocked-ime-composing"
 
-# Bye details that prove the remote side ended the terminal (terminal exit,
-# distinct from detachment). The current gateway never emits these (gap in
-# the wire contract, reported); explicit client close is the proven exit
-# path. Reserved here so a future `exited`/`closed` control doc lands in
-# the terminal state instead of a reconnect loop.
+# Bye details that prove the remote ended the terminal. The gateway never emits them yet; reserved
+# so a future exit control lands in the terminal state, not a reconnect loop.
 EXIT_DETAILS = frozenset({"closed", "exited"})
 
 # Agent attach always takes upstream ownership: the agent surface

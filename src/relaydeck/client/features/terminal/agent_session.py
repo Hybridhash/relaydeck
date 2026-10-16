@@ -128,6 +128,7 @@ class AgentSession(TerminalSessionBase):
     # (set by the retained-session view before each render).
     auto_take_allowed: bool = False
     _PHASE_DISCONNECTED = AGENT_DISCONNECTED
+    _PHASE_CONFLICT = AGENT_CONFLICT
     _DISCONNECT_MESSAGE = AGENT_DISCONNECT_MESSAGE
     _PAUSE_MESSAGE = AGENT_PAUSE_MESSAGE
     _NOUN = "agent"
@@ -509,17 +510,17 @@ class AgentSession(TerminalSessionBase):
     def on_draft_change(self, text: str) -> None:
         if self._disposed:
             return
+        self.note_input()
         self._store.replace_draft(text)
         self._notify()
 
     async def on_send(self) -> str:
-        """The ONLY route to `store.send()`: IME composition blocks with
-        the store untouched (`SEND_BLOCKED_IME`); otherwise the store
-        sends and the tools-keys latch is driven. Disposed sessions
-        and auth-revoked sessions fail closed with the draft
-        preserved."""
+        """Only route to store.send(): IME composition blocks without mutation.
+        Disposed, revoked and fenced sessions preserve the draft.
+        Successful delivery synchronizes the tools-keys latch."""
         if self._disposed or self._auth_revoked or self.ui_input_fenced:
             return SEND_IGNORED
+        self.note_input()
         result = await gated_composer_send(self._store, self._sessions.ime)
         self._sessions.modes.sync_from_store()
         self._notify()
@@ -528,6 +529,7 @@ class AgentSession(TerminalSessionBase):
     async def on_confirm_blocked(self) -> bool:
         if self._disposed or self._auth_revoked or self.ui_input_fenced:
             return False
+        self.note_input()
         confirmed = await self._store.confirm_blocked_insert()
         self._sessions.modes.sync_from_store()
         self._notify()

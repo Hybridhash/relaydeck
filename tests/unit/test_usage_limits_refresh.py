@@ -169,17 +169,52 @@ def test_in_progress_shows_a_spinner_and_disables_the_button() -> None:
 def test_the_cooldown_disables_the_button_and_says_how_long() -> None:
     refresh = _refresh_row({**AVAILABLE, "cooldown_until_ms": NOW + 3 * MIN + 1})
     assert not refresh.enabled and not refresh.busy
-    assert refresh.note == "refresh in 4 min"
+    assert refresh.note == "next refresh in 4 min"
     soon = _refresh_row({**AVAILABLE, "cooldown_until_ms": NOW + 10_000})
-    assert soon.note == "refresh in 1 min"
+    assert soon.note == "next refresh in 1 min"
     past = _refresh_row({**AVAILABLE, "cooldown_until_ms": NOW - 1})
     assert past.enabled and past.note == ""
+
+
+def _attempt(ago_ms: int, result: str = "ok") -> dict[str, Any]:
+    return {"id": "a1", "finished_ms": NOW - ago_ms, "result": result}
+
+
+def test_a_paused_button_carries_the_countdown() -> None:
+    paused = _refresh_row({**AVAILABLE, "cooldown_until_ms": NOW + 3 * MIN + 1})
+    assert paused.cooldown_minutes == 4
+    last = _refresh_row({**AVAILABLE, "cooldown_until_ms": NOW + 10_000})
+    assert last.cooldown_minutes == 0
+    assert _refresh_row(AVAILABLE).cooldown_minutes is None
+    busy = _refresh_row({**AVAILABLE, "in_progress": True, "cooldown_until_ms": NOW + MIN})
+    assert busy.cooldown_minutes is None
+
+
+def test_a_recent_ok_read_inside_the_pause_says_when_and_when_next() -> None:
+    info = {**AVAILABLE, "cooldown_until_ms": NOW + 3 * MIN, "last_attempt": _attempt(2 * MIN)}
+    assert _refresh_row(info).note == "read 2 min ago · next refresh in 3 min"
+
+
+def test_a_read_under_a_minute_ago_says_just_now() -> None:
+    info = {**AVAILABLE, "cooldown_until_ms": NOW + 4 * MIN, "last_attempt": _attempt(20_000)}
+    assert _refresh_row(info).note == "read just now · next refresh in 4 min"
+
+
+def test_a_failed_or_missing_attempt_keeps_the_plain_pause_note() -> None:
+    failed = {
+        **AVAILABLE,
+        "cooldown_until_ms": NOW + 3 * MIN,
+        "last_attempt": _attempt(MIN, "parse"),
+    }
+    assert _refresh_row(failed).note == "next refresh in 3 min"
+    none = {**AVAILABLE, "cooldown_until_ms": NOW + 3 * MIN}
+    assert _refresh_row(none).note == "next refresh in 3 min"
 
 
 def test_a_cooldown_learnt_from_the_answer_counts_too() -> None:
     local = sm.RefreshLocal(sm.REFRESH_COOLDOWN, until_ms=NOW + 2 * MIN, at_ms=NOW)
     refresh = _refresh_row(AVAILABLE, local)
-    assert not refresh.enabled and refresh.note == "refresh in 2 min"
+    assert not refresh.enabled and refresh.note == "next refresh in 2 min"
 
 
 def test_a_failure_leaves_the_button_enabled_with_a_short_line() -> None:
@@ -287,3 +322,12 @@ def test_over_allowance_is_a_full_bar_and_over_plan() -> None:
     shown = _plan(page)["k1"].windows[0]
     assert shown.amount == "60 of 50 credits"
     assert shown.percent == "over plan" and shown.fraction == 1.0 and shown.role == "danger"
+
+
+def test_an_attention_failure_says_what_to_do() -> None:
+    refresh = _refresh_row(
+        AVAILABLE, sm.RefreshLocal(sm.REFRESH_FAILED, error="needs_attention", at_ms=NOW)
+    )
+    assert (
+        refresh.note == "needs attention on the Mac: finish its start-up or sign-in, then refresh"
+    )

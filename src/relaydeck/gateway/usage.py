@@ -166,6 +166,7 @@ class UsageService:
         limits_status: Callable[[], Mapping[str, Mapping[str, Any]]] | None = None,
         limits_refresh_status: Callable[[], Mapping[str, Mapping[str, Any]]] | None = None,
         request_limits_refresh: Callable[[str], RefreshDecision] | None = None,
+        on_usage_open: Callable[[], object] | None = None,
         hooks_dir: Path | None = None,
     ) -> None:
         self.store, self.config, self.host_id, self.clock = store, config, host_id, clock
@@ -173,6 +174,7 @@ class UsageService:
         self._limits_status = limits_status
         self._limits_refresh_status = limits_refresh_status
         self.request_limits_refresh = request_limits_refresh
+        self.on_usage_open = on_usage_open
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="usage-query")
         # One worker computes at a time. Identical requests share one computation (`_inflight`);
         # different ones wait their turn for up to `wait_s` seconds, then get `usage_busy`.
@@ -327,6 +329,9 @@ class UsageService:
             {"date": day, "label": label} for day, label in self.store.prices.snapshot_labels
         ]
         body["kinds"] = self._metadata(now)
+        activity = self.store.kind_activity(query.host_id)
+        for entry in body["kinds"]:
+            entry["last_activity_ms"] = activity.get(entry["kind"])
         present = {row["kind"] for row in body["coverage"]}
         body["coverage"].extend(
             {
@@ -602,6 +607,12 @@ def install(
         service = state.usage
         if service is None or service.host_id != host_id:
             return failure("usage_disabled", 404)
+        if service.on_usage_open is not None:
+            # The scheduler throttles this itself; a failure here never fails the page.
+            try:
+                await asyncio.to_thread(service.on_usage_open)
+            except Exception:
+                LOG.warning("usage_auto_refresh_check_failed")
         try:
             query, selector = parse_query(request, host_id, service.config.timezone, state.now_ms())
         except (ValueError, KeyError, TypeError):

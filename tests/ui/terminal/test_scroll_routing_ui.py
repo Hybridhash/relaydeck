@@ -316,3 +316,90 @@ def test_native_buffer_change_invalidates_pending_selection_and_old_control_scro
             await session.dispose()
 
     run(scenario())
+
+
+def test_wheel_block_drops_stale_reports_until_ack() -> None:
+    async def scenario() -> None:
+        app, session, socket, channel = await _app(False, "compact")
+        try:
+            term = session.current_term
+            await _view(app, channel, alt=True, mouse=True)
+            channel.handler(protocol.encode_input(b"\x1b[<64;12;3M", protocol.ORIGIN_MOUSE))
+            await app.settle()
+            assert _inputs(socket) == [b"\x1b[<64;12;3M"]
+            # A server-side key lands: later wheel reports left the
+            # widget before it saw the cancel, so they are stale.
+            channel.handler(protocol.encode_scroll_cancelled(0))
+            await app.settle()
+            term.cancel_scroll()
+            channel.handler(protocol.encode_input(b"\x1b[<65;12;3M", protocol.ORIGIN_MOUSE))
+            await app.settle()
+            assert _inputs(socket) == [b"\x1b[<64;12;3M"]
+            # Explicit arrow keys are fresh input, never stale scroll.
+            channel.handler(protocol.encode_input(b"\x1b[A", protocol.ORIGIN_KEY))
+            await app.settle()
+            assert _inputs(socket)[-1] == b"\x1b[A"
+            # The widget ack releases the block; wheels flow again.
+            channel.handler(protocol.encode_scroll_cancelled(1))
+            await app.settle()
+            channel.handler(protocol.encode_input(b"\x1b[<65;12;3M", protocol.ORIGIN_MOUSE))
+            await app.settle()
+            assert _inputs(socket)[-1] == b"\x1b[<65;12;3M"
+        finally:
+            await session.dispose()
+
+    run(scenario())
+
+
+@pytest.mark.parametrize("combined", [True, False])
+def test_stale_wheel_received_before_ack_drops(combined: bool) -> None:
+    async def scenario() -> None:
+        app, session, socket, channel = await _app(False, "compact")
+        try:
+            await _view(app, channel, alt=True, mouse=True)
+            channel.handler(protocol.encode_scroll_cancelled(0))  # viewer acks
+            await app.settle()
+            assert await session.press_key("enter")
+            before = list(_inputs(socket))
+            wheel = protocol.encode_input(b"\x1b[<64;12;3M", protocol.ORIGIN_MOUSE)
+            ack = protocol.encode_scroll_cancelled(1)
+            if combined:
+                channel.handler(wheel + ack)
+            else:
+                channel.handler(wheel)
+                channel.handler(ack)
+            await app.settle()
+            assert _inputs(socket) == before
+            # A fresh wheel after the ack flows again.
+            channel.handler(protocol.encode_input(b"\x1b[<64;12;3M", protocol.ORIGIN_MOUSE))
+            await app.settle()
+            assert _inputs(socket)[-1] == b"\x1b[<64;12;3M"
+        finally:
+            await session.dispose()
+
+    run(scenario())
+
+
+def test_wheel_accepted_before_key_drops_after_ack() -> None:
+    async def scenario() -> None:
+        app, session, socket, channel = await _app(False, "compact")
+        try:
+            await _view(app, channel, alt=True, mouse=True)
+            channel.handler(protocol.encode_scroll_cancelled(0))  # viewer acks
+            await app.settle()
+            # Accepted now; its callback is queued but has not run.
+            channel.handler(protocol.encode_input(b"\x1b[<64;12;3M", protocol.ORIGIN_MOUSE))
+            # The key lands (cancel issued) and the viewer acks before
+            # the queued wheel callback reaches the writer.
+            assert await session.press_key("enter")
+            channel.handler(protocol.encode_scroll_cancelled(1))
+            await app.settle()
+            assert b"\x1b[<64;12;3M" not in _inputs(socket)
+            # A fresh wheel after the cancel boundary flows again.
+            channel.handler(protocol.encode_input(b"\x1b[<64;12;3M", protocol.ORIGIN_MOUSE))
+            await app.settle()
+            assert _inputs(socket)[-1] == b"\x1b[<64;12;3M"
+        finally:
+            await session.dispose()
+
+    run(scenario())

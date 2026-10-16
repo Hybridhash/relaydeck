@@ -212,7 +212,10 @@ def test_sdk_patch_builds_an_isolated_copy_and_leaves_the_source_alone(tmp_path:
 def test_repair_markers_use_calibrated_counts() -> None:
     module = _manifest()
     patched = (
-        '"touchend" ' * 4 + '"touchcancel" ' * 2 + '"abort" ' * 3 + '"flet_reconnect_merge_rd1"'
+        '"touchend" ' * 4
+        + '"touchcancel" ' * 2
+        + '"abort" ' * 3
+        + '"flet_reconnect_merge_rd1" "flet_reconnect_wake_rd1"'
     )
     pristine = '"touchend" ' * 3 + '"touchcancel" ' + '"abort"'
     assert module.markers_ok(module.repair_markers(patched))
@@ -227,7 +230,10 @@ def test_check_markers_cli_gates_the_bundle(
     module = _manifest()
     good = tmp_path / "good.js"
     good.write_text(
-        '"touchend" ' * 4 + '"touchcancel" ' * 2 + '"abort" ' * 3 + '"flet_reconnect_merge_rd1"'
+        '"touchend" ' * 4
+        + '"touchcancel" ' * 2
+        + '"abort" ' * 3
+        + '"flet_reconnect_merge_rd1" "flet_reconnect_wake_rd1"'
     )
     bad = tmp_path / "bad.js"
     bad.write_text('"touchend" "touchcancel" "abort"')

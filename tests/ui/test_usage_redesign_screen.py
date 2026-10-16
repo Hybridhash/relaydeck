@@ -14,6 +14,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 import flet as ft
+import pytest
 
 from relaydeck.client.features.a11y.focus import iter_controls
 from relaydeck.client.features.usage.api import UsageQuery
@@ -31,6 +32,12 @@ EMPTY = {
     "output": 0,
     "reasoning": 0,
 }
+
+
+@pytest.fixture(autouse=True)
+def _fixture_clock(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Rendering must use the synthetic readings' clock, not time spent running other tests.
+    monkeypatch.setattr("relaydeck.client.features.usage.panel._now_ms", lambda: NOW_MS)
 
 
 def row(

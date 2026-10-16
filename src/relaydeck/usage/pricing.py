@@ -23,10 +23,19 @@ class PriceTable:
     provenance: tuple[str, ...] = ()  # aligned with rates; actual pin date, not applicability
     snapshot_sources: tuple[tuple[str, str], ...] = ()
     snapshot_labels: tuple[tuple[str, str], ...] = ()
+    # (logged model, priced model): explicit only, each target has a rate in this table.
+    aliases: tuple[tuple[str, str], ...] = ()
 
     @property
     def price_table_date(self) -> str | None:
         return max((day for day, _ in self.snapshot_sources), default=None)
+
+    def _eligible(self, event_day: str, model: str | None) -> list[tuple[int, PriceRate]]:
+        return [
+            (i, r)
+            for i, r in enumerate(self.rates)
+            if r.model == model and r.effective_from <= event_day
+        ]
 
     def cost_micro_usd(self, event_day: str, model: str | None, counters: Counters) -> int | None:
         return self.estimate(event_day, model, counters)[0]
@@ -38,11 +47,12 @@ class PriceTable:
             # Genuinely empty (every counter 0): nothing to price, so no rate lookup and no price
             # snapshot. Any nonzero count with an unknown price still returns None below.
             return 0, None
-        eligible = [
-            (i, r)
-            for i, r in enumerate(self.rates)
-            if r.model == model and r.effective_from <= event_day
-        ]
+        eligible = self._eligible(event_day, model)
+        if not eligible:
+            # No exact rate: only an explicit alias may stand in, never a guessed match.
+            target = dict(self.aliases).get(model) if model is not None else None
+            if target is not None:
+                eligible = self._eligible(event_day, target)
         if not eligible or counters.cache_write_unknown:
             return None, None
         index, rate = max(eligible, key=lambda pair: pair[1].effective_from)
@@ -102,7 +112,57 @@ def load_price_table(path: Path | tuple[Path, ...]) -> PriceTable:
     labels = tuple(sorted({s for t in tables for s in t.snapshot_labels}))
     if len({d for d, _ in labels}) != len(labels):
         raise PriceTableError()
-    return PriceTable(tuple(r for r, _ in entries), tuple(p for _, p in entries), sources, labels)
+    rates = tuple(r for r, _ in entries)
+    return PriceTable(
+        rates,
+        tuple(p for _, p in entries),
+        sources,
+        labels,
+        _resolve_aliases(rates, paths),
+    )
+
+
+PACKAGED_ALIASES = Path(__file__).with_name("price_aliases.toml")
+USER_ALIASES = "aliases.toml"
+
+
+def _read_aliases(path: Path) -> dict[str, str]:
+    """An `[aliases]` table of model -> model. A malformed file contributes nothing."""
+    try:
+        with path.open("rb") as stream:
+            data = stream.read(64 * 1024 + 1)
+        if len(data) > 64 * 1024:
+            return {}
+        table = tomllib.loads(data.decode("utf-8")).get("aliases", {})
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(table, dict):
+        return {}
+    return {
+        key: value
+        for key, value in table.items()
+        if isinstance(value, str)
+        and 0 < len(key) <= MAX_MODEL_CHARS
+        and 0 < len(value) <= MAX_MODEL_CHARS
+    }
+
+
+def _resolve_aliases(
+    rates: tuple[PriceRate, ...], pins: tuple[Path, ...]
+) -> tuple[tuple[str, str], ...]:
+    """Packaged aliases, extended by an `aliases.toml` beside any pin. An alias is kept only
+    when its target is priced here and its own name is not, so an exact rate always wins."""
+    merged = _read_aliases(PACKAGED_ALIASES)
+    for directory in dict.fromkeys(pin.parent for pin in pins):
+        merged.update(_read_aliases(directory / USER_ALIASES))
+    priced = {r.model for r in rates}
+    return tuple(
+        sorted(
+            (name, target)
+            for name, target in merged.items()
+            if target in priced and name not in priced
+        )
+    )
 
 
 def _load_pin(path: Path) -> PriceTable:

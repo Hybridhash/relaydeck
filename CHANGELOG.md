@@ -3,6 +3,28 @@
 User-visible changes by release. Versions follow the package version
 (`relaydeck --version`).
 
+## 0.2.1
+
+- **Returning to the app**: terminals reconnect on their own when the app comes back to the
+  foreground, and the first key or tap after a pause wakes the terminal. A brief switch away and
+  back leaves the terminal's size alone.
+- **Phone keyboard**: keyboard and composer size changes are coalesced, reducing repeated terminal
+  redraws.
+- **Scrolling**: agent screens scroll at a steady pace, a flick coasts, and pressing a key stops a
+  scroll that is still moving.
+- **Pairing**: pairing completes even when you leave the app before approving on the Mac.
+- **Sign-out**: a revoked sign-in stays signed out, even while a sync is still running.
+- **Usage**:
+  - Readings that come from a tool's usage screen refresh on their own after you use the tool.
+  - A reading is marked stale only when it may be wrong.
+  - A paused refresh shows a countdown and when the reading was taken.
+  - A temporary read failure keeps the last reading for a known account. Manual refreshes show
+    more specific failure messages.
+- **Diagnostics**: the companion log times each terminal open step by step. The timing lines
+  never include terminal content.
+- **CI**: the Python and Flutter test suites, type check, secret scan and licence inventory run on
+  each push. The licence inventory covers every declared Dart dependency.
+
 ## 0.2.0
 
 - **Install and setup**: `relaydeck setup` creates the private config and checks Herdr and

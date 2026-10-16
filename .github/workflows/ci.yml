@@ -1,29 +1,17 @@
-# RelayDeck CI.
-#
-# Stages: locked dependency resolution; format/lint; static types;
-# unit tests; contract tests; integration + security tests; UI scenario
-# tests (repo pytest harness -- there is no `flet test web` command);
-# secret scan; license inventory; web + Android build jobs.
-#
-# Stages NOT run here: dynamic-web browser tests need an explicit
-# browser harness (none installed) and device tests need Android
-# infrastructure (none available). The UI
-# suite below is headless-only until that infrastructure exists.
-#
-# Toolchain pins: Flet 1.0.3, Python 3.13, Flutter 3.44.8.
-# Action pins below are exact release tags.
-# Build jobs produce UNSIGNED / test packaging only. Production signing
-# (--android-signing-*) and any store upload are explicit manual owner
-# operations (see release.yml) and must never be added here.
-#
-# `flet build web` produces a STATIC Pyodide artifact and is NOT the
-# dynamic deployment; the web job below is a packaging smoke check only.
+# RelayDeck CI: locked install, lint, format, static types, the Python and Flutter test suites,
+# secret scan and licence inventory on each push. Tests run on macOS because the companion is a Mac
+# service.
+# Browser and device tests need hardware CI does not have.
+# Packaging jobs build unsigned artifacts on manual dispatch only; signing and store uploads
+# are manual owner steps (see release.yml) and never belong here.
+# Pins: Flet 1.0.3, Python 3.13, Flutter 3.44.8; actions use exact release tags.
 
 name: CI
 
 on:
   push:
   pull_request:
+  workflow_dispatch:
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -37,8 +25,8 @@ env:
 jobs:
   checks:
     name: lint-type-test-scan
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
+    runs-on: macos-15
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v7.0.1
 
@@ -53,7 +41,7 @@ jobs:
           version: ${{ env.UV_VERSION }}
 
       - name: Locked dependency resolution
-        run: uv sync --locked --group dev --group gateway --group web
+        run: uv sync --locked --extra companion --group dev
 
       - name: Pinned environment check
         run: uv run python scripts/verify_versions.py
@@ -65,18 +53,15 @@ jobs:
         run: uv run ruff format --check --no-cache .
 
       - name: Static types
-        run: uv run mypy src tests
+        run: uv run mypy src
 
-      - name: Unit tests
-        run: uv run pytest tests/unit -q
+      - name: Unit and architecture tests
+        run: uv run pytest tests/unit tests/architecture -q
 
-      - name: Contract tests
-        run: uv run pytest tests/contracts -q
+      - name: Contract, integration and security tests
+        run: uv run pytest tests/contracts tests/integration tests/security -q
 
-      - name: Integration and security tests
-        run: uv run pytest tests/integration tests/security -q
-
-      - name: UI scenario tests
+      - name: UI scenario tests (headless)
         run: uv run pytest tests/ui -q
 
       - name: Secret scan
@@ -92,8 +77,38 @@ jobs:
           path: sbom.json
           retention-days: 30
 
+  flutter-tests:
+    name: flutter extension and patch tests
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2.23.0
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
+
+      - name: Terminal extension tests
+        working-directory: extensions/terminal/src/flutter/relaydeck_terminal
+        run: |
+          flutter pub get --enforce-lockfile
+          flutter test
+          flutter test --no-pub "$GITHUB_WORKSPACE/tests/native/flet_paste_menu_test.dart"
+
+      - name: Notifications extension tests
+        working-directory: extensions/notifications/src/flutter/relaydeck_notifications
+        run: flutter test
+
+      - name: Reconnect patch tests (pristine Flet plus the shipped diff)
+        env:
+          FLUTTER: flutter
+        run: bash patches/flet-reconnect-merge-patch/apply.sh --test
+
   build-web:
     name: web packaging smoke (static Pyodide, NOT dynamic deploy)
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     needs: [checks]
@@ -117,7 +132,7 @@ jobs:
           cache: true
 
       - name: Locked dependency resolution
-        run: uv sync --locked --group dev --group gateway --group web
+        run: uv sync --locked --extra companion --group dev
 
       - name: Build static web artifact (smoke only)
         run: uv run flet build web --yes
@@ -131,6 +146,7 @@ jobs:
 
   build-android:
     name: android unsigned packaging (AAB)
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     needs: [checks]
@@ -163,7 +179,7 @@ jobs:
           cache: true
 
       - name: Locked dependency resolution
-        run: uv sync --locked --group dev --group gateway --group web
+        run: uv sync --locked --extra companion --group dev
 
       - name: Build unsigned AAB (test packaging only)
         # No --android-signing-* flags: this is unsigned/test packaging.

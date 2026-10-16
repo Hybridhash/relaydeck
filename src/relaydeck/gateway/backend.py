@@ -254,11 +254,8 @@ class Backend(ABC):
     @abstractmethod
     def revoke_leases_host(self, host_id: str) -> tuple[str, ...]: ...
 
-    # -- journal/tunnel/live-push seam (concrete defaults) ------
-    # JournalBackend overrides these; FakeBackend overrides the fanout
-    # and attachment lookups so the live-push and tunnel paths behave
-    # identically on both backends. Defaults fail closed (no fanout, no
-    # outbox, no ack/result ingestion).
+    # Journal/tunnel/live-push seam: defaults fail closed (no fanout, outbox or ack/result
+    # ingestion); concrete backends override.
 
     def fanout_for(self, attachment_id: str) -> StreamFanout | None:
         """Live ring fanout for one attachment, if the backend keeps one."""

@@ -548,11 +548,8 @@ class TerminalSocket(ABC):
     async def close(self) -> None: ...
 
 
-# websockets' default close handshake waits 10 s. After a stream ends with an
-# unread backlog (gap/reset/bye) nothing calls recv(), the library's bounded
-# queue fills and the peer's close frame is never read, so every close() stalls
-# the full 10 s -- long enough for a retained watch job to straddle an explicit
-# Take over. Closing is best-effort, so bound it.
+# The default close handshake waits 10 s, and after an unread backlog the peer's close frame is
+# never read, so every close() stalls that long. Closing is best-effort, so bound it.
 WS_CLOSE_TIMEOUT_S = 1.0
 
 

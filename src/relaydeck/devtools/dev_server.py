@@ -86,6 +86,7 @@ class DemoBackend(FakeBackend):
         *,
         takeover: bool,
         owner_label: str = "",
+        expected_control_revision: str | None = None,
     ) -> tuple[Any, tuple[str, ...]]:
         attachment, displaced = super().create_attachment(
             host_id,
@@ -95,6 +96,7 @@ class DemoBackend(FakeBackend):
             device_id,
             takeover=takeover,
             owner_label=owner_label,
+            expected_control_revision=expected_control_revision,
         )
         try:
             self.publish_output(attachment.attachment_id, attachment.epoch, DEMO_GREETING)

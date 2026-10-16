@@ -30,6 +30,7 @@ from relaydeck.client.features.terminal.session.base import TerminalSessionBase
 from relaydeck.client.features.terminal.surfaces import (
     DetailSessions,
 )
+from relaydeck.contracts.terminal_ownership import is_control_revision
 
 SHELL_CONNECTING = "connecting"
 SHELL_LIVE = "live"
@@ -59,6 +60,7 @@ class ShellViewState:
     notice: str = ""
     confirm_close: bool = False
     keyboard: str = "text"
+    reconnecting: bool = False
 
 
 class ShellSession(TerminalSessionBase):
@@ -69,6 +71,7 @@ class ShellSession(TerminalSessionBase):
     _PHASE_LIVE = SHELL_LIVE
     _PHASE_EXITED = SHELL_EXITED
     _PHASE_DISCONNECTED = SHELL_DISCONNECTED
+    _PHASE_CONFLICT = SHELL_CONFLICT
     _DISCONNECT_MESSAGE = DISCONNECT_MESSAGE
     _PAUSE_MESSAGE = PAUSE_MESSAGE
     _NOUN = "shell"
@@ -128,6 +131,7 @@ class ShellSession(TerminalSessionBase):
             notice=self._notice,
             confirm_close=self._confirm_close,
             keyboard=keyboard,
+            reconnecting=self._recovering,
         )
 
     # -- lifecycle ----------------------------------------------------------
@@ -158,6 +162,8 @@ class ShellSession(TerminalSessionBase):
                 self._host_id, terminal_id, "shell", False, cols, rows
             )
         except ShellOpError as exc:
+            if not self._operation_current(operation):
+                return self._phase
             if exc.code == "lease_conflict":
                 self._owner_label = owner_display_from_details(exc.details)
                 self._phase = SHELL_CONFLICT
@@ -169,9 +175,12 @@ class ShellSession(TerminalSessionBase):
             return self._phase
         if not self._operation_current(operation):
             return self._phase
+        bound: dict[str, Any] = {}
         try:
-            lease = await self._ops.acquire_lease(attachment.attachment_id, "control")
+            lease = await self._ops.acquire_lease(attachment.attachment_id, "control", **bound)
         except ShellOpError as exc:
+            if not self._operation_current(operation):
+                return self._phase
             if exc.code == "lease_conflict":
                 self._owner_label = owner_display_from_details(exc.details)
                 self._phase = SHELL_CONFLICT
@@ -187,6 +196,8 @@ class ShellSession(TerminalSessionBase):
         self._attachment = attachment
         self._lease = lease
         controller = self._spawn_controller(lease)
+        if self._automatic:
+            controller.fence_ui_input(True)  # input waits for native verification
         self._controller = controller
         self._fresh_controller_state()
         if self._sessions.bound:
@@ -198,6 +209,9 @@ class ShellSession(TerminalSessionBase):
         try:
             ticket = await self._ops.terminal_ticket(lease.lease_id)
         except ShellOpError as exc:
+            if not self._operation_current(operation):
+                await self._release_stale_lease(lease)
+                return self._phase
             # Name the failure; the lease stays held so UI resume can re-ticket it.
             diagnostics_logger().info("ticket_failed code=%s", exc.code)
             self._notice = f"Could not stream ({exc.code})."
@@ -217,7 +231,7 @@ class ShellSession(TerminalSessionBase):
         self._notify()
         return self._phase
 
-    async def take_over(self) -> str:
+    async def take_over(self, *, expected_control_revision: str | None = None) -> str:
         """Explicit Take Over: attach with takeover (generation bump +
         epoch rotation server-side), take a fresh control lease, replace
         the controller, and retarget sessions with IME/deduper resets. A
@@ -236,17 +250,38 @@ class ShellSession(TerminalSessionBase):
         if not self._operation_current(operation):
             return self._phase
         try:
-            attachment = await self._ops.attach(self._host_id, self._terminal_id, "shell", True)
+            attachment = await self._ops.attach(
+                self._host_id,
+                self._terminal_id,
+                "shell",
+                True,
+                expected_control_revision=expected_control_revision,
+            )
         except ShellOpError as exc:
+            if not self._operation_current(operation):
+                return self._phase
+            if expected_control_revision is not None and exc.code == "lease_conflict":
+                # The holder changed since it was read: stay a watcher, never force.
+                self._owner_label = owner_display_from_details(exc.details)
+                self._phase = SHELL_CONFLICT
+                self._notify()
+                return self._phase
             self._notice = f"Take over failed ({exc.code})."
             self._phase = SHELL_DISCONNECTED
             self._notify()
             return self._phase
         if not self._operation_current(operation):
             return self._phase
+        bound: dict[str, Any] = (
+            {"expected_generation": attachment.generation}
+            if expected_control_revision is not None
+            else {}
+        )
         try:
-            lease = await self._ops.acquire_lease(attachment.attachment_id, "control")
+            lease = await self._ops.acquire_lease(attachment.attachment_id, "control", **bound)
         except ShellOpError as exc:
+            if not self._operation_current(operation):
+                return self._phase
             if exc.code == "lease_conflict":
                 self._owner_label = owner_display_from_details(exc.details)
                 self._phase = SHELL_CONFLICT
@@ -262,6 +297,8 @@ class ShellSession(TerminalSessionBase):
         self._attachment = attachment
         self._lease = lease
         controller = self._spawn_controller(lease)
+        if self._automatic:
+            controller.fence_ui_input(True)  # input waits for native verification
         self._controller = controller
         self._fresh_controller_state()
         stale = self._sessions.retarget(controller)
@@ -269,6 +306,9 @@ class ShellSession(TerminalSessionBase):
         try:
             ticket = await self._ops.terminal_ticket(lease.lease_id)
         except ShellOpError as exc:
+            if not self._operation_current(operation):
+                await self._release_stale_lease(lease)
+                return self._phase
             # Name the failure; the lease stays held so UI resume can re-ticket it.
             diagnostics_logger().info("ticket_failed code=%s", exc.code)
             self._notice = f"Could not stream ({exc.code})."
@@ -316,6 +356,8 @@ class ShellSession(TerminalSessionBase):
                 owner = exc.details.get("owner")
                 device = owner.get("device_id", "") if isinstance(owner, dict) else ""
                 if device and device == self._device_id:
+                    if self._automatic:
+                        return await self._retake_if_unchanged(operation)
                     phase = await self.take_over()
                     if phase == SHELL_LIVE:
                         self._notice = SELF_TAKEOVER_NOTICE
@@ -334,9 +376,12 @@ class ShellSession(TerminalSessionBase):
         # Fresh attach (no live attachment: closed elsewhere or expired
         # away): stream it as a new live attachment.
         previous = self._attachment
+        bound = {"expected_generation": attachment.generation} if self._automatic else {}
         try:
-            lease = await self._ops.acquire_lease(attachment.attachment_id, "control")
+            lease = await self._ops.acquire_lease(attachment.attachment_id, "control", **bound)
         except ShellOpError as exc:
+            if not self._operation_current(operation):
+                return self._phase
             if exc.code == "lease_conflict":
                 self._owner_label = owner_display_from_details(exc.details)
                 self._phase = SHELL_CONFLICT
@@ -352,6 +397,8 @@ class ShellSession(TerminalSessionBase):
         self._attachment = attachment
         self._lease = lease
         controller = self._spawn_controller(lease)
+        if self._automatic:
+            controller.fence_ui_input(True)  # input waits for native verification
         self._controller = controller
         self._fresh_controller_state()
         stale = self._sessions.retarget(controller)
@@ -360,16 +407,16 @@ class ShellSession(TerminalSessionBase):
         if previous is not None and (
             attachment.attachment_id != previous.attachment_id or attachment.generation == 1
         ):
-            # The pane we held ended elsewhere; this attachment is a NEW
-            # terminal, not a continuation. Disclose it (this wins over a
-            # dropped-review notice: misattributed bytes are the worse lie)
-            # and clear the log: the old bytes belonged to the ended pane
-            # and must never read as the new terminal's prefix.
+            # A different terminal, not a continuation: disclose it (wins over a dropped-review
+            # notice) and clear the log so old bytes never read as the new terminal's prefix.
             self.output_log.clear()
             self._notice = FRESH_ATTACH_NOTICE
         try:
             ticket = await self._ops.terminal_ticket(lease.lease_id)
         except ShellOpError as exc:
+            if not self._operation_current(operation):
+                await self._release_stale_lease(lease)
+                return self._phase
             # Name the failure; the lease stays held so UI resume can re-ticket it.
             diagnostics_logger().info("ticket_failed code=%s", exc.code)
             self._notice = f"Could not stream ({exc.code})."
@@ -388,6 +435,34 @@ class ShellSession(TerminalSessionBase):
         self._restart_renewal()
         self._notify()
         return self._phase
+
+    async def _retake_if_unchanged(self, operation: int) -> str:
+        """Automatic recovery of this device's own released terminal.
+
+        Only the observed holder revision may be taken; a changed or unknown holder stays a
+        conflict, because forced takeover belongs to the explicit user action.
+        """
+        try:
+            state = await self._ops.control_holder(self._host_id, self._terminal_id)
+        except ShellOpError:
+            state = {}
+        revision = state.get("control_revision")
+        held, mine = state.get("held"), state.get("mine")
+        if not self._operation_current(operation):
+            return self._phase
+        if not isinstance(held, bool) or not isinstance(mine, bool) or (held and not mine):
+            self._phase = SHELL_CONFLICT
+            self._notify()
+            return self._phase
+        if not is_control_revision(revision):
+            self._phase = SHELL_CONFLICT
+            self._notify()
+            return self._phase
+        phase = await self.take_over(expected_control_revision=revision)
+        if phase == SHELL_LIVE:
+            self._notice = SELF_TAKEOVER_NOTICE
+            self._notify()
+        return phase
 
     # -- explicit close (terminal exit) ---------------------------------------
     def request_close(self) -> None:
@@ -425,11 +500,6 @@ class ShellSession(TerminalSessionBase):
         self._enter_exited(EXIT_MESSAGE)
         return self._phase
 
-    # -- direct input (shell: always PTY, never a draft) ------------------------
-    # -- paste ------------------------------------------------------------------
-    # -- selection + copy ---------------------------------------------------------
-    # -- resize (controller only) ---------------------------------------------------
-    # -- keyboard mode ---------------------------------------------------------------
     def set_keyboard(self, keyboard: str) -> None:
         """Text/Keys is an independent choice; shells bind no
         composer store, so no reset rule fires and no draft exists."""

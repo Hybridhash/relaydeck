@@ -136,13 +136,9 @@ def use_route_effects(
     """Converge the controller selection and the sync host toward the route."""
 
     def apply_selection() -> None:
-        # Converge the controller-owned domain selection toward the
-        # route (state ownership): selecting through the
-        # controller keeps later sync emissions from wiping a view-
-        # local selection and emptying the detail under an unchanged
-        # route. Revoked stays cleared; route keys that no
-        # longer exist in inventory (revoked/closed/deep-link-before-
-        # sync) converge to cleared and re-select when data lands.
+        # Converge the controller-owned selection toward the route so later sync emissions do not
+        # wipe it. Revoked stays cleared; route keys missing from inventory clear and re-select on
+        # data.
         if app_state.revoked:
             return
         current = app_state.selection
@@ -173,11 +169,8 @@ def use_route_effects(
     ft.use_effect(apply_selection, dependencies=[destination, selection, app_state])
 
     def resolve_route_host() -> None:
-        # Browser back/forward (and initial agent/terminal deep links
-        # once inventory resolves) drive the authoritative sync host
-        # exactly like navigate() clicks do; clicks stay the fast path
-        # and this effect is their no-op when they already set it. The
-        # guard makes re-emits idempotent (no resync loop).
+        # Browser back/forward and deep links drive the sync host like clicks do; the guard keeps
+        # re-emits idempotent.
         known = (
             (destination == "settings" and selection in app_state.inventory.hosts)
             or (destination == "agents" and selection in app_state.inventory.agents)

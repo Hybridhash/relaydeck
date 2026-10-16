@@ -21,6 +21,7 @@ from relaydeck.client.components.design_system import tokens as T
 from relaydeck.client.features.inventory.routing import RouteBridge
 from relaydeck.client.features.sync.transport import TransportError
 from relaydeck.client.features.terminal.agent_session import AgentSession
+from relaydeck.client.features.terminal.foreground_recovery import ForegroundRecovery
 from relaydeck.client.features.terminal.models import NoticeModel
 from relaydeck.client.resources import AppResources
 from relaydeck.domain import reducers
@@ -174,6 +175,9 @@ def test_a_verified_terminal_with_live_metadata_is_green(monkeypatch: Any) -> No
 
 
 def test_a_terminal_recovery_notice_is_the_dot_text_and_never_green(monkeypatch: Any) -> None:
+    # The notice is the state before any automatic reconnect; that has its own tests.
+    monkeypatch.setattr(ForegroundRecovery, "note", lambda self, entry: None)
+
     async def scenario() -> None:
         app, _controller, session = await _verified_root(monkeypatch)
         try:

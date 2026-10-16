@@ -66,6 +66,7 @@ class SessionFactory:
     device_id: str
     observe_command: Callable[[str, str], Awaitable[dict[str, Any]]] | None = None
     draft_store: CredentialStore | None = None
+    note_input: Callable[[], None] = lambda: None
 
     def _socket_factory_for(self, box: dict[str, Any]) -> Callable[[str], TerminalSocket]:
         def factory(ticket: str) -> TerminalSocket:
@@ -99,6 +100,7 @@ class SessionFactory:
             renew_lease=self.renew_lease,
         )
         box["session"] = session
+        session.note_input = self.note_input
         return session
 
     def make_agent(
@@ -130,4 +132,5 @@ class SessionFactory:
             renew_lease=self.renew_lease,
         )
         box["session"] = session
+        session.note_input = self.note_input
         return session

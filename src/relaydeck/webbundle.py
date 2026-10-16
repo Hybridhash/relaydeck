@@ -34,13 +34,11 @@ MAX_BYTES = 1 << 30
 MANIFEST_SUFFIX = ".build-manifest.json"
 INSTALLED_NAME = "installed.json"
 
-# Compiled-output evidence that a repair is present. String literals survive
-# minification; counts were calibrated on real bundles: pristine engine /
-# file_picker gives touchend 3, touchcancel 1, abort 1; bundles with the
-# PR 189608 backport give touchend 4, touchcancel 2; with RD1 file_picker
-# abort 3 (FileReader error/abort listeners).
+# Compiled-output evidence of a repair. String literals survive minification; counts were calibrated
+# on real bundles (pristine: touchend 3, touchcancel 1, abort 1; with the backport: touchend 4,
+# touchcancel 2; with the file_picker repair: abort 3).
 REPAIR_MARKERS: dict[str, dict[str, int]] = {
-    "flet-reconnect-merge-patch": {"flet_reconnect_merge_rd1": 1},
+    "flet-reconnect-merge-patch": {"flet_reconnect_merge_rd1": 1, "flet_reconnect_wake_rd1": 1},
     "flutter-ios-pointer-patch": {"touchend": 4, "touchcancel": 2},
     "flutter-file-upload-patch": {"abort": 3},
 }

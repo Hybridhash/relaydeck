@@ -567,6 +567,7 @@ class CompanionRuntime:
             limits_status=(scheduler.status if scheduler is not None else None),
             limits_refresh_status=(scheduler.refresh_status if scheduler is not None else None),
             request_limits_refresh=request_refresh if scheduler is not None else None,
+            on_usage_open=scheduler.request_auto_on_open if scheduler is not None else None,
         )
         self.gateway.usage.check_setup()
 
@@ -614,6 +615,7 @@ class CompanionRuntime:
                 command=block.command,
                 on_demand=block.on_demand,
                 tui=bundle,
+                auto_interval_ms=block.auto_interval_seconds * 1000 if block.on_demand else 0,
             )
             providers[key] = provider
         if skipped:

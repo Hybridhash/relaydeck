@@ -46,6 +46,18 @@ LABELS = re.compile(
     r"|(?<![A-Za-z0-9])round [0-9]+(?![A-Za-z0-9])"
     r"|(?<![A-Za-z0-9])TASK [A-Z0-9]+(?![A-Za-z0-9])"
     r"|(?<![A-Za-z0-9])[Rr]eview[0-9]+(?![A-Za-z0-9])"
+    # Lowercase and contextual forms: numbered task ids, milestone suffixes, round-prefixed
+    # helper names and work-record narration.
+    r"|(?<![A-Za-z0-9])[Tt]ask[-_][0-9]+(?![A-Za-z0-9])"
+    r"|\([Mm][0-9]\)"
+    r"|(?:covers|\+|--|#) [Mm][0-9]\b"
+    r"|(?<![A-Za-z0-9])ev-m[0-9]-"
+    r"|(?<![A-Za-z0-9])_?r[0-9]_[a-z]"
+    r"|\b[Pp]er the (?:assignment|brief|task)\b"
+    r"|\(verified (?:by (?:search|execution)|live)\)"
+    r"|\bimports verified by execution\b"
+    r"|\bscratch launcher\b"
+    r"|\bmaintainers' working copy\b"
     # Short round/check tags only where a label can start: line start or after
     # whitespace or an opening quote/paren/bracket. `code=C1` and `1.4.6-R6000.1`
     # stay out because `=` and `-` never start a label.
@@ -203,6 +215,19 @@ def test_the_detector_finds_labels_and_leaves_ordinary_words() -> None:
         "Owner direction accepted",
         "The owner clarified that",
         "use the owner-approved 34px",
+        "task-024-canary rule",
+        "ev-m2-100 event",
+        "(M1) snapshot guard",
+        "## 9. Journal purge (m1)",
+        "def _r2_keychain_sdk(",
+        "insufficient per the assignment",
+        "(verified by search)",
+        "imports verified by execution",
+        "Exit codes (verified live): 0",
+        "# -- m2: bounded logs",
+        "bounds. Also covers m2 here",
+        "the untracked scratch launcher",
+        "the maintainers' working copy",
     ):
         assert LABELS.search(text), text
     for text in (
@@ -215,6 +240,13 @@ def test_the_detector_finds_labels_and_leaves_ordinary_words() -> None:
         "the lease owner closes the session",
         "REQUIRES-OWNER-APPROVAL",
         "Create the owner-only config",
+        "task_queue and a task list",
+        "r2d2 robot, _result_row",
+        "Verified by the signature check",
+        "each verified live use extends it",
+        "message ids m1 and m2",
+        "FROM mappings m2 WHERE m2.rank",
+        "builds from a scratch copy",
     ):
         assert not LABELS.search(text), text
     assert COMMENT_DATE.search("x = 1  # fixed 2026-10-12")

@@ -57,12 +57,9 @@ def _base128(data: bytes, at: int) -> tuple[int, int]:
 
 
 def _check_woff2(data: bytes) -> None:
-    # Declared total length must equal actual size; the table directory
-    # is parsed per spec (flags, optional explicit tag, origLength, and
-    # transformLength for transformed tables) to find the compressed
-    # stream, which must then fit: header + directory + stream <= file.
-    # Metadata/private blocks must sit inside the file, 4-byte aligned,
-    # non-overlapping and after the compressed stream.
+    # Declared length must equal the file size; parse the table directory per spec to find the
+    # compressed stream, which must fit. Metadata/private blocks must be inside the file, 4-byte
+    # aligned, non-overlapping and after the stream.
     if len(data) < 48 or data[:4] != b"wOF2":
         raise FontError("bad WOFF2 header")
     length = _u32(data, 8)

@@ -333,7 +333,9 @@ def TerminalScreen(
             )
         )
     viewport_layers.append(
-        ConnectingDots(tokens, connecting, hidden, key="terminal-connecting-layer")
+        ConnectingDots(  # type: ignore[call-arg]  # key= is popped by @ft.component
+            tokens, connecting, hidden, key="terminal-connecting-layer"
+        )
     )
     viewport_layers.append(
         ScrollButtons(  # type: ignore[call-arg]  # key= is popped by @ft.component

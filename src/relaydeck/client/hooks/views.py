@@ -182,13 +182,9 @@ def build_retained_views(
                 if pending_commands is not None
                 else None,
             )
-        # Hidden surfaces must keep an identical Dart widget tree: Flet only
-        # wraps a control in Opacity / IgnorePointer when those props are
-        # set, so toggling them remounted the native terminal engine and
-        # the session dropped to "Viewer restarted; reattach explicitly".
-        # Every slot is always Positioned; an inactive one is parked off
-        # screen at the same width (left -X, right +X), so the PTY never
-        # sees a resize and the slot cannot take the active one's pointer.
+        # Hidden surfaces keep an identical Dart widget tree (Opacity/IgnorePointer toggles remount
+        # the native engine). Inactive slots park off screen at the same width, so the PTY sees no
+        # resize.
         offset = 0 if active else RETAINED_PARK_OFFSET
         retained_views.append(
             ft.Container(
@@ -551,15 +547,9 @@ def build_status_overlays(
             ),
         ]
 
-    # The overlay Stack is structural and ALWAYS returned: swapping
-    # Root's output between a bare surface and a Stack remounts children
-    # (losing terminal emulator state held in component refs) every time
-    # a creation dialog opens or closes. The base surface (inventory or
-    # open terminal) stays at index 0; the modal scrim child is
-    # added/removed. The Stack MUST expand: the page view sizes children
-    # unbounded, and a bare Stack re-triggers the rail's "height is
-    # unbounded" failure. The scrim is bounded below the measured
-    # operations bar and above the visible phone navigation.
+    # The overlay Stack is always returned: swapping Root's output between a bare surface and a
+    # Stack remounts children and loses terminal state. It must expand, or the page view's unbounded
+    # sizing re-triggers the rail's height failure. The scrim sits below the operations bar.
     if pending_commands is not None:
         from relaydeck.client.components.command_recovery import CommandRecovery
 

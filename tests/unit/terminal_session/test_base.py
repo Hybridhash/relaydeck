@@ -81,6 +81,7 @@ class Stub(TerminalSessionBase):
     _PHASE_LIVE = "live"
     _PHASE_EXITED = "exited"
     _PHASE_DISCONNECTED = "disconnected"
+    _PHASE_CONFLICT = "conflict"
     _DISCONNECT_MESSAGE = "disconnected msg"
     _PAUSE_MESSAGE = "paused msg"
     _NOUN = "stub"

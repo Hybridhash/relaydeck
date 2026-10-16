@@ -166,44 +166,40 @@ class RelayDeckTerminal(LayoutControl):
         self._logged_session_route: tuple[int, int] | None = None
         self._reset_count = 0
         self._reopen_listeners: list[Callable[[], None]] = []
-        # Native instance identity learned from
-        # the mount hello (req 0); None until the first report arrives.
-        # Reset continuity is compared per-report against _reset_count
-        # (every issued reset applied exactly once), so the Dart count
-        # needs no stored baseline.
+        # Native instance id from the mount hello (req 0). Reset continuity is checked per report
+        # against _reset_count, so the Dart count needs no stored baseline.
         self._native_instance: int | None = None
         self._resume_next_id = 0
         self._resume_epoch = 0
         self._resume_waiters: dict[int, _ResumeWaiter] = {}
-        # Resend journal: recently written output chunks keyed by
-        # cumulative _sent_bytes offsets, so a resume can redeliver the
-        # exact missing suffix. Capped at the viewer queue bound: any
-        # unacked span that fits the backpressure window fits the
-        # journal, and anything evicted already overflowed honestly.
+        # Resend journal keyed by cumulative _sent_bytes, so a resume can redeliver the exact
+        # missing suffix. Capped at the viewer queue bound: anything evicted already overflowed.
         self._journal: deque[bytes] = deque()
         self._journal_base: int = 0
         self._journal_bytes: int = 0
-        # While a resume probe is in flight, new writes are held (still
-        # counted in _sent_bytes) and flushed after the redelivered
-        # suffix, so display order stays exact and no byte is both
-        # delivered live and redelivered. Separate from _pending_writes
-        # (pre-attach packets, dropped-and-recovered on resume).
-        # Each held packet carries its write start offset (or None for
-        # control): on success the suffix already covers everything at
-        # or below the probe snapshot, so only post-snapshot writes
-        # flush — a byte is either redelivered or flushed, never both.
-        # Capture/reset retire the whole batch.
+        # While a resume probe is in flight, new writes are held (still counted in _sent_bytes) and
+        # flushed after the redelivered suffix, so a byte is either redelivered or flushed, never
+        # both. Each holds its start offset (None for control). Capture/reset retire the batch.
         self._resume_hold = False
         self._resume_hold_epoch: int | None = None
         self._resume_held: deque[tuple[int | None, bytes]] = deque()
         self._resume_held_bytes = 0
-        # Verification fence: armed while the current
-        # binding is unverified (probe in flight) and held after any
-        # failure; released only by verified success, explicit reset,
-        # or fresh capture. While armed, effects-bearing inbound
-        # (INPUT, SIZE_REPORT, ACK) is dropped, never queued.
+        # Verification fence: armed while the binding is unverified and held after any failure,
+        # until verified success, reset or fresh capture. Armed, effects-bearing inbound is dropped,
+        # not queued.
         self._fence = False
         self._fence_drops = 0
+        # Wheel input stays blocked after cancel_scroll() until the ack for the latest sequence, so
+        # wheel reports in flight when a key lands drop as stale. The u32 wire token wraps
+        # separately and maps back through _cancel_outstanding.
+        self._cancel_sent_seq = 0
+        self._cancel_acked_seq = 0
+        self._cancel_outstanding: dict[int, int] = {}
+        self._blocked_drops = 0
+        # Set on the first SCROLL_CANCELLED ack (the viewer sends one
+        # unsolicited at mount): only then is CANCEL_SCROLL answered.
+        # Write-once per term; the bundle cannot downgrade mid-session.
+        self._scroll_cancel_supported = False
         self._transport_generation = 0
         self._bound_transport_generation = 0
         self._verified_transport_generation = 0
@@ -226,6 +222,8 @@ class RelayDeckTerminal(LayoutControl):
             self._verified_transport_generation = -1
             self._resume_epoch += 1
             self._abort_resume_waiters()
+            self._cancel_acked_seq = self._cancel_sent_seq
+            self._cancel_outstanding.clear()
         self._resume_fence = True
 
     def verify_transport(self, generation: int) -> bool:
@@ -363,6 +361,8 @@ class RelayDeckTerminal(LayoutControl):
             self._channel.close()
         self._viewer_generation += 1
         generation = self._viewer_generation
+        self._cancel_acked_seq = self._cancel_sent_seq
+        self._cancel_outstanding.clear()
         self._channel_id = e.channel_id
         self._channel = channel
         self._bound_transport_generation = self._transport_generation
@@ -442,21 +442,35 @@ class RelayDeckTerminal(LayoutControl):
             if packet.kind == protocol.SIZE_REPORT:
                 cols, rows = struct.unpack(">HH", packet.payload)
                 _DIAG.info("term_size cols=%s rows=%s applied=False", cols, rows)
-            # Unverified binding: effects-bearing inbound (PTY input,
-            # view resize, applied accounting) is dropped, never
-            # queued — during the probe and after any failure until
-            # verified success, explicit reset, or fresh capture. The
-            # verification carrier (RESUME_REPORT), read-only engine
-            # reflections (MODE/VIEW) and waiter-scoped replies
-            # (SELECTION/SNAPSHOT) still flow.
+            # Unverified binding: drop effects-bearing inbound (PTY input, resize, applied
+            # accounting). The verification report, read-only MODE/VIEW reflections and waiter
+            # replies still flow.
             self._fence_drops = getattr(self, "_fence_drops", 0) + 1
             if self._fence_drops == 1:
                 _DIAG.info("term_fence_drop first kind=0x%02x", packet.kind)
             return
         if packet.kind == protocol.INPUT:
             origin, data = protocol.decode_input(packet.payload)
-            for listener in list(self._input_listeners):
-                listener(origin, data)
+            if (
+                origin == protocol.ORIGIN_MOUSE
+                and self.wheel_blocked
+                and protocol.is_wheel_report(data)
+            ):
+                # Produced before the viewer handled the cancel: stale.
+                # Dropped synchronously so no deferred callback can see
+                # it after the ack releases the block.
+                self._blocked_drops += 1
+                if self._blocked_drops == 1:
+                    _DIAG.info("term_blocked_wheel_drop first count=1")
+                return
+            # Stamp the cancel epoch for work spawned by listeners, so
+            # async handling can re-check it inside the writer.
+            token = protocol.input_cancel_epoch.set(self._cancel_sent_seq)
+            try:
+                for listener in list(self._input_listeners):
+                    listener(origin, data)
+            finally:
+                protocol.input_cancel_epoch.reset(token)
         elif packet.kind == protocol.SIZE_REPORT:
             cols, rows = struct.unpack(">HH", packet.payload)
             self._last_view_size = (cols, rows)
@@ -474,6 +488,22 @@ class RelayDeckTerminal(LayoutControl):
             state = protocol.decode_view_report(packet.payload)
             for view_listener in list(self._view_listeners):
                 view_listener(state)
+        elif packet.kind == protocol.SCROLL_CANCELLED:
+            try:
+                token = protocol.decode_scroll_cancelled(packet.payload)
+            except ValueError:
+                return
+            self._scroll_cancel_supported = True
+            epoch = self._cancel_outstanding.get(token)
+            if epoch is None:
+                return  # mount advertisement (token 0) or a stale binding
+            if epoch > self._cancel_acked_seq:
+                self._cancel_acked_seq = epoch
+            self._cancel_outstanding = {
+                tok: ep
+                for tok, ep in self._cancel_outstanding.items()
+                if ep > self._cancel_acked_seq
+            }
         elif packet.kind == protocol.KEYBOARD_STATE:
             shown = bool(packet.payload) and packet.payload[0] == 0x01
             for keyboard_listener in list(self._keyboard_state_listeners):
@@ -766,6 +796,47 @@ class RelayDeckTerminal(LayoutControl):
         """Jump the local view to the live edge (scroll_viewport(None))."""
         self.scroll_viewport(None)
 
+    @property
+    def wheel_blocked(self) -> bool:
+        """True while a cancel's ack is still outstanding."""
+        return self._cancel_acked_seq < self._cancel_sent_seq
+
+    @property
+    def cancel_epoch(self) -> int:
+        """Latest issued cancel epoch (unbounded; 0 before the first cancel).
+
+        The wire token wraps at u32 and never equals 0 for a real cancel;
+        this epoch never wraps, so stamps and the block stay monotonic.
+        """
+        return self._cancel_sent_seq
+
+    def cancel_scroll(self) -> None:
+        """Retire widget scroll motion before a server-side key/paste write.
+
+        Sent only to a viewer that proved it acks (mount ack or a prior
+        cancel): an older bundle would ignore the packet and the block
+        would have no ack coming. The sequence advances only once the
+        packet is accepted: on a dead or full channel there is no
+        widget to ack, and reset/rebind/generation changes retire any
+        outstanding cancel, so the block can never stick. Never raises.
+        """
+        if not self._scroll_cancel_supported:
+            return
+        # Only a live, unheld viewer can have wheel rows in flight; queueing the
+        # cancel behind a rebind or resume would only add to a bounded queue.
+        if self._resume_hold or not self._ready.is_set() or not self._channel_current():
+            return
+        epoch = self._cancel_sent_seq + 1
+        token = (epoch - 1) % 0xFFFFFFFF + 1
+        try:
+            self._send(protocol.encode_cancel_scroll(token))
+        except TerminalOverflowError:
+            return
+        self._cancel_sent_seq = epoch
+        # Only the newest cancel can release the block; an older ack is
+        # superseded, so the map never grows while acks are late.
+        self._cancel_outstanding = {token: epoch}
+
     def request_keyboard(self) -> None:
         """Ask the viewer to open the soft keyboard (Direct Input icon).
 
@@ -806,6 +877,8 @@ class RelayDeckTerminal(LayoutControl):
         self._acked_bytes = 0
         self._overflowed = False
         self._protocol_error = None
+        self._cancel_acked_seq = self._cancel_sent_seq
+        self._cancel_outstanding.clear()
         self._abort_viewer_waiters("terminal reset; snapshot aborted")
         # Counters just zeroed: an in-flight resume's offset base is
         # gone, so it must fail fast rather than validate against
@@ -835,12 +908,9 @@ class RelayDeckTerminal(LayoutControl):
         self._resume_held_bytes = kept_bytes
 
     def _flush_held(self, *, after: int | None) -> None:
-        # after=None (incomplete): nothing was resent, so the whole
-        # batch flushes in original order — no held byte is lost.
-        # after=S (success): the suffix already covered (applied, S];
-        # held writes starting below S are displayed-or-resent and
-        # must not flush again, while control packets (None) and
-        # post-snapshot writes flush in original order.
+        # after=None: nothing was resent, so the whole batch flushes in order. after=S: the suffix
+        # covered (applied, S], so held writes starting below S must not flush again; control
+        # packets and later writes flush in order.
         while self._resume_held:
             start, packet = self._resume_held.popleft()
             self._resume_held_bytes -= len(packet)
@@ -849,12 +919,8 @@ class RelayDeckTerminal(LayoutControl):
             self._send(packet)
 
     def _retire_hold(self) -> None:
-        # Capture/reset start a new sync generation: the held batch's
-        # offsets belong to dead counters, so the batch is discarded
-        # (never flushed into the fresh viewer or zeroed base) and the
-        # verification fence releases for the explicit resync. A
-        # superseded attempt's finally sees the cleared ownership and
-        # flushes nothing.
+        # Capture/reset start a new sync generation: the held offsets belong to dead counters, so
+        # the batch is discarded and the fence releases for the explicit resync.
         self._resume_hold = False
         self._resume_hold_epoch = None
         self._resume_held.clear()
@@ -990,12 +1056,8 @@ class RelayDeckTerminal(LayoutControl):
         if self._channel_id is None:
             return ResumeOutcome("noop", "never_attached")
         if self._protocol_error is not None:
-            # Fail closed AND fenced: the stream state is untrusted,
-            # so any in-flight attempt supersedes and inbound effects
-            # fence until explicit recovery. Binding
-            # retirement needs a replacement channel, which only the
-            # normal path resolves; the fence covers queued callbacks
-            # on the current binding instead.
+            # Fail closed and fenced: the stream state is untrusted. Retiring the binding needs a
+            # replacement channel, so the fence covers queued callbacks on the current one.
             self._resume_epoch += 1
             self._abort_resume_waiters()
             self._resume_fence = True
@@ -1037,12 +1099,9 @@ class RelayDeckTerminal(LayoutControl):
             instance, resets, applied = report
             adopt_native: int | None = None
             if self._native_instance is None:
-                # With no mount hello, validate reset identity independently of
-                # the missing baseline — zero output does not prove
-                # equal reset counts — and the adoption commits only
-                # after every later check passes. A
-                # same-numbered channel id after a document reload is
-                # a different engine until proven otherwise.
+                # Without a mount hello, validate reset identity independently (zero output does not
+                # prove equal reset counts) and commit the adoption only after every later check. A
+                # reloaded document can reuse a channel id for a different engine.
                 if resets != self._reset_count:
                     return ResumeOutcome("incomplete", "reset_mismatch")
                 if applied == 0 and sent_at_probe == 0:
@@ -1069,15 +1128,9 @@ class RelayDeckTerminal(LayoutControl):
                     return ResumeOutcome("incomplete", "superseded")
             if adopt_native is not None:
                 self._native_instance = adopt_native
-            # Dart ground truth: everything at or below applied was
-            # displayed. The resend covers only (applied, sent_at_probe]
-            # — held writes below the snapshot are displayed-or-resent
-            # and skip the flush, while control and post-snapshot
-            # writes flush after it, so display order stays exact with
-            # no double delivery. Counters do not move: the suffix was
-            # counted when first written. Direct sends bypass the hold
-            # (and its bound: two tiny packets, always safe) like the
-            # probe does.
+            # Everything at or below applied was displayed; the resend covers only (applied,
+            # sent_at_probe]. Counters do not move: the suffix was counted when first written.
+            # Direct sends bypass the hold like the probe does.
             self._acked_bytes = applied
             for chunk in protocol.split_for_transport(suffix):
                 if not chunk:

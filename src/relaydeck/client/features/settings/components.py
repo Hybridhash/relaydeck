@@ -302,10 +302,7 @@ def SettingsPage(
         else "NOT SAVED · THIS SESSION ONLY",
         "Settings",
     )
-    # The four design groups. Wide: two independent columns so each stacks
-    # tightly (a row-by-row grid left gaps beside short panels). Narrower:
-    # one column. Devices and diagnostics follow at full width.
-    # Left column = the first two groups, right = the rest, so keyboard
+    # Wide: two independent columns stack tightly. Left holds the first two groups, so keyboard
     # order matches the single-column order at every width.
     left = [appearance, terminal_input]
     right = [*([notifications] if notifications is not None else []), about]

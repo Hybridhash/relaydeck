@@ -222,7 +222,7 @@ Install the tool once from your checkout (or from a built wheel). The
 uv tool install --managed-python --python 3.13 ".[companion]"
 # or, from a tagged release:
 uv tool install --managed-python --python 3.13 \
-  "relaydeck[companion] @ git+https://github.com/Hybridhash/relaydeck@v0.2.0"
+  "relaydeck[companion] @ git+https://github.com/Hybridhash/relaydeck@v0.2.1"
 # to update a tag-pinned install, repeat the command above with --force and the new tag
 relaydeck --version           # prints "relaydeck <version>"
 ```

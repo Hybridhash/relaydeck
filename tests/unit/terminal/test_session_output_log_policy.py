@@ -3,7 +3,7 @@
 `BoundedOutputLog` keeps the newest bytes under an explicit cap and
 reports how much was dropped. The full-session enforcement proofs live
 in tests/integration/terminal/test_session_paths.py (a ring-only test is
-insufficient per the assignment).
+insufficient).
 """
 
 from __future__ import annotations

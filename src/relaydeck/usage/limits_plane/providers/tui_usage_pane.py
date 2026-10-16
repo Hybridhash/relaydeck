@@ -50,6 +50,7 @@ from relaydeck.usage.limits_plane.herdr_seam import (
     SeamTimeout,
     run_from_context,
 )
+from relaydeck.usage.limits_plane.providers.jsonrpc_rate_limits_stdio import account_ref_for
 from relaydeck.usage.limits_plane.refresh_state import (
     RefreshState,
     session_scope,
@@ -61,6 +62,24 @@ FORMAT_ID = "tui-usage-pane-v1"
 NOTE_NO_SPACE = "no_space"
 NOTE_CLEANUP_FAILED = "cleanup_failed"
 NOTE_NOT_REPORTED = "not_reported"
+NOTE_IDLE = "idle"
+NOTE_REFUSED = "refused"
+# Each abort carries a fixed step code so a failed read says where it stopped.
+NOTE_DEADLINE = "deadline"
+NOTE_PANE_LIST_FAILED = "pane_list_failed"
+NOTE_TAB_LIST_FAILED = "tab_list_failed"
+NOTE_CREATE_FAILED = "create_failed"
+NOTE_CREATE_AMBIGUOUS = "create_ambiguous"
+NOTE_NOT_SHELL_AT_START = "not_shell_at_start"
+NOTE_EXITED_BEFORE_PROMPT = "exited_before_prompt"
+NOTE_NEEDS_ATTENTION = "needs_attention"
+NOTE_NO_USAGE_MARKER = "no_usage_marker"
+NOTE_FOREGROUND_LOST = "foreground_lost"
+NOTE_DISMISS_FAILED = "dismiss_failed"
+NOTE_QUIT_FAILED = "quit_failed"
+NOTE_PARSE_NO_WINDOW = "parse_no_window"
+NOTE_NOT_CONFIGURED = "not_configured"
+NOTE_SEAM_FAILED = "seam_failed"
 
 QUOTA_KEY = "plan"
 SHELL_NAMES = frozenset({"sh", "bash", "zsh", "fish", "dash", "ksh"})
@@ -72,6 +91,7 @@ _START_S = 30.0
 _USAGE_S = 15.0
 _QUIT_S = 15.0
 _SHELL_S = 10.0
+_IDLE_RECHECK_S = 5.0  # the tool may not have finished signing in when /usage first ran
 _ENTER_RETRIES = 3
 _ENTER_WAIT_MS = 6000
 _SETTLE_WAIT_MS = 8000
@@ -98,6 +118,10 @@ class _Abort(Exception):
         super().__init__(error.value)
         self.error = error
         self.note = note
+
+
+class _Idle(Exception):
+    """The screen says the first window has seen no use yet."""
 
 
 class _RetryFresh(Exception):
@@ -242,11 +266,12 @@ class _Run:
         self.server = socket_identity(bundle.socket_path)
         self.cleanup_failed = False
         self.plan_label: str | None = None
+        self.idle = False
 
     def budget(self, cap: float) -> float:
         remaining = self.deadline - time.monotonic()
         if remaining <= 0:
-            raise _Abort(LimitError.TIMEOUT)
+            raise _Abort(LimitError.TIMEOUT, NOTE_DEADLINE)
         return min(cap, remaining)
 
     # -- workspace choice ----------------------------------------------------
@@ -256,7 +281,7 @@ class _Run:
         try:
             panes = self.seam.pane_list(self.budget(_CALL_S))
         except (SeamTimeout, SeamError):
-            raise _Abort(LimitError.UNAVAILABLE) from None
+            raise _Abort(LimitError.UNAVAILABLE, NOTE_PANE_LIST_FAILED) from None
         for pane in panes:
             if not isinstance(pane, dict) or pane.get("agent") != self.ctx.kind:
                 continue
@@ -303,7 +328,7 @@ class _Run:
         try:
             tabs = self.seam.tab_list(workspace, self.budget(_CALL_S))
         except (SeamTimeout, SeamError):
-            raise _Abort(LimitError.UNAVAILABLE) from None
+            raise _Abort(LimitError.UNAVAILABLE, NOTE_TAB_LIST_FAILED) from None
         fresh = [
             tab
             for tab in tabs
@@ -314,16 +339,16 @@ class _Run:
         ]
         if len(fresh) != 1:
             self._journal("uncertain", note="create_reconcile_ambiguous")
-            raise _Abort(LimitError.UNAVAILABLE)
+            raise _Abort(LimitError.UNAVAILABLE, NOTE_CREATE_AMBIGUOUS)
         tab_id = fresh[0]["tab_id"]
         try:
             panes = self.seam.pane_list(self.budget(_CALL_S))
         except (SeamTimeout, SeamError):
-            raise _Abort(LimitError.UNAVAILABLE) from None
+            raise _Abort(LimitError.UNAVAILABLE, NOTE_PANE_LIST_FAILED) from None
         panes = [p for p in panes if isinstance(p, dict) and p.get("tab_id") == tab_id]
         if len(panes) != 1 or not isinstance(panes[0].get("pane_id"), str):
             self._journal("uncertain", note="create_pane_ambiguous")
-            raise _Abort(LimitError.UNAVAILABLE)
+            raise _Abort(LimitError.UNAVAILABLE, NOTE_CREATE_AMBIGUOUS)
         return _Tab(tab_id, panes[0]["pane_id"], workspace)
 
     def create_tab(self, workspace: str, cwd: str | None) -> _Tab:
@@ -337,7 +362,7 @@ class _Run:
                 and isinstance(tab.get("tab_id"), str)
             }
         except (SeamTimeout, SeamError):
-            raise _Abort(LimitError.UNAVAILABLE) from None
+            raise _Abort(LimitError.UNAVAILABLE, NOTE_TAB_LIST_FAILED) from None
         try:
             tab_id, pane_id = self.seam.tab_create(workspace, cwd, self.label, self.budget(_CALL_S))
         except SeamTimeout:
@@ -345,7 +370,7 @@ class _Run:
             self._journal("created", tab, note="reconciled")
             return tab
         except SeamError:
-            raise _Abort(LimitError.UNAVAILABLE) from None
+            raise _Abort(LimitError.UNAVAILABLE, NOTE_CREATE_FAILED) from None
         tab = _Tab(tab_id, pane_id, workspace)
         self._journal("created", tab)
         return tab
@@ -390,7 +415,7 @@ class _Run:
 
     def require_foreground(self, pane_id: str, names: frozenset[str]) -> None:
         if not _matches_binary(self.foreground(pane_id), names):
-            raise _Abort(LimitError.TIMEOUT)
+            raise _Abort(LimitError.TIMEOUT, NOTE_FOREGROUND_LOST)
 
     # -- the interactive flow ----------------------------------------------------------
 
@@ -418,7 +443,7 @@ class _Run:
             self.recipe.max_lines,
             self.budget(wait_ms / 1000 + 5.0),
         ):
-            raise _Abort(LimitError.TIMEOUT)
+            raise _Abort(LimitError.TIMEOUT, NOTE_NO_USAGE_MARKER)
 
     def scope(self, workspace: str) -> str:
         root = self.recipe.session_root or ""
@@ -428,7 +453,7 @@ class _Run:
         """Start the tool; returns the resumed id (or None for fresh). A
         definitely dead resumed id clears the saved id and raises _RetryFresh."""
         if self.foreground(tab.pane_id) not in SHELL_NAMES:
-            raise _Abort(LimitError.UNAVAILABLE)
+            raise _Abort(LimitError.UNAVAILABLE, NOTE_NOT_SHELL_AT_START)
         if resume_id is not None:
             if self.recipe.launch_resume is None:
                 resume_id = None
@@ -463,8 +488,9 @@ class _Run:
             self.state.clear_session(self.scope(tab.workspace))
             raise _RetryFresh()
         if self.foreground(tab.pane_id) in SHELL_NAMES and resume_id is None:
-            raise _Abort(LimitError.UNAVAILABLE)
-        raise _Abort(LimitError.TIMEOUT)
+            raise _Abort(LimitError.UNAVAILABLE, NOTE_EXITED_BEFORE_PROMPT)
+        # A start-up or sign-in screen needs the user; never answer it.
+        raise _Abort(LimitError.TIMEOUT, NOTE_NEEDS_ATTENTION)
 
     def session_root(self) -> Path | None:
         root = self.recipe.session_root
@@ -486,16 +512,35 @@ class _Run:
     def parse_windows(self, screen: str) -> list[LimitWindow]:
         now_ms = self.ctx.now_ms
         screen = screen[-MAX_PARSE_CHARS:]
+        if self.is_refusal(screen):
+            # The tool answered as a model would: nothing was read, and asking again could bill.
+            raise _Abort(LimitError.PARSE, NOTE_REFUSED)
         windows: list[LimitWindow] = []
         for spec in self.recipe.windows:
             window = self.parse_window(spec, screen, now_ms)
             if window is not None:
                 windows.append(window)
         if not windows:
+            if self.is_idle(screen):
+                raise _Idle()
             if any(re.search(pattern, screen) for pattern in self.recipe.not_reported):
                 raise _Abort(LimitError.UNAVAILABLE, NOTE_NOT_REPORTED)
-            raise _Abort(LimitError.PARSE)
+            raise _Abort(LimitError.PARSE, NOTE_PARSE_NO_WINDOW)
         return windows
+
+    def is_refusal(self, screen: str) -> bool:
+        return any(
+            re.search(pattern, screen[-MAX_PARSE_CHARS:], re.MULTILINE)
+            for pattern in self.recipe.refuse
+        )
+
+    def is_idle(self, screen: str) -> bool:
+        return any(re.search(pattern, screen[-MAX_PARSE_CHARS:]) for pattern in self.recipe.idle)
+
+    def idle_windows(self) -> list[LimitWindow]:
+        """Idle is 0 % of the first window with no reset; the other windows are not reported."""
+        spec = self.recipe.windows[0]
+        return [LimitWindow(spec.key, 0.0, spec.minutes, None, LimitStatus.FRESH, idle=True)]
 
     def parse_window(self, spec: TuiWindowSpec, screen: str, now_ms: int) -> LimitWindow | None:
         matches = list(re.finditer(spec.pattern, screen, re.MULTILINE))
@@ -594,10 +639,37 @@ class _Run:
 
     def run_in_tab(self, tab: _Tab, resume_id: str | None) -> list[LimitWindow]:
         launched = self.launch(tab, resume_id)
-        self.send_and_confirm(tab.pane_id, "/usage", self.recipe.usage_marker, int(_USAGE_S * 1000))
+        try:
+            self.send_and_confirm(
+                tab.pane_id, "/usage", self.recipe.usage_marker, int(_USAGE_S * 1000)
+            )
+        except _Abort as abort:
+            if abort.error is LimitError.TIMEOUT and self.recipe.refuse:
+                # No usage panel: tell a model's answer from a slow start; neither is retried.
+                screen = self.seam.pane_read(
+                    tab.pane_id, self.recipe.max_lines, self.budget(_CALL_S)
+                )
+                if self.is_refusal(screen):
+                    raise _Abort(LimitError.PARSE, NOTE_REFUSED) from None
+            raise
         screen = self.seam.pane_read(tab.pane_id, self.recipe.max_lines, self.budget(_CALL_S))
         try:
-            windows = self.parse_windows(screen)
+            try:
+                windows = self.parse_windows(screen)
+            except _Idle:
+                # One more look before believing it: right after start the screen can lag.
+                time.sleep(_IDLE_RECHECK_S)
+                self.send_and_confirm(
+                    tab.pane_id, "/usage", self.recipe.usage_marker, int(_USAGE_S * 1000)
+                )
+                screen = self.seam.pane_read(
+                    tab.pane_id, self.recipe.max_lines, self.budget(_CALL_S)
+                )
+                try:
+                    windows = self.parse_windows(screen)
+                except _Idle:
+                    windows = self.idle_windows()
+                    self.idle = True
         except _Abort:
             self.quit_cleanly(tab)
             raise
@@ -612,7 +684,7 @@ class _Run:
                 self.recipe.max_lines,
                 self.budget(_SETTLE_WAIT_MS / 1000 + 5.0),
             ):
-                raise _Abort(LimitError.TIMEOUT)
+                raise _Abort(LimitError.TIMEOUT, NOTE_DISMISS_FAILED)
         self.quit_cleanly(tab)
         self.capture_hint(tab, launched)
         if self.foreground(tab.pane_id) not in SHELL_NAMES:
@@ -659,9 +731,9 @@ class _Run:
                 self.recipe.max_lines,
                 self.budget(_QUIT_S + 5.0),
             ):
-                raise _Abort(LimitError.TIMEOUT)
+                raise _Abort(LimitError.TIMEOUT, NOTE_QUIT_FAILED)
         elif not self.poll_shell(tab.pane_id, _QUIT_S):
-            raise _Abort(LimitError.TIMEOUT)
+            raise _Abort(LimitError.TIMEOUT, NOTE_QUIT_FAILED)
 
     def execute(self) -> tuple[tuple[LimitSnapshot, ...], str]:
         workspace, cwd = self.choose_workspace()
@@ -688,7 +760,9 @@ class _Run:
                 tuple(windows),
                 LimitStatus.FRESH,
                 FORMAT_ID,
-                None,
+                # A pane shows no account id; kind + plan names a stable identity so a transient
+                # failure keeps this reading instead of deleting it.
+                account_ref_for(self.ctx.key_path, f"{self.ctx.kind}:{self.plan_label or ''}"),
                 None,
                 self.plan_label,
             )
@@ -696,7 +770,7 @@ class _Run:
         finally:
             if tab is not None:
                 self.close_quietly(tab)
-        note = NOTE_CLEANUP_FAILED if self.cleanup_failed else ""
+        note = NOTE_CLEANUP_FAILED if self.cleanup_failed else NOTE_IDLE if self.idle else ""
         return snapshots, note
 
 
@@ -716,15 +790,15 @@ class TuiUsagePaneProvider:
             or not ctx.kind
             or ctx.timeout_s <= 0
         ):
-            return ProviderResult((), LimitError.UNAVAILABLE)
+            return ProviderResult((), LimitError.UNAVAILABLE, note=NOTE_NOT_CONFIGURED)
         try:
             snapshots, note = _Run(ctx).execute()
         except _Abort as abort:
             return ProviderResult((), abort.error, note=abort.note)
         except _RetryFresh:
-            return ProviderResult((), LimitError.UNAVAILABLE)
+            return ProviderResult((), LimitError.UNAVAILABLE, note=NOTE_SEAM_FAILED)
         except (SeamTimeout, SeamError):
-            return ProviderResult((), LimitError.UNAVAILABLE)
+            return ProviderResult((), LimitError.UNAVAILABLE, note=NOTE_SEAM_FAILED)
         return ProviderResult(snapshots, None, note=note)
 
 

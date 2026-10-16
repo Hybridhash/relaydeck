@@ -68,7 +68,8 @@ TAKEOVER_MESSAGE = (
 
 
 def agent_window_state(phase: str, disclosure: bool, conflict: bool) -> str:
-    """Map the agent session onto the DESIGN.md window states."""
+    """Map the agent session onto the terminal window states."""
+    phase = "disconnected" if phase == "reconnecting" else phase
     if phase == "live":
         return STATE_IN_CONTROL
     if phase == "exited":

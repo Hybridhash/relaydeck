@@ -159,15 +159,15 @@ class LimitWindow:
     window_minutes: int | None = None  # never assume a fixed meaning for primary/secondary
     resets_at_ms: int | None = None
     status: LimitStatus = LimitStatus.FRESH  # per window: an expired window stays expired
-    # exact amounts behind the percent, when the source reports
-    # them. `used_percent` is derived (used/limit*100) only when both amounts
-    # are present and limit > 0; limit 0/missing means no derivation (the
-    # window is then only valid with a native percent). used > limit is
-    # allowed: the percent clamps to 100 and `over_allowance` is set.
+    # Exact amounts behind the percent. `used_percent` is derived only when both are present and
+    # limit > 0, else the window needs a native percent. used > limit clamps the percent to 100 and
+    # sets `over_allowance`.
     used_amount: float | None = None
     limit_amount: float | None = None
     unit: str | None = None  # validated `[a-z_]{1,16}` (e.g. "credit")
     over_allowance: bool = False
+    # The tool reported no use in this window yet: a reading of 0 %, not a failure.
+    idle: bool = False
 
 
 class LimitError(StrEnum):

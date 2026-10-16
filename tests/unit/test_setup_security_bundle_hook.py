@@ -24,6 +24,7 @@ GOOD_JS = (
     + '"touchcancel";' * 2
     + '"abort";' * 3
     + '"flet_reconnect_merge_rd1";'
+    + '"flet_reconnect_wake_rd1";'
     + "var app = 1;"
 )
 

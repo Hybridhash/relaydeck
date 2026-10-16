@@ -70,10 +70,8 @@ def PairingPanel(
 
     def cleanup() -> None:
         unsubscribe.current()
-        if flow.snapshot.phase != "ready":
-            flow.invalidate()
-        if task.current is not None:
-            task.current.cancel()
+        # Leaving the page must not void an attempt the Mac may still approve; only an
+        # explicit cancel, a field edit or expiry does; the approval wait keeps running.
 
     ft.use_effect(effect, dependencies=[flow], cleanup=cleanup)
     state = ConnectState(

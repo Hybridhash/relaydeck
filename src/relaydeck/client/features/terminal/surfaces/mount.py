@@ -358,7 +358,7 @@ def mount_agent_screen(
         viewport_height=viewport_height,
         viewport_width=viewport_width,
         on_open_shell=on_open_shell,
-        phase=view.phase,
+        phase="reconnecting" if session.recovering else view.phase,
         host_line=host_line,
         notice=view.notice,
         attached_output=session.controller is not None or len(session.output_log) > 0,

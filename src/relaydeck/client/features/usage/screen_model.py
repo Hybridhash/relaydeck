@@ -247,8 +247,13 @@ _REFRESH_ERRORS = {
     "timeout": "couldn't read it, try again",
     "auth_required": "sign in to the tool first",
     "parse": "unexpected screen",
+    "parse_no_window": "unexpected screen",
     "not_reported": "the tool isn't reporting limits right now",
     "not_configured": "not set up on this Mac yet",
+    "needs_attention": "needs attention on the Mac: finish its start-up or sign-in, then refresh",
+    "exited_before_prompt": "the tool closed before it was ready",
+    "not_shell_at_start": "couldn't start a clean reading space",
+    "no_usage_marker": "the usage panel didn't open",
 }
 _REFRESH_ERROR_FALLBACK = "couldn't read it, try again"
 NO_SPACE_HINT = "open it in a Herdr space once"
@@ -305,7 +310,9 @@ class RefreshModel:
     label: str  # the accessible name: "Refresh <tool> limits"
     busy: bool  # a spinner instead of the icon
     enabled: bool
-    note: str  # "checked just now", "refresh in 3 min", a short failure; "" for none
+    note: str  # "checked just now", "next refresh in 3 min", a short failure; "" for none
+    # Whole minutes until the server allows the next read (0: under a minute); None: not paused.
+    cooldown_minutes: int | None = None
 
 
 @dataclass(frozen=True)
@@ -925,6 +932,7 @@ def _refresh_model(
         return None
     cooldown = max(info.cooldown_until_ms or 0, (local.until_ms or 0) if local else 0)
     cooling = cooldown > now_ms
+    attempt = info.last_attempt
     running = info.in_progress or (local is not None and local.phase == REFRESH_RUNNING)
     notes: list[str] = []
     if running:
@@ -940,15 +948,28 @@ def _refresh_model(
         notes.append("checked just now")
     elif info.last_error:
         notes.append(_REFRESH_ERRORS.get(info.last_error, _REFRESH_ERROR_FALLBACK))
-    if cooling and not running:
-        minutes = max(1, -(-(cooldown - now_ms) // 60_000))
-        notes.append(f"refresh in {minutes} min")
+    left = -(-(cooldown - now_ms) // 60_000) if cooling and not running else None
+    if left is not None:
+        if (
+            attempt is not None
+            and attempt.result == "ok"
+            and attempt.finished_ms is not None
+            and not notes
+            and not (local is not None and local.phase == REFRESH_COOLDOWN)
+        ):
+            # Say a read just happened, so a paused button is not mistaken for a broken one.
+            age = max(0, (now_ms - attempt.finished_ms) // 60_000)
+            notes.append("read just now" if age < 1 else f"read {age} min ago")
+        notes.append(f"next refresh in {max(1, left)} min")
     return RefreshModel(
         kind=view.kind,
         label=f"Refresh {view.name} limits",
         busy=running,
         enabled=not running and not cooling,
         note=" · ".join(notes),
+        cooldown_minutes=(0 if (cooldown - now_ms) < 60_000 else left)
+        if left is not None
+        else None,
     )
 
 
@@ -995,6 +1016,8 @@ def _limit_rows(
                 resets = " · ".join(parts)
             else:
                 resets = f"Resets {_reset(window.resets_at_ms, tz)}" if window.resets_at_ms else ""
+            if window.idle and window.status == "fresh":
+                role, resets = "neutral", "Idle · no use yet"
             if window.status == "stale":
                 # An old reading keeps its own percentage, marked stale, never shown as current.
                 role = "neutral"
@@ -1055,8 +1078,12 @@ def _limit_subline(view: s.ProviderLimits, now_ms: int, tz: str) -> str:
         )
         return f"{label} · last reading {age}" if age else f"{label} · no reading yet"
     if view.status in (s.STATUS_OK, s.STATUS_NEAR_LIMIT):
+        idle = next((w for w in view.windows if w.idle and w.status == "fresh"), None)
+        if idle is not None:
+            return f"{idle.label} window idle"
         if age:
-            return f"Checked {age}" if on_demand else f"Read {age}"
+            quiet = " · no use since" if view.quiet else ""
+            return (f"Checked {age}" if on_demand else f"Read {age}") + quiet
         return "No reading yet"
     if view.status == s.STATUS_STALE:
         return f"Reading stale · read {age}" if age else "Reading stale"
@@ -1105,12 +1132,10 @@ def token_caveat(page: model.UsagePage, coverage: dict[str, str] | None = None) 
     reading right now. A tool's own display name is used, never a guessed one."""
     coverage_by_kind = coverage if coverage is not None else effective_coverage(page)
     excluded: list[str] = []
-    partly: list[str] = []
     for entry in page.kinds:
         state = coverage_by_kind.get(entry.kind)
         if entry.tokens_reported and state == PARTLY_VERIFIED:
-            partly.append(entry.display_name or entry.kind)
-            continue
+            continue  # its provider row carries the note; it is no reason to doubt the totals
         if not entry.tokens_reported and entry.credits_reported:
             reason = _CAVEAT_CREDITS
         elif not entry.tokens_reported:
@@ -1122,12 +1147,9 @@ def token_caveat(page: model.UsagePage, coverage: dict[str, str] | None = None) 
         else:
             continue
         excluded.append(f"{entry.display_name or entry.kind} ({reason})")
-    parts: list[str] = []
-    if excluded:
-        parts.append("Token totals do not include: " + " · ".join(excluded) + ".")
-    if partly:
-        parts.append(f"Partly verified ({PARTLY_NOTE}): " + " · ".join(partly) + ".")
-    return " ".join(parts)
+    if not excluded:
+        return ""
+    return "Token totals do not include: " + " · ".join(excluded) + "."
 
 
 def _footnote(rows: Sequence[model.Row]) -> str:

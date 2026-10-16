@@ -24,7 +24,6 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from relaydeck.contracts.canonical import canonical_json
 from relaydeck.usage.contracts import (
     CAPACITY_EXCEEDED,
-    LIMIT_STALE_MS,
     MAX_CREDITS_MILLI,
     MAX_CURSOR_BYTES,
     MAX_CURSOR_STATE_BYTES,
@@ -103,7 +102,7 @@ def _validate_amounts(window: LimitWindow) -> None:
         and (not isinstance(window.unit, str) or _UNIT_RE.fullmatch(window.unit) is None)
     ):
         raise UsageUnavailable()
-    if type(window.over_allowance) is not bool:
+    if type(window.over_allowance) is not bool or type(window.idle) is not bool:
         raise UsageUnavailable()
 
 
@@ -127,6 +126,8 @@ def _price_digest(prices: PriceTable) -> str:
         "sources": [list(s) for s in prices.snapshot_sources],
         "labels": [list(s) for s in prices.snapshot_labels],
     }
+    if prices.aliases:
+        payload["aliases"] = [list(a) for a in prices.aliases]
     return hashlib.sha256(_json(payload).encode()).hexdigest()
 
 
@@ -547,13 +548,22 @@ class SqliteUsageStore:
         with self._transaction() as db:
             marks = ",".join("?" for _ in names)
             groups = db.execute(
-                "SELECT DISTINCT account,quota,source FROM limits "
-                f"WHERE host=? AND kind=? AND source IN ({marks}) AND retired=0",
+                "SELECT account,quota,source,MAX(observed) FROM limits "
+                f"WHERE host=? AND kind=? AND source IN ({marks}) AND retired=0 "
+                "GROUP BY account,quota,source",
                 (host, kind, *names),
             ).fetchall()
-            for account, quota, source in groups:
+            newest: dict[str, int] = {}
+            for _account, _quota, source, observed in groups:
+                newest[source] = max(newest.get(source, -1), observed)
+            active = {(a, src) for a, _q, src, observed in groups if observed == newest[src]}
+            for account, quota, source, _observed in groups:
                 if account and error is not LimitError.AUTH_REQUIRED:
                     continue  # a known account with a transient error: last-good, aged
+                if error is not LimitError.AUTH_REQUIRED and (account, source) not in active:
+                    # A historical unknown reading stays historical: refreshing it would make it
+                    # the newest and hide the active account's reading.
+                    continue
                 db.execute(
                     "DELETE FROM limits WHERE host=? AND kind=? AND account=? AND quota=?",
                     (host, kind, account, quota),
@@ -1102,14 +1112,10 @@ class SqliteUsageStore:
 
     @staticmethod
     def _attributed_sql(*, inferred: bool) -> str:
-        # evidence ladder. `ambig` counts distinct spaces among the episodes
-        # containing the event: more than one stays not_linked and never falls
-        # through to inferred. `inf` holds sessions with exactly one candidate
-        # (workspace, generation) by digest+kind+overlap; it is empty when inferred
-        # linking is off, so exact attribution is then byte-identical in outcome.
-        # rank 1 (reported identity) always wins over rank 2 (process
-        # evidence); `ambig` is judged within the best joined rank only, so an
-        # ambiguous rank 2 never falls through to inferred either.
+        # Evidence ladder. `ambig` counts distinct spaces among the episodes containing the event;
+        # more than one stays not_linked, never inferred. `inf` holds sessions with one candidate by
+        # digest+kind+overlap (empty when inferred linking is off). Rank 1 (reported identity) beats
+        # rank 2 (process evidence); `ambig` is judged within the best joined rank only.
         if inferred:
             inf = (
                 ", inf AS (SELECT s.host,s.kind,s.source,s.session,"
@@ -1659,6 +1665,27 @@ class SqliteUsageStore:
             ).fetchall()
             return dict(rows)
 
+    def limits_observed(self, host_id: str, kind: str) -> int | None:
+        """When the kind's latest successful reading was taken (failure rows do not count)."""
+        _key(host_id)
+        _key(kind)
+        with self._transaction(write=False) as db:
+            row = db.execute(
+                "SELECT MAX(observed) FROM limits WHERE host=? AND kind=? AND retired=0 "
+                "AND error IS NULL",
+                (host_id, kind),
+            ).fetchone()
+        return int(row[0]) if row and row[0] is not None else None
+
+    def kind_activity(self, host_id: str) -> dict[str, int]:
+        """Each kind's latest event time: a reading older than this may be wrong."""
+        _key(host_id)
+        with self._transaction(write=False) as db:
+            rows = db.execute(
+                "SELECT kind,MAX(occurred) FROM events WHERE host=? GROUP BY kind", (host_id,)
+            ).fetchall()
+        return {kind: int(at) for kind, at in rows if at is not None}
+
     @staticmethod
     def _limits(db: sqlite3.Connection, host: str, now: int) -> tuple[LimitSnapshot, ...]:
         grouped: dict[
@@ -1678,21 +1705,16 @@ class SqliteUsageStore:
                 current = LimitStatus(window.status)
                 if window.resets_at_ms is not None and now >= window.resets_at_ms:
                     current = LimitStatus.EXPIRED
-                elif now - observed > LIMIT_STALE_MS:
-                    current = max(current, LimitStatus.STALE, key=_LIMIT.__getitem__)
                 window = replace(window, status=current)
             else:
                 current = LimitStatus.NOT_REPORTED
             grouped.setdefault((kind, quota, account), []).append(
                 (observed, window, current, source, error, plan_label)
             )
-        # Storage keeps one row per window, each with its own observation time, so a window that a
-        # newer reading no longer reports would survive beside it. Only the quota's latest
-        # observation set is returned: its windows, or none when that reading had no windows.
-        # Several accounts can be stored for one provider source. Only the active account is
-        # current: the account of the source's newest reading. An unknown identity ("") is its own
-        # account, so a reading with no identity never leaves an older account's percentage on
-        # screen, and a switched account hides the previous one's rows (they stay stored).
+        # Each window has its own observation time, so a window a newer reading dropped would
+        # survive. Return only the quota's latest observation set. Only the source's newest account
+        # is current; an unknown identity ("") is its own account, and a switched account's rows
+        # stay stored but hidden.
         latest_by_source: dict[tuple[str, str], int] = {}
         for (kind, _quota, _account), rows in grouped.items():
             for row in rows:

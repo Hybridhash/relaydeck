@@ -159,9 +159,19 @@ def test_limits_latest_per_window_expiry_and_staleness(tmp_path: Path) -> None:
             (),
             limits=(LimitSnapshot("kind-a", "q2", NOW - 16 * 60_000, (LimitWindow("x", 40),)),),
         )
+        # Age alone is not staleness: the client judges it against the tool's own activity.
         assert (
-            next(s for s in report(store).limits if s.quota_key == "q2").status == LimitStatus.STALE
+            next(s for s in report(store).limits if s.quota_key == "q2").status == LimitStatus.FRESH
         )
+
+
+def test_kind_activity_is_the_latest_event_per_kind(tmp_path: Path) -> None:
+    with SqliteUsageStore(tmp_path / "usage.db", "UTC", clock=lambda: NOW) as store:
+        assert store.kind_activity("h1") == {}
+        write(store, (event("a"), event("b")))
+        activity = store.kind_activity("h1")
+        assert activity == {"kind-a": NOW}
+        assert store.kind_activity("other-host") == {}
 
 
 def test_cost_unknown_bucket_and_model_poison_only_its_row(tmp_path: Path) -> None:

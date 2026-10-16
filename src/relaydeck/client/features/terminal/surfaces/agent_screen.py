@@ -16,6 +16,7 @@ from relaydeck.client.components.design_system.terminal_window import (
     STATE_WATCHING,
     WindowFrame,
 )
+from relaydeck.client.features.terminal.diagnostics import diagnostics_logger
 from relaydeck.client.features.terminal.input_modes import (
     KEYBOARD_KEYS,
     KEYBOARD_TEXT,
@@ -248,6 +249,8 @@ def AgentTerminalScreen(
         settled=not control_pending and (not in_control or keys_enabled),
         input_phase=(input_enabled, scroll_input_enabled),
         binding=direct_binding,
+        # The binding's session counts returns to the app.
+        activation=getattr(direct_binding[0], "activations", 0) if direct_binding else 0,
     )
 
     def report_size(cols: int, rows: int) -> Any:
@@ -255,14 +258,9 @@ def AgentTerminalScreen(
         return held_report(cols, rows)
 
     detail_width, set_detail_width = ft.use_state(0.0)
-    # Terminal | input column, only for an expanded in-control
-    # agent. The terminal keeps its slot; only the host's right margin and
-    # the siblings around it change.
-    # On touch devices the input area lives in always-present
-    # Stack slots whose only change between layouts is geometry (position,
-    # width, field lines), so the draft TextField is never remounted and
-    # keeps focus (iOS Safari ignores programmatic focus). Desktop keeps the
-    # original in-column layout and never enters the split.
+    # Terminal | input column, only for an expanded in-control agent. On touch the input area lives
+    # in always-present Stack slots that change only geometry, so the draft field is never remounted
+    # and keeps focus (iOS Safari ignores programmatic focus).
     slot_mode = touch and (phone or in_control)
     split = typing_split and slot_mode
     pad = 0.0 if phone else WINDOW_PADDING
@@ -275,6 +273,21 @@ def AgentTerminalScreen(
     split_top = pad + TYPING_SPLIT_HEADER_HEIGHT + (4 if phone else 12)
     # Measured sizes of the slots (kept from the normal layout while split).
     comp_size, set_comp_size = ft.use_state((0.0, 0.0))
+    # Phone dock heights per dock shape, for the mounted screen's lifetime.
+    dock_sizes: Any = ft.use_ref({})
+    last_layout: Any = ft.use_ref(None)
+
+    def note_layout(spacer: float, keybar: bool, hit: bool) -> None:
+        # Content-free: one line per change of what shapes the terminal's height.
+        layout = (window_size[1], round(spacer), keybar, mobile_mode)
+        if layout != last_layout.current:
+            last_layout.current = layout
+            diagnostics_logger().info(
+                "term_layout rows=%s spacer=%s keybar=%s mode=%s signature_hit=%s",
+                *layout,
+                hit,
+            )
+
     ctl_size, set_ctl_size = ft.use_state((0.0, 0.0))
     split_ctl_height, set_split_ctl_height = ft.use_state(0.0)
     # Measured composer frame height (the split dock sits under it), and
@@ -473,6 +486,7 @@ def AgentTerminalScreen(
         on_reconnect=on_reconnect,
         on_takeover=on_takeover,
         phone=phone,
+        reconnecting=phase == "reconnecting",
         takeover_disclosure=takeover_disclosure,
         tokens=tokens,
         window=window,
@@ -580,6 +594,8 @@ def AgentTerminalScreen(
             toggle_keyboard=toggle_keyboard,
             tokens=tokens,
             workflow=workflow,
+            dock_sizes=dock_sizes.current,
+            on_layout=note_layout,
         )
     if not phone and window == STATE_WATCHING and workflow == WORKFLOW_AGENT_COMPOSER:
         bottom.append(

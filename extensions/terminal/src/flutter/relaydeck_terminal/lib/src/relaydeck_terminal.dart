@@ -9,6 +9,7 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/material.dart' show Icons;
 import 'package:flutter/rendering.dart' show ScrollDirection;
+import 'package:flutter/scheduler.dart';
 import 'package:flutter/widgets.dart';
 import 'package:xterm2/xterm.dart';
 
@@ -18,6 +19,7 @@ import 'snapshot.dart';
 import 'swipe_math.dart';
 import 'utf8_accumulator.dart';
 import 'visual_viewport.dart';
+import 'wheel_queue.dart';
 
 // Packet kinds shared with relaydeck_terminal/protocol.py.
 const _kWrite = 0x01;
@@ -40,6 +42,11 @@ const _kReleaseKeyboard = 0x0E;
 const _kKeyboardButton = 0x0F;
 const _kKeyboardState = 0x88;
 const _kKeyboardTrace = 0x89;
+// 0x10 + u32be seq retires widget scroll motion before a server-side
+// key/paste write (Python sends); 0x8A + u32be seq acks it back
+// (viewer sends, never the PTY; seq 0 at mount proves the capability).
+const _kCancelScroll = 0x10;
+const _kScrollCancelled = 0x8A;
 
 const _kInput = 0x81;
 const _kSizeReport = 0x82;
@@ -171,7 +178,8 @@ class RelayDeckTerminalControl extends StatefulWidget {
       _RelayDeckTerminalControlState();
 }
 
-class _RelayDeckTerminalControlState extends State<RelayDeckTerminalControl> {
+class _RelayDeckTerminalControlState extends State<RelayDeckTerminalControl>
+    with SingleTickerProviderStateMixin {
   late final _TaggedTerminal _terminal;
   late final TerminalController _controller;
   // Owned scroll controller for the TerminalView (its state keeps the
@@ -185,6 +193,17 @@ class _RelayDeckTerminalControlState extends State<RelayDeckTerminalControl> {
   // normal-buffer drags are tracked with arena-independent Listener
   // events instead; extra fingers are ignored.
   int? _localDragPointer;
+  // Release-velocity tracker for mode-B momentum, fed only while a local
+  // drag runs; after pointer-up the ticker coasts the owned view until
+  // friction, an edge or a boundary stops it.
+  VelocityTracker? _flingTracker;
+  Ticker? _flingTicker;
+  double _flingV = 0;
+  Duration? _flingLast;
+  // Set by a scroll retire (cancel or boundary): mode-C wheel reports
+  // drop until the next fresh gesture (pointer-down or wheel event),
+  // so inner-ballistic leftovers can never produce rows after a retiral.
+  bool _wheelCutoff = false;
   // First active pointer driving an alt/no-mouse swipe. Raw
   // depth pixels accumulate per direction run and emit page packets
   // live plus a remainder flush on release; wheel-only input flushes
@@ -245,6 +264,9 @@ class _RelayDeckTerminalControlState extends State<RelayDeckTerminalControl> {
   // DataChannel deliveries. Escape sequences pass through to
   // the emulator, which owns their parse state.
   final _utf8Sink = Utf8Accumulator();
+  // Paced alternate-buffer wheel runs (agent TUIs): bounded rows released
+  // three per tick instead of one round trip per line.
+  late final WheelQueue _wheel;
 
   @override
   void initState() {
@@ -262,6 +284,14 @@ class _RelayDeckTerminalControlState extends State<RelayDeckTerminalControl> {
     // from untrusted terminal output are all denied.
     _terminal.onOutput = _onTerminalOutput;
     _terminal.onResize = _onTerminalResize;
+    _wheel = WheelQueue(send: (report) {
+      // A fence raised mid-drain retires the run instead of sending it.
+      if (_transportFenced || !_inputEnabled) {
+        _wheel.discard();
+        return;
+      }
+      _sendInput(_kOriginMouse, utf8.encode(report));
+    });
     _controller = TerminalController();
     _scrollController = ScrollController();
     _scrollController.addListener(_onScrollChanged);
@@ -276,7 +306,7 @@ class _RelayDeckTerminalControlState extends State<RelayDeckTerminalControl> {
     // The listener above stays as the fence-bits updater for reset paths
     // that assign engine fields directly (RIS/DECSTR clear synchronized
     // mode themselves, so their write-end notification still fires).
-    _terminal.onSwipeBoundary = _swipeRetire;
+    _terminal.onSwipeBoundary = _gestureBoundary;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) _scheduleViewReport();
     });
@@ -298,6 +328,10 @@ class _RelayDeckTerminalControlState extends State<RelayDeckTerminalControl> {
     // before any output flows. Same-socket FIFO keeps it behind the
     // open event, so Python captures the channel first.
     _sendResumeReport(0);
+    // Capability advertisement: this viewer answers CANCEL_SCROLL, so
+    // Python may block wheel input around server-side writes. Older
+    // bundles never send this and keep the unblocked behavior.
+    _sendScrollCancelled(0);
     _backend = backend;
     _onBackendChanged();
     backend.addListener(_onBackendChanged);
@@ -319,7 +353,7 @@ class _RelayDeckTerminalControlState extends State<RelayDeckTerminalControl> {
     } else if (_transportWasLive) {
       _transportFenced = true;
       _localDragPointer = null;
-      _swipeRetire();
+      _gestureBoundary();
     }
   }
 
@@ -348,6 +382,10 @@ class _RelayDeckTerminalControlState extends State<RelayDeckTerminalControl> {
     _backend = null;
     _swipeIdle?.cancel();
     _swipeIdle = null;
+    _wheel.discard();
+    _flingTicker?.stop();
+    _flingTicker?.dispose();
+    _flingTicker = null;
     _scrollController.dispose();
     _sub?.cancel();
     _channel?.close();
@@ -518,6 +556,32 @@ class _RelayDeckTerminalControlState extends State<RelayDeckTerminalControl> {
         bytes = utf8.encode(wheels.remainder);
       }
     }
+    if (origin == _kOriginMouse &&
+        _terminal.isUsingAltBuffer &&
+        _terminal.mouseMode.reportScroll) {
+      // Alternate buffer with mouse reporting on (agent TUIs): xterm2 runs
+      // the fling locally and emits one wheel report per line crossed.
+      // Those lines pace through the bounded queue instead of one round
+      // trip each; clicks, motion and text still forward immediately.
+      final wheels = extractWheelScroll(data);
+      if (wheels.total > 0) {
+        if (_transportFenced || !_inputEnabled || _wheelCutoff) {
+          // Fenced or disabled mid-gesture, or past a scroll retire:
+          // wheel rows are stale the moment they arrive, so they
+          // never queue; anything held is dropped too, and can never
+          // replay after recovery or past the cancel boundary.
+          _wheel.discard();
+          if (wheels.remainder.isEmpty) return;
+          bytes = utf8.encode(wheels.remainder);
+        } else {
+          for (final run in _wheelRuns(data)) {
+            _wheel.enqueue(run.towardOlder, run.rows, run.report);
+          }
+          if (wheels.remainder.isEmpty) return;
+          bytes = utf8.encode(wheels.remainder);
+        }
+      }
+    }
     _sendInput(origin, bytes);
   }
 
@@ -538,6 +602,44 @@ class _RelayDeckTerminalControlState extends State<RelayDeckTerminalControl> {
     if (target != position.pixels) position.jumpTo(target);
     _followTail = _atBottom;
     _scheduleViewReport();
+  }
+
+  /// Halts the momentum coast where it stands: pointer-down, boundary,
+  /// edge, friction floor. Stopping an idle ticker is harmless.
+  void _flingStop() {
+    _flingTicker?.stop();
+    _flingLast = null;
+    _flingV = 0;
+  }
+
+  /// Coasts the owned view at [v] logical px/s (already clamped), same
+  /// sign convention as the drag: finger-up velocity scrolls on.
+  void _flingStart(double v) {
+    _flingStop();
+    _flingV = v;
+    _flingTicker ??= createTicker(_flingTick);
+    _flingTicker!.start();
+  }
+
+  void _flingTick(Duration elapsed) {
+    final last = _flingLast;
+    _flingLast = elapsed;
+    if (!mounted || last == null) return;
+    var dt = (elapsed - last).inMicroseconds / 1e6;
+    if (dt <= 0) return;
+    if (dt > 1 / 30) dt = 1 / 30;
+    if (_flingV.abs() < 20 || !_scrollController.hasClients) {
+      _flingStop();
+      return;
+    }
+    final before = _scrollController.position.pixels;
+    _scrollLocalPixels(-_flingV * dt);
+    if (_scrollController.position.pixels == before) {
+      // Clamped at an edge: nothing left to coast into.
+      _flingStop();
+      return;
+    }
+    _flingV *= pow(0.998, dt * 1000).toDouble();
   }
 
   /// Alternate screen without mouse scroll reporting needs explicit swipe
@@ -565,7 +667,7 @@ class _RelayDeckTerminalControlState extends State<RelayDeckTerminalControl> {
     final bits = (_terminal.isUsingAltBuffer ? 1 : 0) |
         (_terminal.mouseMode.reportScroll ? 2 : 0);
     if (_swipeFenceBits != -1 && bits != _swipeFenceBits) {
-      _swipeRetire();
+      _gestureBoundary();
     }
     _swipeFenceBits = bits;
   }
@@ -573,13 +675,41 @@ class _RelayDeckTerminalControlState extends State<RelayDeckTerminalControl> {
   /// Retires pending swipe state at a boundary: pixels, idle timer and
   /// active pointer are forgotten and the generation advances, so
   /// delayed callbacks armed earlier can no longer fire. A fresh
-  /// pointer-down is required afterwards.
+  /// pointer-down is required afterwards. Swipe state only: per-event
+  /// guards call this on every move outside swipe mode, so the wheel
+  /// queue and momentum (which live through those moves) retire
+  /// separately in [_gestureBoundary].
   void _swipeRetire() {
     _swipeEpoch++;
     _swipePointer = null;
     _swipePixels = 0;
     _swipeIdle?.cancel();
     _swipeIdle = null;
+  }
+
+  /// Full gesture boundary: swipe state plus queued wheel rows, any
+  /// momentum coast and the pending release velocity, which all belong
+  /// to the mode they started in. A coast may only start from a
+  /// pointer-down after the last boundary. Only real boundaries call
+  /// this (mode fence, transport fence, input-disable, RESET), never
+  /// per-event guards.
+  void _gestureBoundary() {
+    _swipeRetire();
+    _retireScrollMotion();
+  }
+
+  /// Scroll motion without the swipe run: stops any coast, forgets the
+  /// pending release velocity and drops queued wheel rows. Explicit
+  /// viewport navigation calls this before moving, so nothing scrolls
+  /// the view back afterwards.
+  void _retireScrollMotion() {
+    _flingStop();
+    _localDragPointer = null;
+    _flingTracker = null;
+    _wheel.discard();
+    // xterm2's inner ballistic outlives this retire; its rows must
+    // never become fresh scroll after a cancel or boundary.
+    _wheelCutoff = true;
   }
 
   /// Drag depth in scroll-depth pixels (+down toward latest). Gated on
@@ -732,6 +862,9 @@ class _RelayDeckTerminalControlState extends State<RelayDeckTerminalControl> {
   }
 
   void _sendInput(int origin, Uint8List bytes) {
+    // Fresh non-mouse input obsoletes any queued wheel run: keystrokes
+    // never wait behind scroll.
+    if (origin != _kOriginMouse) _wheel.discard();
     // Reconnecting after a live session: drop user input quietly.
     // Flet queues no raw channel bytes, so whatever reaches the dead
     // socket is lost either way; the fence keeps the loss explicit
@@ -834,7 +967,7 @@ class _RelayDeckTerminalControlState extends State<RelayDeckTerminalControl> {
         // the app holds one control instance, so no prop patch follows).
         // Disabling retires pending swipe state: a delayed flush or
         // release must not emit an old gesture after disable-enable.
-        if (buf[offset + 1] != 0x01) _swipeRetire();
+        if (buf[offset + 1] != 0x01) _gestureBoundary();
         _inputEnabledOverride = buf[offset + 1] == 0x01;
         if (!_inputEnabled) _disarmKeyboard();
         if (!wasInputEnabled && _inputEnabled && !_transportFenced) {
@@ -883,10 +1016,19 @@ class _RelayDeckTerminalControlState extends State<RelayDeckTerminalControl> {
         _keyboardButton = buf[offset + 1] == 0x01;
         setState(() {});
         return 2;
+      case _kCancelScroll:
+        if (buf.length - offset < 5) return null;
+        final cancelSeq = _readU32(buf, offset + 1);
+        // Server-side input is about to land: retire scroll motion first
+        // (arming the ballistic cutoff), then ack the sequence so Python
+        // knows later wheel reports are a fresh gesture.
+        _retireScrollMotion();
+        _sendScrollCancelled(cancelSeq);
+        return 5;
       case _kReset:
         _utf8Sink.reset();
         _terminal.reset();
-        _swipeRetire();
+        _gestureBoundary();
         _appliedBytes = 0;
         _dartResetCount++;
         _inputEnabledOverride = null;
@@ -917,15 +1059,18 @@ class _RelayDeckTerminalControlState extends State<RelayDeckTerminalControl> {
         return 5;
       case _kScrollViewport:
         if (buf.length - offset < 2) return null;
+        _retireScrollMotion();
         _scrollViewport(_readI8(buf, offset + 1));
         // A quiet terminal has no pending frame; without one the jump
         // and its view report would wait for the next output.
         WidgetsBinding.instance.scheduleFrame();
         return 2;
       default:
-        // Unknown kinds are a protocol mismatch: drop the connection state
-        // loudly rather than misframing the stream.
-        throw StateError('unknown terminal packet kind: $kind');
+        // Unknown kinds come from a newer companion: ignore the kind byte
+        // rather than killing the viewer. (A future multi-byte kind would
+        // still misframe here, but new control kinds stay single-byte, so
+        // an older bundle keeps working.)
+        return 1;
     }
   }
 
@@ -985,6 +1130,7 @@ class _RelayDeckTerminalControlState extends State<RelayDeckTerminalControl> {
   /// 0x7F for jump-to-bottom. A no-op in the alternate buffer, which
   /// has no scrollback — the packet is still consumed (handled).
   void _scrollViewport(int pages) {
+    _retireScrollMotion();
     if (_terminal.isUsingAltBuffer) return;
     if (!_scrollController.hasClients) return;
     final position = _scrollController.position;
@@ -1034,6 +1180,15 @@ class _RelayDeckTerminalControlState extends State<RelayDeckTerminalControl> {
     return position.maxScrollExtent - position.pixels < 1.0;
   }
 
+  /// SCROLL_CANCELLED (0x8A) with the cancel sequence it answers
+  /// (0 = the mount capability advertisement).
+  void _sendScrollCancelled(int seq) {
+    _channel?.send((BytesBuilder(copy: false)
+          ..addByte(_kScrollCancelled)
+          ..add(_u32(seq)))
+        .toBytes());
+  }
+
   void _sendModeReport() {
     // Engine truth for paste framing: the mode xterm2 itself holds
     // after this write/reset (RIS, split sequences, and multi-param
@@ -1063,31 +1218,57 @@ class _RelayDeckTerminalControlState extends State<RelayDeckTerminalControl> {
     // Every other mode ignores these events.
     final view = Listener(
       onPointerDown: (event) {
+        // A fresh press always kills momentum; a tap lands here too.
+        _flingStop();
+        _wheelCutoff = false;
         if (_localGestures && _localDragPointer == null) {
           _localDragPointer = event.pointer;
+          _flingTracker = VelocityTracker.withKind(event.kind)
+            ..addPosition(event.timeStamp, event.position);
         }
         if (_swipeMode && _inputEnabled && _swipePointer == null) {
           _swipePointer = event.pointer;
         }
       },
+      onPointerPanZoomStart: (event) {
+        // A fresh native-trackpad pan is a new gesture (its later
+        // updates are not: a pan cancelled mid-stream stays blocked).
+        _wheelCutoff = false;
+      },
       onPointerMove: (event) {
         if (_localGestures && event.pointer == _localDragPointer) {
           // Content follows the finger: finger up reveals later lines.
+          _flingTracker?.addPosition(event.timeStamp, event.position);
           _scrollLocalPixels(-event.delta.dy);
         }
         // Swipe depth: finger up scrolls toward the latest output.
         _swipeMove(event.pointer, -event.delta.dy);
       },
       onPointerUp: (event) {
-        if (event.pointer == _localDragPointer) _localDragPointer = null;
+        if (event.pointer == _localDragPointer) {
+          _localDragPointer = null;
+          // Release velocity coasts only in the mode that tracked it.
+          final v = _localGestures
+              ? _flingTracker?.getVelocityEstimate()?.pixelsPerSecond.dy ?? 0.0
+              : 0.0;
+          _flingTracker = null;
+          final coast = v.clamp(-4000.0, 4000.0);
+          if (coast.abs() >= 80) _flingStart(coast);
+        }
         _swipeRelease(event.pointer);
       },
       onPointerCancel: (event) {
-        if (event.pointer == _localDragPointer) _localDragPointer = null;
+        if (event.pointer == _localDragPointer) {
+          _localDragPointer = null;
+          // Cancelled, not released: no coast.
+          _flingTracker = null;
+        }
         _swipeRelease(event.pointer);
       },
       onPointerSignal: (event) {
+        if (event is PointerScrollEvent) _wheelCutoff = false;
         if (_localGestures && event is PointerScrollEvent) {
+          _flingStop();
           _scrollLocalPixels(event.scrollDelta.dy);
         }
         // Wheel depth: wheel down scrolls toward the latest output.
@@ -1212,4 +1393,62 @@ WheelScroll extractWheelScroll(String data) {
   rest = strip(rest, _sgrWheel, (m) => int.parse(m.group(1)!));
   rest = strip(rest, _urxvtWheel, (m) => int.parse(m.group(1)!) - 32);
   return WheelScroll(up, down, rest);
+}
+
+/// Vertical wheel reports in mouse-origin [data] as source-order runs.
+///
+/// Each run holds consecutive same-direction reports (first report's exact
+/// bytes stand for the run); enqueueing runs in order keeps a mixed chunk
+/// faithful instead of reordering all-ups before all-downs. Uses
+/// [extractWheelScroll]'s exact encodings and id math, so the two can
+/// never disagree on what is a wheel line; counts and the remainder
+/// stay authoritative there.
+List<({bool towardOlder, int rows, String report})> _wheelRuns(String data) {
+  final found = <({int start, int end, bool towardOlder, String bytes})>[];
+  void scan(Pattern pattern, int Function(Match) rawId) {
+    for (final match in pattern.allMatches(data)) {
+      final id = rawId(match);
+      if ((id & 64) == 0) continue;
+      if ((id & 3) == 0) {
+        found.add((
+          start: match.start,
+          end: match.end,
+          towardOlder: true,
+          bytes: match.group(0)!
+        ));
+      } else if ((id & 3) == 1) {
+        found.add((
+          start: match.start,
+          end: match.end,
+          towardOlder: false,
+          bytes: match.group(0)!
+        ));
+      }
+    }
+  }
+
+  scan(_x10Wheel, (m) => m.group(1)!.codeUnitAt(0) - 32);
+  scan(_sgrWheel, (m) => int.parse(m.group(1)!));
+  scan(_urxvtWheel, (m) => int.parse(m.group(1)!) - 32);
+  // Source order across encodings; a match starting inside an accepted
+  // one is a misread of its bytes, never a second report.
+  found.sort((a, b) => a.start.compareTo(b.start));
+  final runs = <({bool towardOlder, int rows, String report})>[];
+  var acceptedEnd = -1;
+  for (final report in found) {
+    if (report.start < acceptedEnd) continue;
+    acceptedEnd = report.end;
+    if (runs.isNotEmpty && runs.last.towardOlder == report.towardOlder) {
+      final last = runs.removeLast();
+      runs.add((
+        towardOlder: last.towardOlder,
+        rows: last.rows + 1,
+        report: last.report
+      ));
+    } else {
+      runs.add(
+          (towardOlder: report.towardOlder, rows: 1, report: report.bytes));
+    }
+  }
+  return runs;
 }

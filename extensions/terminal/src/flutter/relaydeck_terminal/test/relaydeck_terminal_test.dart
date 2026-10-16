@@ -1043,8 +1043,7 @@ void main() {
           matching: find.byType(Scrollable),
         ),
       );
-      final real =
-          states.where((s) => s.position.maxScrollExtent > 0).toList();
+      final real = states.where((s) => s.position.maxScrollExtent > 0).toList();
       if (real.isEmpty) return true;
       final p = real.single.position;
       return p.maxScrollExtent - p.pixels < 1.0;
@@ -2562,6 +2561,530 @@ void main() {
               expect(harness.inputs().length, baseline + 1,
                   reason: 'boot parity: only a live->reconnecting edge fences');
             }));
+  });
+
+  group('alt-buffer mouse wheel queue (mode C)', () {
+    // Agent TUIs (alternate buffer + mouse reporting): xterm2 runs the fling
+    // locally and emits one wheel report per line crossed. Those lines pace
+    // through the bounded queue (3 per 33 ms tick, 12 held) instead of one
+    // round trip each; a keystroke discards the queue and jumps ahead.
+    Future<void> feed(
+        WidgetTester tester, _GateHarness harness, String data) async {
+      final bytes = utf8.encode(data);
+      final packet = BytesBuilder(copy: false)
+        ..addByte(0x01)
+        ..add(_u32be(bytes.length))
+        ..add(bytes);
+      harness.factory.channel!.incoming.add(packet.toBytes());
+      await tester.pump();
+    }
+
+    Future<_GateHarness> pumpAltMouse(WidgetTester tester) async {
+      final harness = await _pumpGate(tester, inputEnabled: true);
+      await feed(tester, harness, '\x1b[?1049h\x1b[?1000h\x1b[?1006h');
+      await tester.pump();
+      expect(harness.views().last & 0x01, 0x01, reason: 'alt buffer');
+      expect(harness.views().last & 0x04, 0x04, reason: 'mouse mode');
+      return harness;
+    }
+
+    final wheelReport = RegExp(r'^\x1b\[<\d+;\d+;\d+[Mm]$');
+
+    testWidgets('fling emits bounded paced single-report packets',
+        (tester) async {
+      final harness = await pumpAltMouse(tester);
+      final c = tester.getCenter(find.byType(TerminalView));
+      final before = harness.inputs().length;
+      await tester.dragFrom(c, const Offset(0, -2000));
+      await tester.pump();
+      var seen = harness.inputs().length - before;
+      expect(seen, lessThanOrEqualTo(3));
+      for (var i = 0; i < 3; i++) {
+        await tester.pump(const Duration(milliseconds: 33));
+        final now = harness.inputs().length - before;
+        expect(now - seen, lessThanOrEqualTo(3),
+            reason: 'at most one tick per step');
+        seen = now;
+      }
+      expect(seen, greaterThan(3), reason: 'fling crossed lines');
+      // One immediate row plus the 12-row cap: the fling's reports arrive as
+      // separate enqueues, so the first flushes at once and the rest hold.
+      expect(seen, lessThanOrEqualTo(13));
+      // Drain to silence (fling ends, queue empties, tick cancels itself).
+      var quiet = 0;
+      for (var i = 0; i < 60 && quiet < 2; i++) {
+        final n = harness.inputs().length;
+        await tester.pump(const Duration(milliseconds: 100));
+        quiet = harness.inputs().length == n ? quiet + 1 : 0;
+      }
+      expect(quiet, 2, reason: 'settles');
+      for (final p in harness.inputs().skip(before)) {
+        expect(p[1], 3, reason: 'mouse origin');
+        expect(utf8.decode(p.sublist(6)), matches(wheelReport));
+      }
+    });
+
+    testWidgets(
+        'key mid-fling precedes and stops wheel packets',
+        (tester) => _withPlatform(TargetPlatform.macOS, () async {
+              final harness = await pumpAltMouse(tester);
+              final c = tester.getCenter(find.byType(TerminalView));
+              final before = harness.inputs().length;
+              await tester.dragFrom(c, const Offset(0, -2000));
+              await tester.pump();
+              expect(harness.inputs().length - before, greaterThan(0),
+                  reason: 'fling queued wheel rows');
+              await tester.sendKeyEvent(LogicalKeyboardKey.keyA);
+              await tester.pump();
+              final after = harness.inputs().skip(before).toList();
+              final keyIndex = after.indexWhere((p) => p[1] != 3);
+              expect(keyIndex, greaterThanOrEqualTo(0),
+                  reason: 'key forwarded');
+              expect(utf8.decode(after[keyIndex].sublist(6)), 'a');
+              await tester.pump(const Duration(milliseconds: 500));
+              expect(harness.inputs().skip(before + after.length), isEmpty,
+                  reason: 'queue discarded by the key');
+            }));
+
+    testWidgets('fenced wheel reports never replay after verification',
+        (tester) async {
+      final harness = await pumpAltMouse(tester);
+      final backend = harness.control.backend;
+      backend.isLoading = false;
+      backend.notifyListeners();
+      await tester.pump();
+      backend.isLoading = true;
+      backend.notifyListeners();
+      await tester.pump();
+      final before = harness.inputs().length;
+      final terminal =
+          tester.widget<TerminalView>(find.byType(TerminalView)).terminal;
+      for (var i = 0; i < 20; i++) {
+        terminal.mouseInput(TerminalMouseButton.wheelUp,
+            TerminalMouseButtonState.down, const CellOffset(2, 2));
+      }
+      expect(harness.inputs().length, before, reason: 'fenced: nothing leaves');
+      harness.factory.channel!.incoming.add(Uint8List.fromList([0x0D]));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 200));
+      expect(harness.inputs().length, before, reason: 'no stale replay');
+    });
+
+    testWidgets('mixed-direction chunk keeps source order', (tester) async {
+      final harness = await pumpAltMouse(tester);
+      final terminal =
+          tester.widget<TerminalView>(find.byType(TerminalView)).terminal;
+      const down = '\x1b[<65;3;3M';
+      const up = '\x1b[<64;3;3M';
+      final original = terminal.onOutput!;
+      // Fresh gesture first (clears the wheel cutoff); hijack after it so
+      // the tap's own clicks never enter the queue under test.
+      await tester.tap(find.byType(TerminalView));
+      await tester.pump(const Duration(milliseconds: 100));
+      terminal.onOutput = (_) => original(down + up);
+      final before = harness.inputs().length;
+      terminal.mouseInput(TerminalMouseButton.wheelUp,
+          TerminalMouseButtonState.down, const CellOffset(2, 2));
+      terminal.onOutput = original;
+      await tester.pump(const Duration(milliseconds: 100));
+      final sent = harness
+          .inputs()
+          .skip(before)
+          .map((p) => utf8.decode(p.sublist(6)))
+          .toList();
+      expect(sent, [down, up]);
+    });
+
+    testWidgets('mixed-encoding chunk keeps source order', (tester) async {
+      final harness = await pumpAltMouse(tester);
+      final terminal =
+          tester.widget<TerminalView>(find.byType(TerminalView)).terminal;
+      const x10down = '\x1b[Ma!!';
+      const sgrUp = '\x1b[<64;3;3M';
+      final original = terminal.onOutput!;
+      await tester.tap(find.byType(TerminalView));
+      await tester.pump(const Duration(milliseconds: 100));
+      terminal.onOutput = (_) => original(x10down + sgrUp);
+      final before = harness.inputs().length;
+      terminal.mouseInput(TerminalMouseButton.wheelUp,
+          TerminalMouseButtonState.down, const CellOffset(2, 2));
+      terminal.onOutput = original;
+      await tester.pump(const Duration(milliseconds: 100));
+      final sent = harness
+          .inputs()
+          .skip(before)
+          .map((p) => utf8.decode(p.sublist(6)))
+          .toList();
+      expect(sent, [x10down, sgrUp]);
+    });
+
+    testWidgets('CANCEL_SCROLL retires the queue and acks once',
+        (tester) async {
+      final harness = await pumpAltMouse(tester);
+      // A fresh gesture clears the wheel cutoff the mode feed armed.
+      await tester.tap(find.byType(TerminalView));
+      await tester.pump();
+      final armed = harness.inputs().length;
+      final terminal =
+          tester.widget<TerminalView>(find.byType(TerminalView)).terminal;
+      for (var i = 0; i < 20; i++) {
+        terminal.mouseInput(TerminalMouseButton.wheelUp,
+            TerminalMouseButtonState.down, const CellOffset(2, 2));
+      }
+      await tester.pump();
+      final before = harness.inputs().length;
+      expect(before, greaterThan(armed), reason: 'queue draining');
+      int acks() => harness.factory.channel!.sent
+          .where((p) => p.length == 5 && p[0] == 0x8A)
+          .length;
+      final mounted = acks();
+      harness.factory.channel!.incoming
+          .add(Uint8List.fromList([0x10, ..._u32be(1)]));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 200));
+      expect(harness.inputs().length, before, reason: 'queue retired');
+      expect(acks() - mounted, 1, reason: 'one SCROLL_CANCELLED per cancel');
+    });
+
+    testWidgets(
+        'unknown packet kind is ignored, terminal keeps working',
+        (tester) => _withPlatform(TargetPlatform.macOS, () async {
+              final harness = await pumpAltMouse(tester);
+              harness.factory.channel!.incoming.add(Uint8List.fromList([0x7F]));
+              await tester.pump();
+              await tester.sendKeyEvent(LogicalKeyboardKey.keyA);
+              await tester.pump();
+              final inputs = harness.inputs();
+              expect(inputs, hasLength(1));
+              expect(inputs.single.sublist(6), utf8.encode('a'));
+            }));
+
+    testWidgets('cancel ack carries the cancel sequence', (tester) async {
+      final harness = await pumpAltMouse(tester);
+      harness.factory.channel!.incoming
+          .add(Uint8List.fromList([0x10, ..._u32be(7)]));
+      await tester.pump();
+      final acks = harness.factory.channel!.sent
+          .where((p) => p.isNotEmpty && p[0] == 0x8A)
+          .toList();
+      expect(acks.last, Uint8List.fromList([0x8A, 0, 0, 0, 7]));
+    });
+
+    testWidgets('ballistic wheel rows stop after CANCEL_SCROLL',
+        (tester) async {
+      final harness = await pumpAltMouse(tester);
+      await tester.drag(find.byType(TerminalView), const Offset(0, -100));
+      await tester.pump();
+      // xterm2's application scroller: the infinite-extent position.
+      final positions = tester
+          .stateList<ScrollableState>(
+            find.descendant(
+              of: find.byType(TerminalView),
+              matching: find.byType(Scrollable),
+            ),
+          )
+          .map((s) => s.position)
+          .toList();
+      final inner =
+          positions.singleWhere((p) => p.maxScrollExtent == double.infinity)
+              as ScrollPositionWithSingleContext;
+      inner.goBallistic(1500);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 16));
+      harness.factory.channel!.incoming
+          .add(Uint8List.fromList([0x10, ..._u32be(1)]));
+      await tester.pump();
+      final before = harness.inputs().length;
+      for (var i = 0; i < 20; i++) {
+        await tester.pump(const Duration(milliseconds: 16));
+      }
+      expect(harness.inputs().length, before,
+          reason: 'ballistic rows dropped until a fresh gesture');
+      // A fresh pointer-down re-arms wheel reporting.
+      await tester.dragFrom(
+          tester.getCenter(find.byType(TerminalView)), const Offset(0, -500));
+      await tester.pump();
+      expect(harness.inputs().length, greaterThan(before),
+          reason: 'fresh gesture scrolls again');
+    });
+
+    // A fresh native trackpad pan: starts the gesture, pumps ten updates,
+    // returns the MAC origin INPUT packets produced.
+    Future<int> freshTrackpad(WidgetTester tester, _GateHarness harness) async {
+      final center = tester.getCenter(find.byType(TerminalView));
+      final gesture =
+          await tester.createGesture(kind: PointerDeviceKind.trackpad);
+      await gesture.panZoomStart(center);
+      final before = harness.inputs().length;
+      for (var i = 1; i <= 10; i++) {
+        await gesture.panZoomUpdate(center,
+            pan: Offset(0, -30.0 * i),
+            timeStamp: Duration(milliseconds: 16 * i));
+        await tester.pump(const Duration(milliseconds: 16));
+      }
+      final count = harness.inputs().length - before;
+      await gesture.panZoomEnd();
+      await tester.pump();
+      return count;
+    }
+
+    testWidgets(
+        'fresh trackpad scrolls after CANCEL_SCROLL',
+        (tester) => _withPlatform(TargetPlatform.macOS, () async {
+              final harness = await pumpAltMouse(tester);
+              harness.factory.channel!.incoming
+                  .add(Uint8List.fromList([0x10, ..._u32be(1)]));
+              await tester.pump();
+              final count = await freshTrackpad(tester, harness);
+              expect(count, greaterThan(0));
+            }));
+
+    testWidgets(
+        'fresh trackpad scrolls after mode change',
+        (tester) => _withPlatform(TargetPlatform.macOS, () async {
+              final harness = await pumpAltMouse(tester);
+              final count = await freshTrackpad(tester, harness);
+              expect(count, greaterThan(0));
+            }));
+
+    testWidgets(
+        'pan already running stays blocked through CANCEL_SCROLL',
+        (tester) => _withPlatform(TargetPlatform.macOS, () async {
+              final harness = await pumpAltMouse(tester);
+              final center = tester.getCenter(find.byType(TerminalView));
+              final gesture =
+                  await tester.createGesture(kind: PointerDeviceKind.trackpad);
+              await gesture.panZoomStart(center);
+              final before = harness.inputs().length;
+              for (var i = 1; i <= 3; i++) {
+                await gesture.panZoomUpdate(center,
+                    pan: Offset(0, -30.0 * i),
+                    timeStamp: Duration(milliseconds: 16 * i));
+                await tester.pump(const Duration(milliseconds: 16));
+              }
+              expect(harness.inputs().length, greaterThan(before),
+                  reason: 'pan produces rows before the cancel');
+              harness.factory.channel!.incoming
+                  .add(Uint8List.fromList([0x10, ..._u32be(1)]));
+              await tester.pump();
+              final frozen = harness.inputs().length;
+              for (var i = 4; i <= 10; i++) {
+                await gesture.panZoomUpdate(center,
+                    pan: Offset(0, -30.0 * i),
+                    timeStamp: Duration(milliseconds: 16 * i));
+                await tester.pump(const Duration(milliseconds: 16));
+              }
+              expect(harness.inputs().length, frozen,
+                  reason: 'later updates of a cancelled pan stay dropped');
+              await gesture.panZoomEnd();
+              await tester.pump();
+            }));
+  });
+
+  group('mode B momentum coast', () {
+    // Normal buffer with mouse reporting: the finger's release velocity
+    // coasts the owned local view after pointer-up; the PTY sees nothing.
+    Future<void> feed(
+        WidgetTester tester, _GateHarness harness, String data) async {
+      final bytes = utf8.encode(data);
+      final packet = BytesBuilder(copy: false)
+        ..addByte(0x01)
+        ..add(_u32be(bytes.length))
+        ..add(bytes);
+      harness.factory.channel!.incoming.add(packet.toBytes());
+      await tester.pump();
+    }
+
+    Future<_GateHarness> pumpTallMouse(WidgetTester tester,
+        {required bool inputEnabled, bool mouse = true}) async {
+      final harness = await _pumpGate(tester, inputEnabled: inputEnabled);
+      final lines = List<String>.generate(
+          200, (i) => 'row${i.toString().padLeft(3, '0')}');
+      await feed(tester, harness, '${lines.join('\r\n')}\r\n');
+      if (mouse) await feed(tester, harness, '\x1b[?1000h');
+      await tester.pump();
+      expect(harness.views().last & 0x01, 0x00, reason: 'normal buffer');
+      return harness;
+    }
+
+    ScrollPosition localPos(WidgetTester tester) {
+      // The owned local scrollable: finite non-zero extent (the hidden
+      // text field has zero extent; xterm's application scroller is
+      // infinite while mouse reporting is on).
+      final states = tester.stateList<ScrollableState>(
+        find.descendant(
+          of: find.byType(TerminalView),
+          matching: find.byType(Scrollable),
+        ),
+      );
+      final local = states
+          .where((s) =>
+              s.position.maxScrollExtent > 0 &&
+              s.position.maxScrollExtent < double.infinity)
+          .toList();
+      expect(local, hasLength(1));
+      return local.single.position;
+    }
+
+    Future<void> pageUp(WidgetTester tester, _GateHarness harness) async {
+      harness.factory.channel!.incoming.add(Uint8List.fromList([0x0B, 0xFF]));
+      await tester.pump();
+      await tester.pump();
+    }
+
+    Future<void> settle(WidgetTester tester, _GateHarness harness) async {
+      var quiet = 0;
+      for (var i = 0; i < 60 && quiet < 2; i++) {
+        final n = localPos(tester).pixels;
+        await tester.pump(const Duration(milliseconds: 100));
+        quiet = localPos(tester).pixels == n ? quiet + 1 : 0;
+      }
+      expect(quiet, 2, reason: 'coast settles');
+    }
+
+    testWidgets('fling coasts across frames, emits no INPUT', (tester) async {
+      final harness = await pumpTallMouse(tester, inputEnabled: true);
+      await pageUp(tester, harness);
+      final start = localPos(tester).pixels;
+      expect(start, lessThan(localPos(tester).maxScrollExtent));
+      final inputsBefore = harness.inputs().length;
+      await tester.fling(find.byType(TerminalView), const Offset(0, 300), 500);
+      await tester.pump();
+      final frames = <double>[];
+      for (var i = 0; i < 6; i++) {
+        await tester.pump(const Duration(milliseconds: 16));
+        frames.add(localPos(tester).pixels);
+      }
+      expect(frames[0], lessThan(start), reason: 'drag phase moved');
+      expect(frames[1], lessThan(frames[0]));
+      expect(frames[2], lessThan(frames[1]), reason: 'coasts after release');
+      expect(frames[5], lessThan(frames[0]));
+      await settle(tester, harness);
+      final end = localPos(tester).pixels;
+      // May rest mid-history or at the top edge: both are legal settles,
+      // and the frames above already proved the motion was gradual.
+      expect(end, lessThan(start));
+      expect(harness.inputs().length, inputsBefore, reason: 'no PTY bytes');
+      expect(harness.views().last & 0x02, 0x00, reason: 'off bottom');
+    });
+
+    testWidgets('fling direction matches the drag sign', (tester) async {
+      final harness = await pumpTallMouse(tester, inputEnabled: true);
+      await pageUp(tester, harness);
+      final start = localPos(tester).pixels;
+      await tester.fling(find.byType(TerminalView), const Offset(0, -100), 300);
+      await settle(tester, harness);
+      final peak = localPos(tester).pixels;
+      expect(peak, greaterThan(start), reason: 'finger up goes down-buffer');
+      await tester.fling(find.byType(TerminalView), const Offset(0, 100), 300);
+      await settle(tester, harness);
+      expect(localPos(tester).pixels, lessThan(peak),
+          reason: 'finger down comes back');
+    });
+
+    testWidgets('tap stops the coast', (tester) async {
+      final harness = await pumpTallMouse(tester, inputEnabled: true);
+      await pageUp(tester, harness);
+      final start = localPos(tester).pixels;
+      final inputsBefore = harness.inputs().length;
+      await tester.fling(find.byType(TerminalView), const Offset(0, 300), 1200);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 16));
+      final moving = localPos(tester).pixels;
+      expect(moving, lessThan(start), reason: 'coast underway');
+      expect(harness.inputs().length, inputsBefore,
+          reason: 'fling and coast emit nothing');
+      await tester.tap(find.byType(TerminalView));
+      await tester.pump();
+      final frozen = localPos(tester).pixels;
+      // The tap itself may click through as mouse input; afterwards both
+      // the view and the channel stay silent.
+      final tapped = harness.inputs().length;
+      for (var i = 0; i < 5; i++) {
+        await tester.pump(const Duration(milliseconds: 100));
+        expect(localPos(tester).pixels, frozen, reason: 'tap stopped it');
+        expect(harness.inputs().length, tapped, reason: 'stays silent');
+      }
+    });
+
+    testWidgets('fling without mouse reporting emits no INPUT', (tester) async {
+      final harness =
+          await pumpTallMouse(tester, inputEnabled: true, mouse: false);
+      await pageUp(tester, harness);
+      final inputsBefore = harness.inputs().length;
+      await tester.fling(find.byType(TerminalView), const Offset(0, 300), 800);
+      await tester.pumpAndSettle();
+      expect(harness.inputs().length, inputsBefore);
+    });
+
+    testWidgets('alt-buffer fling paces without losing lines', (tester) async {
+      // Unlike a single-move drag, a fling's lines arrive trickled across
+      // frames with queue ticks interleaved: most flush during the gesture
+      // (the cap sheds only backlog excess), the rest trails after release.
+      final harness = await pumpTallMouse(tester, inputEnabled: true);
+      await feed(tester, harness, '\x1b[?1049h\x1b[?1006h');
+      await tester.pump();
+      expect(harness.views().last & 0x01, 0x01, reason: 'alt buffer');
+      final inputsBefore = harness.inputs().length;
+      await tester.fling(
+          find.byType(TerminalView), const Offset(0, -2000), 2000);
+      final during = harness.inputs().length - inputsBefore;
+      // 2000 px cross ~116 lines; per-move discards would strand most of
+      // them, the cap sheds only the excess.
+      expect(during, greaterThan(60), reason: 'most lines flow live');
+      var quiet = 0;
+      for (var i = 0; i < 60 && quiet < 2; i++) {
+        final n = harness.inputs().length;
+        await tester.pump(const Duration(milliseconds: 100));
+        quiet = harness.inputs().length == n ? quiet + 1 : 0;
+      }
+      expect(quiet, 2, reason: 'settles');
+      final wheelReport = RegExp(r'^\x1b\[<\d+;\d+;\d+[Mm]$');
+      for (final p in harness.inputs().skip(inputsBefore)) {
+        expect(p[1], 3, reason: 'mouse origin');
+        expect(utf8.decode(p.sublist(6)), matches(wheelReport));
+      }
+    });
+    testWidgets('mode boundary retires pending release velocity',
+        (tester) async {
+      final harness = await pumpTallMouse(tester, inputEnabled: true);
+      await pageUp(tester, harness);
+      final gesture = await tester
+          .startGesture(tester.getCenter(find.byType(TerminalView)));
+      for (var i = 0; i < 6; i++) {
+        await gesture.moveBy(const Offset(0, 20),
+            timeStamp: Duration(milliseconds: 16 * (i + 1)));
+        await tester.pump(const Duration(milliseconds: 16));
+      }
+      // Mouse off and on in one write: the held drag belongs to the
+      // old mode, so its release must not coast.
+      await feed(tester, harness, '\x1b[?1000l\x1b[?1000h');
+      final before = localPos(tester).pixels;
+      await gesture.up(timeStamp: const Duration(milliseconds: 112));
+      await tester.pump();
+      for (var i = 0; i < 6; i++) {
+        await tester.pump(const Duration(milliseconds: 16));
+      }
+      expect(localPos(tester).pixels, before, reason: 'no post-boundary coast');
+    });
+
+    testWidgets('jump-to-latest pins the bottom during a coast',
+        (tester) async {
+      final harness = await pumpTallMouse(tester, inputEnabled: true);
+      await pageUp(tester, harness);
+      await tester.fling(find.byType(TerminalView), const Offset(0, 300), 1200);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 16));
+      harness.factory.channel!.incoming.add(Uint8List.fromList([0x0B, 0x7F]));
+      await tester.pump();
+      final max = localPos(tester).maxScrollExtent;
+      expect(localPos(tester).pixels, max, reason: 'jumped to bottom');
+      for (var i = 0; i < 6; i++) {
+        await tester.pump(const Duration(milliseconds: 16));
+      }
+      expect(localPos(tester).pixels, max, reason: 'coast cannot undo jump');
+      expect(harness.views().last & 0x02, 0x02, reason: 'follow tail stays');
+    });
   });
 }
 

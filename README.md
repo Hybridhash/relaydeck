@@ -71,7 +71,7 @@ From the public repository at the first public tag:
 
 ```sh
 uv tool install --managed-python --python 3.13 \
-  "relaydeck[companion] @ git+https://github.com/Hybridhash/relaydeck@v0.2.0"
+  "relaydeck[companion] @ git+https://github.com/Hybridhash/relaydeck@v0.2.1"
 relaydeck --version
 ```
 
@@ -80,7 +80,7 @@ Or from a local clone (needed for step 4 anyway):
 ```sh
 git clone https://github.com/Hybridhash/relaydeck.git
 cd relaydeck
-git checkout v0.2.0
+git checkout v0.2.1
 uv tool install --managed-python --python 3.13 ".[companion]"
 ```
 
@@ -131,7 +131,7 @@ The Herdr plugin adds **Set up**, **Pair a device** and **Status** actions in He
 the same commands are available from the `relaydeck` CLI. Install RelayDeck first (step 1), then:
 
 ```sh
-herdr plugin install Hybridhash/relaydeck/plugin --ref v0.2.0
+herdr plugin install Hybridhash/relaydeck/plugin --ref v0.2.1
 ```
 
 Herdr shows a preview of the manifest and commands before confirming. To remove it later:

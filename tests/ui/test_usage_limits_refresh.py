@@ -250,7 +250,14 @@ def test_the_cooldown_disables_the_button_with_the_minutes_left() -> None:
         }
         app = await _ready(Server(info))
         assert _button(app).disabled
-        assert "refresh in 3 min" in _texts(app)
+        assert "next refresh in 3 min" in _texts(app)
+        assert "3 min" in _texts(app)
+        assert "available in 3 min" in (_button(app).label or "")
+        assert not isinstance(_button(app), ft.IconButton)
+        assert any(
+            getattr(c, "icon", None) == ft.Icons.SCHEDULE
+            for c in iter_controls([app.page.views[0].controls])
+        )
 
     run(scenario())
 
@@ -261,7 +268,7 @@ def test_a_cooldown_answer_to_the_press_disables_it_too() -> None:
         server.outcome = RefreshOutcome("cooldown", retry_after_s=120)
         app = await _ready(server)
         await app.set_props_and_fire("limit-refresh-k1", {}, "click")
-        await _until(app, lambda: "refresh in 2 min" in _texts(app))
+        await _until(app, lambda: "next refresh in 2 min" in _texts(app))
         assert _button(app).disabled
 
     run(scenario())

@@ -470,11 +470,9 @@ def use_picture_attachment(
         # A holder without a picker is retired by definition: its native
         # result can never complete an operation again.
         holder["picker"] = None  # break the picker<->holder<->handler cycle
-        # Replace the handler with a weak diagnostic callback: the retired
-        # picker keeps no edge into the hook closures. Late results can
-        # explain rejection but cannot access any operation; in-flight
-        # uploads complete through op["picker"].on_upload, which retire
-        # never touches.
+        # A weak diagnostic callback keeps the retired picker from holding the hook closures. Late
+        # results can explain rejection only; in-flight uploads finish through
+        # op["picker"].on_upload.
         picker.on_result = _retired_result(feedback.current, session)
 
     def sweep_services(picker: Any) -> None:

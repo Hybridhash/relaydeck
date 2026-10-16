@@ -188,8 +188,20 @@ RECOVERY_SCRIPT = """(() => {
   // Returning to a suspended tab (phone app switch) also finishes it, so
   // an approval made meanwhile needs no manual reload. A return without a
   // received register message shows the banner and starts the watchdog.
+  function reportVisibility(persisted) {
+    try {
+      const flet = window.sessionStorage.getItem('_flet_session_id');
+      if (!flet) return;
+      fetch('/v1/ui/visibility', {
+        method:'POST',credentials:'same-origin',cache:'no-store',keepalive:true,
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({state:document.visibilityState,persisted:!!persisted,flet})
+      }).catch(() => {});
+    } catch (_) {}
+  }
   if (typeof document.addEventListener === 'function') {
     document.addEventListener('visibilitychange', () => {
+      reportVisibility(false);
       if (document.visibilityState === 'visible') {
         finishPairing().catch(() => {});
         reconnecting();
@@ -199,6 +211,7 @@ RECOVERY_SCRIPT = """(() => {
   // BFCache return: the page script resumes but the socket does not. The banner
   // shows and the watchdog starts instead of a blind reload.
   window.addEventListener('pageshow', (event) => {
+    reportVisibility(event.persisted);
     if (event.persisted) connected = false;
     reconnecting();
   });

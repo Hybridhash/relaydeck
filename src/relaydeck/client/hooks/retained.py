@@ -183,13 +183,9 @@ def use_terminal_effects(
     """Terminal lifecycle effects: revocation, route sync, pruning, phase watching, idle expiry."""
 
     def enforce_grants() -> None:
-        # Verified revocation closes the open session before it can
-        # write again: dispose stops renewal, unbinds the view (saved
-        # callbacks invalidate), and releases the lease. Both the
-        # per-host grant loss AND global identity revocation
-        # (revoked/ACCESS_REVOKED via the metadata path, which never
-        # touches lease renewal) close here. Unknown grants (listing
-        # never fetched) never close anything.
+        # Revocation (per-host grant loss or global) closes the open session before it can write:
+        # dispose stops renewal, unbinds the view and releases the lease. Unknown grants close
+        # nothing.
         _purge_revoked_stash()
         if session_box.current is None or not terminal_open:
             return

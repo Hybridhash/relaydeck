@@ -14,7 +14,13 @@ import pytest
 from relaydeck import cli, webbundle
 from relaydeck.companion import service as service_agent
 
-GOOD_JS = '"touchend";' * 4 + '"touchcancel";' * 2 + '"abort";' * 3 + '"flet_reconnect_merge_rd1";'
+GOOD_JS = (
+    '"touchend";' * 4
+    + '"touchcancel";' * 2
+    + '"abort";' * 3
+    + '"flet_reconnect_merge_rd1";'
+    + '"flet_reconnect_wake_rd1";'
+)
 
 
 def test_help_lists_the_companion_and_install_commands(capsys: pytest.CaptureFixture[str]) -> None:

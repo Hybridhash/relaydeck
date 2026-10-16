@@ -58,7 +58,7 @@ launch_new = ["muse", "--no-session-log"]
 quit_text = "/quit"
 prompt_marker = "(?m)^❯"
 usage_marker = "Subscription"
-not_reported = ['Subscription[^\n]*\n[^\n]*Currently unavailable']
+idle = ['Subscription[^\n]*\n[^\n]*Currently unavailable']
 binary = "muse"
 plan_pattern = 'Subscription · (?P<plan>[^\n]+)'
 
@@ -90,7 +90,8 @@ tier = "A"
 evidence = "Session-turn logs read on this Mac; limits via the usage pane; credits meter pending."
 
 [cli.tui]
-launch_new = ["kiro-cli", "chat"]
+launch_new = ["kiro-cli", "chat", "--agent-engine", "v2"]
+refuse = ["(?i)don't have a `?/usage`? command", "(?i)no `?/usage`? (command|tool)"]
 launch_resume = ["kiro-cli", "--resume-id", "{id}"]
 quit_text = "/quit"
 quit_marker = 'Session ended\.'

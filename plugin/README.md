@@ -20,7 +20,7 @@ and never reads Herdr's context JSON. A `build` step checks that uv and Python 3
 
 Install RelayDeck first (see the main README, "Install"), then install this plugin with Herdr:
 
-    herdr plugin install Hybridhash/relaydeck/plugin --ref v0.2.0
+    herdr plugin install Hybridhash/relaydeck/plugin --ref v0.2.1
 
 or link a local checkout while developing:
 

@@ -24,6 +24,10 @@ from relaydeck.client.features.terminal.controller import TerminalController
 from relaydeck.client.features.terminal.diagnostics import diagnostics_logger
 from relaydeck.client.features.terminal.models import TerminalViewState
 from relaydeck.client.features.terminal.output_log import BoundedOutputLog
+from relaydeck.client.features.terminal.recovery_cause import (
+    RECOVERY_LIFECYCLE,
+    RECOVERY_TRANSPORT,
+)
 from relaydeck.client.features.terminal.session.facade import SessionFacade
 from relaydeck.client.features.terminal.session.hooks import (
     key_hooks,
@@ -35,6 +39,7 @@ from relaydeck.client.features.terminal.session.hooks import (
 from relaydeck.client.features.terminal.session.keys import KeyHooks, KeyInput
 from relaydeck.client.features.terminal.session.lease import LeaseHooks, LeaseRenewalOwner
 from relaydeck.client.features.terminal.session.paste import PasteFlow, PasteHooks
+from relaydeck.client.features.terminal.session.recovery_state import RecoveryState
 from relaydeck.client.features.terminal.session.rendering import (
     RendererBinding,
     RendererHooks,
@@ -55,11 +60,12 @@ if TYPE_CHECKING:
     from relaydeck.client.features.terminal.surfaces import DetailSessions
 
 
-class TerminalSessionBase(SessionFacade, ABC):
+class TerminalSessionBase(RecoveryState, SessionFacade, ABC):
     # Per-session constants (phase names and user-facing text).
     _PHASE_LIVE: str
     _PHASE_EXITED: str
     _PHASE_DISCONNECTED: str
+    _PHASE_CONFLICT: str
     _DISCONNECT_MESSAGE: str
     _PAUSE_MESSAGE: str
     _NOUN: str  # "shell" / "agent": "the <noun> keeps running"
@@ -96,8 +102,11 @@ class TerminalSessionBase(SessionFacade, ABC):
         self._notice = ""
         self._bracketed = False
         self._paused = False
+        self._init_recovery()
+        self._explicit_reconnects = 0
         self._disposed = False
         self._foreground = True
+        self.note_input: Callable[[], None] = lambda: None
         self._interaction_generation = 0
         self.output_log = BoundedOutputLog()
         self._listeners: list[Callable[[Any], None]] = []
@@ -304,11 +313,14 @@ class TerminalSessionBase(SessionFacade, ABC):
         return self._phase
 
     # -- lifecycle: templates ---------------------------------------------------
-    async def disconnect(self) -> str:
+    async def disconnect(self, *, keep_recovery: bool = False) -> str:
         """Back/leave: drop the live writer, release the lease and stop the
         local stream. The attachment and its remote process survive;
         reconnect resumes. Never marks exit."""
         self._bump_generation("disconnect")
+        if not keep_recovery:
+            self._recovery_cause = None  # a deliberate leave is never revived on its own
+            self._stop_epoch += 1
         generation = self._interaction_generation
         # A reconnect or takeover can install a successor while teardown awaits: only the
         # resources captured now are ever closed or released.
@@ -344,14 +356,19 @@ class TerminalSessionBase(SessionFacade, ABC):
         return self._phase
 
     def _operation_current(self, generation: int) -> bool:
+        guard = self._recovery_guard
         return (
-            not self._disposed and not self._paused and generation == self._interaction_generation
+            not self._disposed
+            and not self._paused
+            and generation == self._interaction_generation
+            and (guard is None or guard())
         )
 
     def suspend_input(self) -> None:
         """Synchronous platform-event fence, preserving the terminal engine."""
         if self._paused:
             return
+        self._note_resume_mode()
         self._bump_generation("suspend")
         self._cancel_background_recovery()
         self._paused = True
@@ -368,20 +385,43 @@ class TerminalSessionBase(SessionFacade, ABC):
         no-op on `exited` (nothing live to invalidate)."""
         if self._phase == self._PHASE_EXITED:
             return self._phase
+        # Hiding must not turn a deliberate stop into something recoverable.
+        eligible = self._recoverable_now()
         self.suspend_input()
+        stop = self._stop_epoch
+
+        def stopped() -> bool:
+            return (
+                self._stop_epoch != stop
+                or self._disposed
+                or self._phase in (self._PHASE_EXITED, self._PHASE_CONFLICT)
+            )
+
         await self.stop_lease_renewal()
+        if stopped():
+            return self._phase
         await self._before_pause_close()
+        if stopped():
+            return self._phase
         await self._close_controller()
-        if self._lease is not None:
+        if stopped():
+            return self._phase
+        lease = self._lease
+        if lease is not None:
             try:
-                await self._ops.release_lease(self._lease.lease_id)
+                await self._ops.release_lease(lease.lease_id)
             except ShellOpError as exc:
-                self._notice = f"Pause noted ({exc.code}); the {self._NOUN} keeps running."
-            self._lease = None
+                if not stopped():
+                    self._notice = f"Pause noted ({exc.code}); the {self._NOUN} keeps running."
+            if self._lease is lease:
+                self._lease = None
+        if stopped():
+            return self._phase
         self._paused = True
         if not self._notice:
             self._notice = self._PAUSE_MESSAGE
         self._phase = self._PHASE_DISCONNECTED
+        self._recovery_cause = RECOVERY_LIFECYCLE if eligible else None
         self._notify()
         return self._phase
 
@@ -393,12 +433,18 @@ class TerminalSessionBase(SessionFacade, ABC):
         await self._after_resume_reconnect()
         return phase
 
-    async def reconnect(self) -> str:
+    async def reconnect(self, *, automatic: bool = False) -> str:
         """Reconnect a disconnected session. Refuses when exited."""
+        if not automatic:
+            self._explicit_reconnects += 1  # a user tap renews the automatic retry budget
         self._cancel_background_recovery()
         if self._phase == self._PHASE_EXITED:
             return self._phase
-        return await self._reconnect_flow()
+        self._automatic = automatic
+        try:
+            return await self._reconnect_flow()
+        finally:
+            self._automatic = False
 
     async def detach(self) -> None:
         """Retention-registry teardown: lease release with the remote
@@ -451,6 +497,8 @@ class TerminalSessionBase(SessionFacade, ABC):
         self._notify()
 
     def _enter_exited(self, detail: str) -> None:
+        self._recovery_cause = None
+        self._stop_epoch += 1
         self._lease = None
         self._notice = detail
         self._phase = self._PHASE_EXITED
@@ -480,12 +528,8 @@ class TerminalSessionBase(SessionFacade, ABC):
 
     def _handle_bytes(self, data: bytes) -> None:
         self.output_log += data
-        # The framing flag is engine truth: the Dart xterm2 engine
-        # reports its live `bracketedPasteMode` over MODE_REPORT after
-        # every write/reset, and the mount routes those reports to
-        # `set_bracketed_paste`. Python never re-parses output bytes
-        # for 2004 (a regex re-parse provably diverges from the engine
-        # across RIS and split private-mode params).
+        # Bracketed-paste framing comes from the engine's MODE_REPORT; re-parsing output bytes in
+        # Python diverges from the engine across RIS and split private-mode params.
         self._renderer.deliver(data)
         if self._sink is not None:
             self._sink(data)
@@ -528,6 +572,8 @@ class TerminalSessionBase(SessionFacade, ABC):
         diagnostics_logger().info("generation_bump site=%s", site)
 
     def _mark_viewer_reopened(self, notice: str) -> None:
+        self._note_resume_mode()
+        self._recovery_cause = RECOVERY_TRANSPORT if self._recoverable_now() else None
         self._phase = self._PHASE_DISCONNECTED
         self._notice = notice
 

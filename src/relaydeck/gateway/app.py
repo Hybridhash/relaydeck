@@ -743,11 +743,9 @@ def create_app(state: GatewayState) -> FastAPI:
             # which may differ from the session device id).
             if state.sessions.persistence is None:
                 state.push.revoke_device(dead.account, dead.device_id, state.now_ms())
-            # fix: an optional {"device_ref": ...} logout body also
-            # revokes that push record when owned by the session account.
-            # Absent, malformed, unknown, or foreign refs are a silent
-            # no-op: logout still returns ok, never cross-account, never
-            # disclosing.
+            # An optional {"device_ref": ...} logout body also revokes that push record when the
+            # session account owns it. Absent, malformed, unknown or foreign refs are a silent
+            # no-op.
             try:
                 logout_body = await request.json()
             except ValueError:
@@ -2119,16 +2117,10 @@ def create_app(state: GatewayState) -> FastAPI:
                         websocket, terminal_wire.encode_output(stream.epoch, offset, data)
                     )
             else:
-                # Ticket-only first connect (the production client's open
-                # path): replay retained ring bytes exactly like a
-                # first-connect resume, so pre-connect publishes (the
-                # attach-time greeting) reach the viewer. The former
-                # lease-log replay read a store nothing publishes to,
-                # which rendered a live stream blank at @0 (browser
-                # regression); the ring is the single backlog authority.
-                # Stale reads surface as explicit reset docs, never
-                # silent blanks. Live push subscribes EITHER path to the
-                # fanout below.
+                # Ticket-only first connect replays retained ring bytes like a first-connect resume,
+                # so pre-connect publishes (the attach greeting) reach the viewer; the ring is the
+                # single backlog authority. Stale reads surface as explicit reset docs, never
+                # blanks.
                 try:
                     stream = state.backend.read_stream(lease_id, "", 0)
                 except BackendError as exc:

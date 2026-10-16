@@ -6,13 +6,13 @@ import struct
 
 import pytest
 from flet.data_channel import _ProtocolMuxedDataChannel
-from flet.messaging.protocol import MessageAction
 from relaydeck_terminal import protocol
 
 from relaydeck.client.features.inventory.routing import RouteBridge
 from relaydeck.client.features.terminal.input_modes import WORKFLOW_AGENT_DIRECT
 from relaydeck.gateway import terminal_wire
 from tests.support.host_harness import run
+from tests.support.ui.editor_patches import assert_only_editor_idle_patches
 from tests.support.ui.phone_terminal import _ancestry, _shape
 from tests.support.ui.retained_root import _render
 
@@ -128,15 +128,7 @@ def test_multiline_compose_focus_and_tap_do_not_rebuild_or_rewrite_field(width: 
             assert app.find("composer-draft") is field
             assert _shape(_ancestry(app, field)) == ancestry
             assert (field.value, field.selection, field.min_lines, field.max_lines) == props
-            # No state update/render or field patch is needed for native caret placement.
-            # A working agent's dot blinks in the tab row (opacity only); that
-            # is allowed, but the composer field itself must never be patched.
-            patches = [
-                m.body for m in app.conn.sent[start:] if m.action == MessageAction.PATCH_CONTROL
-            ]
-            assert all(body.id != field._i and "opacity" in repr(body.patch) for body in patches), (
-                patches
-            )
+            assert_only_editor_idle_patches(app, field, app.conn.sent[start:])
             assert session.store.draft == draft and session.current_term is term
         finally:
             await app.set_props_and_fire("test-unmount", {}, "click")

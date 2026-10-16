@@ -21,6 +21,7 @@ from tests.support.host_harness import run
 from tests.support.terminal.resize import wire_sizes
 from tests.support.terminal.resume import _MuxConn
 from tests.support.terminal.retained_transport import capture
+from tests.support.ui.hook_clock import HookClock
 from tests.support.ui.instant_open import jobs
 from tests.support.ui.packaged import Preferences
 from tests.support.ui.retained_root import _active, _render
@@ -112,11 +113,8 @@ def test_warm_terminal_keeps_final_chrome_and_forwards_one_settled_resize(
     layout: Layout,
     resize_while_held: bool,
 ) -> None:
-    monkeypatch.setattr(agent_hooks, "OPEN_HOLD_S", 0.15)
-    monkeypatch.setattr(agent_hooks, "OPEN_SETTLE_S", 0.05, raising=False)
-    monkeypatch.setattr(agent_hooks, "RESIZE_SETTLE_S", 0.03)
-
     async def scenario() -> None:
+        clock = HookClock(monkeypatch, agent_hooks.__name__)
         bridge = RouteBridge(width=layout.width, height=layout.height)
         app, _, scripted, pool, _ = await _render(
             bridge=bridge,
@@ -148,7 +146,8 @@ def test_warm_terminal_keeps_final_chrome_and_forwards_one_settled_resize(
                 await _resize_viewport(app, bridge, layout.width, layout.keyboard_height)
             await _keyboard_layout(app, layout, workflow)
             channel.deliver(protocol.encode_size_report(*layout.size))
-            await asyncio.sleep(0.2)
+            await app.settle(rounds=1)
+            clock.advance_by(agent_hooks.OPEN_HOLD_S)
             await app.settle()
             assert forwarded == [layout.size]  # Cold open still forwards once.
             final_chrome = [c.key for c in _active(app, "agent-detail").controls]
@@ -179,8 +178,11 @@ def test_warm_terminal_keeps_final_chrome_and_forwards_one_settled_resize(
             # a protocol/lifecycle test, not a Flutter pixel measurement.
             cols, rows = layout.size
             channel.deliver(protocol.encode_size_report(cols, rows))
+            await app.settle(rounds=1)
             channel.deliver(protocol.encode_size_report(cols, rows - 3))
-            await asyncio.sleep(0.2)  # Slow control must outlive the ordinary hold cap.
+            await app.settle(rounds=1)
+            clock.advance_by(agent_hooks.OPEN_HOLD_S * 2)
+            await app.settle(rounds=1)  # Slow control outlives the ordinary hold cap.
             assert len(forwarded) == before
             release.set()
             await app.settle(rounds=2)
@@ -194,18 +196,24 @@ def test_warm_terminal_keeps_final_chrome_and_forwards_one_settled_resize(
                     app, bridge, layout.width - 30, (layout.keyboard_height or layout.height) - 40
                 )
             channel.deliver(protocol.encode_size_report(*final_size))
-            await asyncio.sleep(0.02)
+            await app.settle(rounds=1)
+            clock.advance_by(agent_hooks.OPEN_SETTLE_S / 2)
+            await app.settle(rounds=1)
             channel.deliver(protocol.encode_size_report(*final_size))
-            await asyncio.sleep(0.2)
+            await app.settle(rounds=1)
+            clock.advance_by(agent_hooks.OPEN_HOLD_S * 2)
+            await app.settle(rounds=1)
             assert len(forwarded) == before
             session.controller.fence_ui_input(False)
             session._notify()
             await app.settle(rounds=1)
             await _keyboard_layout(app, layout, workflow)
-            await asyncio.sleep(0.08)
+            clock.advance_by(agent_hooks.OPEN_HOLD_S)
+            await app.settle(rounds=1)
             assert len(forwarded) == before  # No pre-readiness geometry may be replayed.
             channel.deliver(protocol.encode_size_report(*final_size))
-            await asyncio.sleep(0.08)
+            await app.settle(rounds=1)
+            clock.advance_by(agent_hooks.RESIZE_SETTLE_S)
             await app.settle()
             assert reported[native_before:] == [
                 layout.size,
@@ -227,7 +235,8 @@ def test_warm_terminal_keeps_final_chrome_and_forwards_one_settled_resize(
             assert wire_sizes(socket) == [final_size]
             # Identical later reports still repaint; there is no size dedupe.
             channel.deliver(protocol.encode_size_report(*final_size))
-            await asyncio.sleep(0.05)
+            await app.settle(rounds=1)
+            clock.advance_by(agent_hooks.RESIZE_SETTLE_S)
             await app.settle()
             assert forwarded[before:] == [final_size, final_size]
             assert wire_sizes(socket) == [final_size, final_size]
@@ -236,11 +245,13 @@ def test_warm_terminal_keeps_final_chrome_and_forwards_one_settled_resize(
                 await _resize_viewport(app, bridge, width, height)
                 count = len(forwarded)
                 channel.deliver(protocol.encode_size_report(*size))
+                await app.settle(rounds=1)
                 # The opening hold never restarts; live geometry settles briefly.
                 await asyncio.sleep(0)
                 await asyncio.sleep(0)
                 assert forwarded[count:] == [], cause
-                await asyncio.sleep(0.05)
+                clock.advance_by(agent_hooks.RESIZE_SETTLE_S)
+                await app.settle(rounds=1)
                 assert forwarded[count:] == [size], cause
                 expected_sizes.append(size)
                 assert wire_sizes(socket) == expected_sizes, cause

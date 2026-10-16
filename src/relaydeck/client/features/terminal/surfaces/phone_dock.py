@@ -14,6 +14,7 @@ import flet as ft
 from relaydeck.client.components.design_system.terminal_window import (
     MobileKeyBar,
 )
+from relaydeck.client.features.composer.domain import SUBMISSION_FAILED, SUBMISSION_UNKNOWN
 from relaydeck.client.features.terminal.events import (
     click,
 )
@@ -50,6 +51,11 @@ from relaydeck.client.features.terminal.surfaces.direct_typing import (
 from relaydeck.client.features.terminal.surfaces.phone_composer import (
     _phone_composer,
 )
+
+
+def dock_signature(**shape: Any) -> tuple[Any, ...]:
+    """The dock's shape: the inputs that decide which dock rows exist and how tall they are."""
+    return tuple(sorted(shape.items()))
 
 
 def _toggle_buttons(
@@ -158,6 +164,8 @@ def build_phone_dock(
     toggle_keyboard: Callable[[], Any],
     tokens: dict[str, str],
     workflow: str,
+    dock_sizes: dict[tuple[Any, ...], float] | None = None,
+    on_layout: Callable[[float, bool, bool], Any] | None = None,
 ) -> Any:
     """The phone input dock (composer, key bar, tab/typing row), normal or typing column."""
     compose = mobile_mode == "compose" and workflow == WORKFLOW_AGENT_COMPOSER
@@ -288,15 +296,36 @@ def build_phone_dock(
         tight=True, spacing=0, controls=[composer, paste_notice, typing_row]
     )
     if slot_mode:
-        # Same wrappers (right, bottom, width) in both layouts: only the
-        # geometry changes, so the composer field is never remounted.
+        # Same wrappers in both layouts, so the composer field is never remounted.
         dock_w, dock_h = comp_size
-        bottom.append(
-            ft.Container(
-                key="agent-input-spacer",
-                height=0.0 if split else dock_h or PHONE_DOCK_HEIGHT,
-            )
+        # Heights are remembered per dock shape so a mode change renders the right spacer in the
+        # same frame: each late spacer step is an extra terminal resize.
+        signature = dock_signature(
+            compose=compose,
+            mobile_mode=mobile_mode,
+            in_control=in_control,
+            attached_output=attached_output,
+            chips=bool(pictures),
+            draft_lines=min(4, draft.count("\n") + 1),
+            error_row=error is not None and submission in (SUBMISSION_FAILED, SUBMISSION_UNKNOWN),
+            review=blocked_review is not None,
+            paste_hint=paste_hint and mobile_mode == "direct",
+            tier=tier,
+            width=round(detail_width),
         )
+        memo = dock_sizes if dock_sizes is not None else {}
+        spacer = 0.0 if split else memo.get(signature) or dock_h or PHONE_DOCK_HEIGHT
+        if on_layout is not None:
+            on_layout(spacer, not compose and (in_control or attached_output), signature in memo)
+        bottom.append(ft.Container(key="agent-input-spacer", height=spacer))
+
+        def measured(e: Any) -> None:
+            if split:
+                return
+            memo[signature] = e.height
+            if abs(e.width - dock_w) >= 2 or abs(e.height - spacer) >= 2:
+                set_comp_size((e.width, e.height))
+
         slot_children.append(
             ft.Container(
                 key="agent-input-dock",
@@ -305,11 +334,8 @@ def build_phone_dock(
                 width=split_side_width if split else (detail_width or PHONE_FALLBACK_WIDTH),
                 disabled=terminal.selection.open or not composer_focusable,
                 content=ft.Container(
-                    on_size_change=lambda e: (
-                        set_comp_size((e.width, e.height))
-                        if not split and (abs(e.width - dock_w) >= 2 or abs(e.height - dock_h) >= 2)
-                        else None
-                    ),
+                    key="agent-input-dock-body",
+                    on_size_change=measured,
                     content=phone_dock_content,
                 ),
             )

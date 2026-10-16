@@ -79,6 +79,7 @@ class RetainedSession:
 
     def observe(self, session: Any) -> None:
         self.owner.reconcile_ui(self)
+        self.owner.recovery_note(self)
         self.supervise(session)
         snapshot = self.owner.screens.get(self.cache_key, self.epoch, session.attachment)
         if session.term_state.status == "reset" or (
@@ -178,6 +179,7 @@ class RetainedSessions:
         self._visits = 0
         self.warm_budget = WARM_BUDGET_PHONE
         self.reconcile_ui: Callable[[RetainedSession], None] = lambda entry: None
+        self.recovery_note: Callable[[RetainedSession], None] = lambda entry: None
 
     def _warm_entries(self) -> tuple[RetainedSession, ...]:
         # With no terminal on screen (the list) the foreground slot is free, so nothing is evicted

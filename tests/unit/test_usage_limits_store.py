@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from relaydeck.usage.contracts import (
+    LimitError,
     LimitSnapshot,
     LimitStatus,
     LimitWindow,
@@ -110,6 +111,49 @@ def test_last_good_kept_only_for_the_same_account(tmp_path: Path) -> None:
         # Going back to A makes A active again, with its own newest reading.
         store.apply_limits(KIND, KEY, (snapshot("quota-a", NOW + 3, account="account-a"),), NOW + 3)
         assert {s.account_ref for s in limits_of(store)} == {"account-a"}
+
+
+def test_failure_row_keeps_identified_windows(tmp_path: Path) -> None:
+    """A transient failure recorded after a good reading leaves the good
+    windows current (aged), never replaced by the windowless error."""
+    with SqliteUsageStore(tmp_path / "usage.db", "UTC", clock=lambda: NOW) as store:
+        store.apply_limits(KIND, KEY, (snapshot("quota-a", NOW, account="account-a"),), NOW)
+        suppressed = store.record_limits_failure(
+            KIND, KEY, LimitError.UNAVAILABLE, NOW + 10, sources=("fake",)
+        )
+        assert suppressed == 0
+        shown = limits_of(store)
+        assert len(shown) == 1
+        assert shown[0].account_ref == "account-a"
+        assert [w.window_key for w in shown[0].windows] == ["primary"]
+
+
+def test_a_failure_leaves_a_historical_unknown_reading_historical(tmp_path: Path) -> None:
+    """A transient failure must not refresh an older identityless reading into the newest row,
+    which would hide the active named reading."""
+    with SqliteUsageStore(tmp_path / "usage.db", "UTC", clock=lambda: NOW) as store:
+        store.apply_limits(KIND, KEY, (snapshot("quota-a", NOW - 10, account=None),), NOW - 10)
+        store.apply_limits(KIND, KEY, (snapshot("quota-a", NOW, account="account-a"),), NOW)
+        suppressed = store.record_limits_failure(
+            KIND, KEY, LimitError.UNAVAILABLE, NOW + 10, sources=("fake",)
+        )
+        assert suppressed == 0
+        shown = limits_of(store)
+        assert [s.account_ref for s in shown] == ["account-a"]
+        assert [w.window_key for w in shown[0].windows] == ["primary"]
+
+
+def test_expired_window_shows_as_reset_after_a_failure(tmp_path: Path) -> None:
+    """The kept window whose reset has passed reads as ended, never the
+    stale percentage, even when a newer failure arrives."""
+    ended = LimitWindow("primary", 99.0, 300, NOW - 1, LimitStatus.FRESH)
+    with SqliteUsageStore(tmp_path / "usage.db", "UTC", clock=lambda: NOW) as store:
+        store.apply_limits(KIND, KEY, (snapshot("quota-a", NOW, (ended,), "account-a"),), NOW)
+        store.record_limits_failure(KIND, KEY, LimitError.UNAVAILABLE, NOW + 10, sources=("fake",))
+        shown = limits_of(store)
+        assert len(shown) == 1
+        assert shown[0].account_ref == "account-a"
+        assert shown[0].windows[0].status == LimitStatus.EXPIRED
 
 
 def test_unknown_account_never_touches_named_accounts(tmp_path: Path) -> None:

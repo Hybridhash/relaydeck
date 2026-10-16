@@ -54,7 +54,7 @@ class ProviderResult:
     snapshots: tuple[LimitSnapshot, ...] = ()
     error: LimitError | None = None
     # machine-readable attempt detail for the refresh record
-    # ("no_space", "not_reported", "cleanup_failed"); "" means none. Never screen text.
+    # ("no_space", "not_reported", "idle", "cleanup_failed"); "" means none. Never screen text.
     note: str = ""
 
 
@@ -99,6 +99,8 @@ class TuiRecipe:
     session_root: str | None  # "~"-prefixed or absolute; None with no tracking
     not_found: tuple[str, ...]
     not_reported: tuple[str, ...]  # the tool answered but has no limits to show right now
+    idle: tuple[str, ...]  # the tool shows no use in its first window yet: a reading of 0 %
+    refuse: tuple[str, ...]  # a model answer on screen instead of the usage panel
     binary: str  # expected foreground basename of the tool
     plan_pattern: str | None  # one named group: `plan`
     windows: tuple[TuiWindowSpec, ...]
@@ -230,6 +232,12 @@ def tui_recipe_from(data: Any) -> TuiRecipe:
     raw_not_reported = data.get("not_reported", [])
     if not isinstance(raw_not_reported, list):
         raise ValueError("tui recipe: bad not_reported")
+    raw_idle = data.get("idle", [])
+    if not isinstance(raw_idle, list):
+        raise ValueError("tui recipe: bad idle")
+    raw_refuse = data.get("refuse", [])
+    if not isinstance(raw_refuse, list):
+        raise ValueError("tui recipe: bad refuse")
     return TuiRecipe(
         launch_new=_argv(data.get("launch_new"), "launch_new", placeholder=False),
         launch_resume=_argv(resume, "launch_resume", placeholder=True) if resume else None,
@@ -245,6 +253,8 @@ def tui_recipe_from(data: Any) -> TuiRecipe:
         session_root=root,
         not_found=tuple(_pattern(item, "not_found") for item in raw_not_found),
         not_reported=tuple(_pattern(item, "not_reported") for item in raw_not_reported),
+        idle=tuple(_pattern(item, "idle") for item in raw_idle),
+        refuse=tuple(_pattern(item, "refuse") for item in raw_refuse),
         binary=binary,
         plan_pattern=_pattern(plan, "plan pattern", groups=frozenset({"plan"}))
         if plan is not None
@@ -277,6 +287,7 @@ class ProviderSpec:
     # resolved recipe bundle for `tui-usage-pane-v1` blocks, else None.
     on_demand: bool = False
     tui: TuiBundle | None = None
+    auto_interval_ms: int = 0  # background read of an on-demand block; 0 = manual only
 
 
 class LimitsProvider(Protocol):

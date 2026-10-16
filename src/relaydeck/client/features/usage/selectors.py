@@ -444,7 +444,7 @@ def provider_status(kind: model.Kind, limit: model.Limit | None, now_ms: int) ->
         return STATUS_READING_UNAVAILABLE
     if limit.status == "not_reported":
         return STATUS_NOT_REPORTED
-    if limit.status == "stale" or now_ms - limit.observed_ms > model.LIMIT_STALE_MS:
+    if model.reading_stale(kind, limit, now_ms):
         return STATUS_STALE
     windows = [model.effective_window_status(w, limit.observed_ms, now_ms) for w in limit.windows]
     if limit.status == "expired" or "expired" in windows:
@@ -515,6 +515,7 @@ class LimitWindow:
     limit_amount: float | None = None
     unit: str | None = None
     over_allowance: bool = False
+    idle: bool = False  # no use reported in this window yet
 
 
 @dataclass(frozen=True)
@@ -527,6 +528,7 @@ class ProviderLimits:
     plan_label: str | None = None
     refresh: model.LimitsRefresh | None = None  # the kind's on-demand limits read (None: older)
     setup_state: str | None = None  # the hook's setup evidence that blocked the status, if any
+    quiet: bool = False  # an old reading of a tool not used since: still current, said so
 
 
 def limits(page: UsagePage, now_ms: int, flt: Filter | None = None) -> tuple[ProviderLimits, ...]:
@@ -539,6 +541,7 @@ def limits(page: UsagePage, now_ms: int, flt: Filter | None = None) -> tuple[Pro
             continue
         reading = latest_limit(page, kind.kind)
         windows: tuple[LimitWindow, ...] = ()
+        stale = reading is not None and model.reading_stale(kind, reading, now_ms)
         if reading is not None:
             windows = tuple(
                 LimitWindow(
@@ -546,11 +549,14 @@ def limits(page: UsagePage, now_ms: int, flt: Filter | None = None) -> tuple[Pro
                     label=window_label(window.window_minutes),
                     used_percent=window.used_percent,
                     resets_at_ms=window.resets_at_ms,
-                    status=model.effective_window_status(window, reading.observed_ms, now_ms),
+                    status=model.effective_window_status(
+                        window, reading.observed_ms, now_ms, stale=stale
+                    ),
                     used_amount=window.used_amount,
                     limit_amount=window.limit_amount,
                     unit=window.unit,
                     over_allowance=window.over_allowance,
+                    idle=window.idle,
                 )
                 for window in reading.windows
             )
@@ -564,6 +570,7 @@ def limits(page: UsagePage, now_ms: int, flt: Filter | None = None) -> tuple[Pro
                 plan_label=reading.plan_label if reading is not None else None,
                 refresh=kind.refresh,
                 setup_state=_blocking_setup_state(kind),
+                quiet=reading is not None and model.no_use_since(kind, reading, now_ms),
             )
         )
     return tuple(out)

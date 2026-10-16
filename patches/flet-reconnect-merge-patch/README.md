@@ -53,24 +53,76 @@ Pristine input: `$RD_FLET_SRC` or
 the package from that input and `flet-1.0.3-rd1.diff`, never editing the pub cache
 or fetching dependencies. `--check` compares the reconstructed whole tree.
 
+To regenerate the diff after editing the vendored tree (headers carry no
+timestamps, matching the original style):
+
+```sh
+STAGE=$(mktemp -d /tmp/rd-diffgen.XXXXXX)
+rsync -a --exclude .swiftpm --exclude test --exclude README.md \
+  "${PUB_CACHE:-$HOME/.pub-cache}/hosted/pub.dev/flet-1.0.3/" "$STAGE/a/"
+rsync -a extensions/terminal/third_party/flet-1.0.3-rd1/ "$STAGE/b/"
+(cd "$STAGE" && diff -ruN a b; true) | grep -v "^diff -ruN " \
+  | sed -E 's/^((---|\+\+\+) [^ ]+)\t.*$/\1/' \
+  > patches/flet-reconnect-merge-patch/flet-1.0.3-rd1.diff
+rm -rf "$STAGE"
+patches/flet-reconnect-merge-patch/apply.sh --check
+```
+
+## Fast wake reconnect (second repair in this folder)
+
+When an installed web app returns from the background, a dead socket was
+discovered only at the server's ping timeout (the browser sends no pings, the
+Flet protocol has none, and the server sends nothing to an idle page), and the
+retry delay doubled without a cap.
+
+The repair adds only this to pristine Flet: remote retry delays come from a
+pure `ReconnectPolicy` (300 ms, 600 ms, 1.2 s, then a 2 s cap, ±25 % jitter,
+reset on wake and on register) instead of unbounded doubling, and the retry is
+a cancellable `Timer`. On return, `wake()` cancels a pending retry timer and
+runs exactly what the timer would have run (`connect()`) at once; when no
+timer is pending it does nothing. Every scheduled retry attempt runs exactly
+as pristine would run it at expiry — there is deliberately no in-flight guard
+(pristine has none), so a retry is never dropped while another attempt is
+still opening. If two attempts overlap, the generation each channel carries
+resolves them: a retired socket's late close event or packets are ignored, and
+a channel that finishes opening after retirement or disposal is disconnected
+without registering, so exactly one transport owns the session. Wake sources are
+`visibilitychange` to visible, `pageshow` from the back-forward cache, and
+`online`, root app only (deliberately no `focus`). Localhost retry timing,
+register/queue-drain logic and the merge repair above are unchanged.
+
 ## Tests and compiled evidence
 
-Run `flutter test test/widgets/reconnect_merge_test.dart` in the vendored
-package with Flutter 3.44.8. The widget regression mounts the real Flet control
-and notifier tree, merges an identical snapshot, applies Python's button patch
+```sh
+patches/flet-reconnect-merge-patch/apply.sh --test
+```
+
+`--test` rebuilds the package from pristine plus the diff in a temp dir, copies
+this folder's `test/` in, and runs `flutter test` with Flutter 3.44.8
+(`$FLUTTER` overrides the SDK path). Policy tests pin the delay sequence, cap,
+jitter bounds, reset and the 15 s threshold; coordinator tests drive the real
+backend with a fake channel (wake with no pending timer does nothing, pending
+timer runs now and exactly once, retired generation and packets ignored,
+dispose during connect, embedded retry, remote/local retry delays). The merge
+widget regression also runs from here: it mounts the real Flet control and
+notifier tree, merges an identical snapshot, applies Python's button patch
 `[0, 1, 'disabled', false]`, then requires exactly one backend click and retained
 Control identity. Additional cases cover Send suffixes, reorder/add/remove, dialog overlays,
 component bodies, nested maps/lists, reparenting, type replacement, explicit
 empty overlays and preservation of properties omitted by partial updates.
 
-The runtime string `flet_reconnect_merge_rd1` is emitted by the list branch;
-`build_manifest.py --check-markers` requires it in compiled `main.dart.js`
+The runtime strings `flet_reconnect_merge_rd1` (emitted by the list branch) and
+`flet_reconnect_wake_rd1` (emitted by `wake()`, whose detail lines also log
+`action=<none|retry_now> source=<>` for device measurement)
+are required in compiled `main.dart.js` by `build_manifest.py --check-markers`
 through the shared `relaydeck.webbundle.REPAIR_MARKERS` table. The build script
 checks the vendored tree before compiling and checks markers afterward.
 
 ## Remove when upstream fixes reconciliation
 
-Remove this patch folder, the vendored package, the viewer's `flet` override,
+This folder carries two repairs (merge above, wake reconnect) in the one diff;
+upstream fixes for either would split or shrink it rather than remove it whole.
+To remove entirely: remove this patch folder, the vendored package, the viewer's `flet` override,
 the delimited `flet-reconnect-merge-patch` block in `build_web_client.sh` and its
 shared repair-marker entry; then rebuild and run the widget regression against
 the upstream package. Keep the independent file-picker and engine repairs.

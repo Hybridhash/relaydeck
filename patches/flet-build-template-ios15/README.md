@@ -8,8 +8,8 @@ Flet 1.0.3's iOS build template hardcodes iOS 13.0, but Xcode 27 supports iOS 15
 - **Changes** (`flet-build-template-ios15.diff`), under `build/{{cookiecutter.out_dir}}/ios/`:
   `Podfile` (`platform :ios, '15.0'` plus a `post_install` line forcing every pod target's
   `IPHONEOS_DEPLOYMENT_TARGET` to 15.0) and `Runner.xcodeproj/project.pbxproj` (three `13.0` to `15.0`).
-- **Provenance**: derived by diffing the pristine zip against the maintainers' working copy
-  (`/private/tmp/rd-native/template`, read only). `apply.sh` reproduces that copy exactly (verified with `diff -r`).
+- **Reproduce**: `apply.sh` unpacks the pinned pristine zip (hash checked) and applies the diff. Re-running it
+  against an existing `DEST` compares with `diff -r` and exits non-zero (asking for `--force`) if it differs.
 
 ## Apply
 ```

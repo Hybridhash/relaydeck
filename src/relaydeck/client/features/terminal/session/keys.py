@@ -45,6 +45,7 @@ class KeyHooks:
     keys: Callable[[], KeyInputSession]
     modes: Callable[[], InputModeState]
     notify: Callable[[], None]
+    note_input: Callable[[], None] = lambda: None
     # Agent-only differences; shells keep the defaults.
     store: Callable[[], ComposerStore | None] = lambda: None
     allow_draft: bool = False  # only the agent Composer may route to a draft
@@ -86,6 +87,7 @@ class KeyInput:
         hooks = self._hooks
         if not hooks.bound():
             return ROUTE_DROPPED
+        hooks.note_input()
         route = route_committed_text(
             hooks.modes(),
             store=hooks.store(),
@@ -127,6 +129,7 @@ class KeyInput:
             return ROUTE_DROPPED
         key_token = token[1] if token is not None else None
         if origin == ORIGIN_KEY:
+            hooks.note_input()
             if hooks.drops_engine_keys():
                 return ROUTE_DROPPED
             emission = hooks.keys().commit_bytes(bytes(data), token=key_token)
@@ -146,6 +149,7 @@ class KeyInput:
         hooks = self._hooks
         if not hooks.bound():
             return False
+        hooks.note_input()
         emission = hooks.keys().press_key(name, physical_modifiers=physical_modifiers)
         if emission is None:
             return False

@@ -17,7 +17,7 @@ from relaydeck.gateway.app import GatewayState, create_app
 from relaydeck.gateway.backend import FakeBackend
 
 FIXTURES = Path(__file__).resolve().parent.parent / "fixtures" / "gateway"
-SECRET = b"task-024-security-test-secret-32b!!"
+SECRET = b"synthetic-security-test-secret-32b!!"
 NOW = 1_000_000
 
 ALL_CAPS = frozenset(

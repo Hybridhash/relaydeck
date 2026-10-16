@@ -23,7 +23,8 @@ SCHEMA_VERSION = 1
 SCOPES = ("workspace", "overall", "not_linked")
 LIMIT_STATUSES = ("fresh", "stale", "expired", "not_reported")
 COVERAGES = ("complete", "partial", "unverified", "unavailable")
-# The contract LIMIT_STALE_MS: a reading older than this is stale, whatever it said.
+# The contract LIMIT_STALE_MS: the age at which a timed source has missed three of its checks, and
+# the fallback age for a server that does not report tool activity.
 LIMIT_STALE_MS = 15 * 60 * 1000
 SETUP_STATES = (
     "not_configured",
@@ -124,6 +125,7 @@ class Window:
     limit_amount: float | None = None
     unit: str | None = None
     over_allowance: bool = False  # the plan's allowance is used up and exceeded
+    idle: bool = False  # the tool reports no use in this window yet: a reading, not a failure
 
 
 @dataclass(frozen=True)
@@ -202,6 +204,11 @@ class Kind:
     sources: tuple[SourceSetup, ...] = ()  # empty for an older server
     credits_reported: bool = False  # the tool is metered in credits; False: older server
     refresh: LimitsRefresh | None = None  # None: an older server (no refresh button)
+    # Latest ledger event of the tool (None: no events). `activity_reported` is False for an older
+    # server, which never says.
+    last_activity_ms: int | None = None
+    activity_reported: bool = False
+    limits_error: str | None = None  # the timed source's last fetch failed with this error
 
 
 @dataclass(frozen=True)
@@ -385,6 +392,7 @@ def _window(value: object) -> Window:
         limit_amount=_amount(doc.get("limit_amount")),
         unit=unit.strip() if isinstance(unit, str) and unit.strip() else None,
         over_allowance=over,
+        idle=doc.get("idle") is True,
     )
 
 
@@ -491,7 +499,15 @@ def _kind(value: object) -> Kind:
         sources=sources,
         credits_reported=bool(doc.get("credits_reported") is True),
         refresh=_refresh(doc.get("limits_refresh")),
+        last_activity_ms=_int(doc.get("last_activity_ms"), nullable=True),
+        activity_reported="last_activity_ms" in doc,
+        limits_error=_state_error(doc.get("limits_state")),
     )
+
+
+def _state_error(value: object) -> str | None:
+    error = value.get("error") if isinstance(value, dict) else None
+    return error if isinstance(error, str) and error else None
 
 
 def host_day(now_ms: int, timezone: str) -> date:
@@ -567,16 +583,52 @@ def _display(page: UsagePage, kind: str) -> tuple[str, bool]:
 LIMIT_FRESH = "fresh"
 
 
-def effective_window_status(window: Window, observed_ms: int, now_ms: int) -> str:
+def reading_stale(kind: Kind | None, limit: Limit, now_ms: int) -> bool:
+    """Whether the reading may be wrong, not merely old. A passive source (status line, logs)
+    can only have moved if the tool was used after it was read; a timed source is stale after
+    three missed checks; any failed attempt makes it suspect. A server that does not report
+    activity falls back to the age rule."""
+    if limit.status == "stale":
+        return True
+    if kind is None or not kind.activity_reported:
+        return now_ms - limit.observed_ms > LIMIT_STALE_MS
+    if kind.limits_error is not None or (kind.refresh is not None and kind.refresh.last_error):
+        return True
+    if timed_source(kind, limit):
+        return now_ms - limit.observed_ms > LIMIT_STALE_MS
+    return kind.last_activity_ms is not None and kind.last_activity_ms > limit.observed_ms
+
+
+def no_use_since(kind: Kind, limit: Limit, now_ms: int) -> bool:
+    """An old reading that is still right: the tool has not been used since it was read."""
+    return (
+        kind.activity_reported
+        and not timed_source(kind, limit)
+        and now_ms - limit.observed_ms > LIMIT_STALE_MS
+        and not reading_stale(kind, limit, now_ms)
+    )
+
+
+def timed_source(kind: Kind, limit: Limit) -> bool:
+    """A provider reading that refreshes itself on a timer (no hook, no manual pane read)."""
+    refresh = kind.refresh
+    return bool(limit.source) and (
+        refresh is None or (not refresh.available and refresh.reason == "not_configured")
+    )
+
+
+def effective_window_status(
+    window: Window, observed_ms: int, now_ms: int, *, stale: bool = False
+) -> str:
     """The window's status at `now_ms`, not at the snapshot: a window past its reset is expired,
-    and any reading older than the stale threshold is stale, whatever it said when recorded."""
+    and a reading that may be wrong (`stale`) is stale, whatever it said when recorded."""
     if window.status == "not_reported":
         return "not_reported"
     if window.status == "expired":
         return "expired"
     if window.resets_at_ms is not None and now_ms >= window.resets_at_ms:
         return "expired"
-    if now_ms - observed_ms > LIMIT_STALE_MS:
+    if stale:
         return "stale"
     return window.status
 
@@ -632,9 +684,14 @@ def console_card(page: UsagePage, now_ms: int) -> ConsoleCard:
     usage = selectors.usage_of(day_rows)
     priced = usage.cost.state in ("zero", "priced") and available
     best_by_tool: dict[str, ConsolePick] = {}
+    kinds = {kind.kind: kind for kind in page.kinds}
     for limit in current_limits(page.limits):
+        stale = reading_stale(kinds.get(limit.kind), limit, now_ms)
         for window in limit.windows:
-            if effective_window_status(window, limit.observed_ms, now_ms) != LIMIT_FRESH:
+            if (
+                effective_window_status(window, limit.observed_ms, now_ms, stale=stale)
+                != LIMIT_FRESH
+            ):
                 continue  # a stale or ended reading is never ranked
             candidate = ConsolePick(
                 display_name=_display(page, limit.kind)[0],

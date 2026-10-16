@@ -84,6 +84,8 @@ def build_open_terminal(
         ):
             return
         timing = open_timing.begin(kind)
+        previous = retained.get(resource.host_id, kind, key)
+        timing.observe(previous.session.current_term if previous is not None else None)
         geometry = retained.known_geometry() or DEFAULT_GEOMETRY
         close_terminal()
         set_open_error("")

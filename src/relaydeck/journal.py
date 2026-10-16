@@ -606,11 +606,9 @@ class CommandJournal:
                     (lease_id, generation, input_seq, at),
                 )
             except sqlite3.IntegrityError:
-                # Duplicate receipt: the failed INSERT leaves a write txn
-                # open (sqlite3 legacy mode never auto-rolls-back), which
-                # would hold the RESERVED lock and trip close()'s
-                # wal_checkpoint. Roll back: the failed statement added
-                # nothing, so there is nothing to commit.
+                # A failed INSERT leaves a write transaction open (legacy mode never
+                # auto-rolls-back), which would hold the RESERVED lock and trip close()'s
+                # checkpoint. Roll back; nothing was added.
                 self._db.rollback()
                 return False
             self._commit()

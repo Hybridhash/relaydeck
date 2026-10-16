@@ -779,11 +779,9 @@ class ConnectorLink:
         take_dirty = getattr(self._source, "take_snapshot_dirty", None)
         removed = callable(take_dirty) and bool(take_dirty())
         if events or removed:
-            # Upstream metadata partials omit names/project/resource structure. A removal
-            # re-reads the snapshot too: a closed tab must not survive in the gateway copy.
-            # Reuse session.snapshot + agent.list once per metadata batch, never
-            # per PTY byte/heartbeat. Publish before the event notification so
-            # a client refresh observes the corresponding complete inventory.
+            # Upstream partials omit names and structure, so refresh the snapshot once per metadata
+            # batch (also on removal), never per PTY byte. Publish before the event notification so
+            # a client refresh sees the complete inventory.
             refresh = getattr(self._source, "refresh", None)
             if callable(refresh):
                 try:

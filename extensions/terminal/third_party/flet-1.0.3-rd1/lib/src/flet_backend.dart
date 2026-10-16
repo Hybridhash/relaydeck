@@ -37,9 +37,12 @@ import 'utils/numbers.dart';
 import 'utils/platform.dart';
 import 'utils/platform_utils_web.dart'
     if (dart.library.io) "utils/platform_utils_non_web.dart";
+import 'utils/reconnect_policy.dart';
 import 'utils/session_store_web.dart'
     if (dart.library.io) "utils/session_store_non_web.dart";
 import 'utils/uri.dart';
+import 'utils/wake_web.dart'
+    if (dart.library.io) "utils/wake_stub.dart";
 import 'utils/weak_value_map.dart';
 
 /// FletBackend - Handles business logic, provides data, and acts as ChangeNotifier
@@ -86,6 +89,10 @@ class FletBackend extends ChangeNotifier {
   final int? _reconnectTimeoutMs;
   int _reconnectStarted = 0;
   int _reconnectDelayMs = 0;
+  int _channelGeneration = 0;
+  Timer? _retryTimer;
+  final ReconnectPolicy _policy = ReconnectPolicy();
+  void Function()? _cancelWakeSources;
   FletBackendChannel? _backendChannel;
   final FletBackendChannelBuilder? _channelBuilder;
   late final DataChannelFactory _dataChannelFactory;
@@ -193,6 +200,11 @@ class FletBackend extends ChangeNotifier {
         });
       }
     }
+
+    if (controlId == null) {
+      // Root app only: an embedded app never owns the page lifecycle.
+      _cancelWakeSources = WakeSources.install(onWake: wake);
+    }
   }
 
   static FletBackend of(BuildContext context) {
@@ -280,12 +292,15 @@ class FletBackend extends ChangeNotifier {
 
   @override
   void dispose() {
+    _cancelWakeSources?.call();
+    _cancelWakeSources = null;
     debugPrint("Disposing Flet backend.");
     _failIdle("The embedded app was closed.");
     _disposed = true;
     _page.removeListener(_onPageUpdated);
     _page.dispose();
     _backendChannel?.disconnect();
+    _retryTimer?.cancel();
     if (_ownsBootStatus) {
       bootStatus.dispose();
     }
@@ -293,6 +308,25 @@ class FletBackend extends ChangeNotifier {
   }
 
   Future<void> connect() async {
+    if (_disposed) {
+      return;
+    }
+    // Each channel gets a generation; a retired socket's late close event or
+    // packets are then stale and cannot schedule work or mutate state.
+    final gen = ++_channelGeneration;
+    // Packets, like disconnects, are only valid from the current generation.
+    void onPacket(Uint8List packet) {
+      if (gen == _channelGeneration && !_disposed) {
+        _onPacket(packet);
+      }
+    }
+
+    // This attempt's own channel: by the time it settles, _backendChannel may
+    // already point at a newer attempt, which must never be dropped here. It
+    // lives outside `try` so the error paths below can clean it up too.
+    FletBackendChannel? channel;
+    bool retired() => _disposed || gen != _channelGeneration;
+
     debugPrint("Connecting to Flet backend $pageUri...");
     try {
       final builder = _channelBuilder;
@@ -300,20 +334,34 @@ class FletBackend extends ChangeNotifier {
         // Embedder-supplied transport (e.g. serious_python's in-process FFI
         // bridge). The builder is responsible for the entire transport
         // lifecycle; we just wire its callbacks to ours.
-        _backendChannel =
-            builder(onDisconnect: _onDisconnect, onPacket: _onPacket);
+        channel = builder(
+            onDisconnect: () => _onDisconnect(gen), onPacket: onPacket);
       } else {
-        _backendChannel = FletBackendChannel(
+        channel = FletBackendChannel(
             address: pageUri.toString(),
             args: args ?? {},
             forcePyodide: forcePyodide == true,
             embedded: controlId != null,
-            onDisconnect: _onDisconnect,
-            onPacket: _onPacket);
+            onDisconnect: () => _onDisconnect(gen),
+            onPacket: onPacket);
       }
-      await _backendChannel!.connect();
+      _backendChannel = channel;
+      await channel.connect();
+      if (_disposed || gen != _channelGeneration) {
+        // Retired while opening (or disposed): drop it, never register.
+        try {
+          channel.disconnect();
+        } catch (_) {}
+        return;
+      }
       _registerClient();
     } on FletAppStartupException catch (e) {
+      if (retired()) {
+        try {
+          channel?.disconnect();
+        } catch (_) {}
+        return;
+      }
       debugPrint("Flet app failed to start: $e");
       isLoading = false;
       error = e.toString();
@@ -321,10 +369,38 @@ class FletBackend extends ChangeNotifier {
       errorsHandler?.onError(error);
       _failIdle(error);
     } catch (e) {
+      if (retired()) {
+        try {
+          channel?.disconnect();
+        } catch (_) {}
+        return;
+      }
       debugPrint("Error connecting to Flet backend: $e");
       error = e.toString();
-      _onDisconnect();
+      _onDisconnect(gen);
     }
+  }
+
+  /// Page returned (visible, pageshow or online): if a retry is already
+  /// scheduled, run it now instead of waiting for the timer. Otherwise do
+  /// nothing: this never opens a connection pristine Flet would not open.
+  void wake(String source) {
+    if (_disposed) {
+      return;
+    }
+    // Bare literal: compiled-output evidence for the marker gate. The detail
+    // lines below interpolate, which would not leave a quoted literal.
+    debugPrint("flet_reconnect_wake_rd1");
+    final pending = _retryTimer;
+    if (pending == null || !pending.isActive) {
+      debugPrint('flet_reconnect_wake_rd1 action=none source=$source');
+      return;
+    }
+    pending.cancel();
+    _retryTimer = null;
+    _policy.reset();
+    debugPrint('flet_reconnect_wake_rd1 action=retry_now source=$source');
+    connect();
   }
 
   /// Opens a dedicated [DataChannel] for high-throughput byte traffic from a
@@ -397,6 +473,7 @@ class FletBackend extends ChangeNotifier {
       }
       isLoading = false;
       _reconnectDelayMs = 0;
+      _policy.reset();
       error = "";
 
       page.update(resp.patch, shouldNotify: true);
@@ -771,33 +848,36 @@ class FletBackend extends ChangeNotifier {
     notifyListeners();
   }
 
-  _onDisconnect() {
-    if (_disposed) {
+  _onDisconnect(int gen) {
+    if (_disposed || gen != _channelGeneration) {
       return;
     }
 
-    var nextReconnectDelayMs = _reconnectDelayMs;
-    if (nextReconnectDelayMs == 0) {
+    if (_reconnectDelayMs == 0) {
       _reconnectStarted = DateTime.now().millisecondsSinceEpoch;
     }
 
-    // set/update timeout
-    nextReconnectDelayMs = nextReconnectDelayMs == 0 ||
-            _backendChannel!.isLocalConnection
-        ? _reconnectIntervalMs ?? _backendChannel!.defaultReconnectIntervalMs
-        : nextReconnectDelayMs * 2;
+    final channel = _backendChannel;
+    final isLocal = channel?.isLocalConnection ?? false;
+    final delay = isLocal
+        ? Duration(
+            milliseconds: _reconnectIntervalMs ??
+                channel?.defaultReconnectIntervalMs ??
+                500)
+        : _policy.nextDelay();
 
     if (_reconnectTimeoutMs == null ||
         (DateTime.now().millisecondsSinceEpoch - _reconnectStarted) <
             _reconnectTimeoutMs!) {
       // re-connect, keeping any error we captured: the boot screen hides it
       // while loading, but it is what we report if the retries run out.
-      _reconnect(nextReconnectDelayMs);
+      _reconnect(delay.inMilliseconds);
 
-      debugPrint("Reconnect in $nextReconnectDelayMs milliseconds");
-      Future.delayed(Duration(milliseconds: nextReconnectDelayMs))
-          .then((value) async {
-        await connect();
+      _retryTimer?.cancel();
+      debugPrint("Reconnect in ${delay.inMilliseconds} milliseconds");
+      _retryTimer = Timer(delay, () {
+        _retryTimer = null;
+        connect();
       });
     } else {
       final message = error != ""

@@ -21,15 +21,12 @@ Pure logic with an injected clock (`now_ms` on every call). No I/O, no
 sockets: the gateway closes connections for the lease ids returned here.
 """
 # Design notes:
-# - Shell attach does NOT take over by default; agent attach takes
-#   ownership.
-# - A refusal because another terminal is already open names the holder;
-#   hence lease_conflict carries owner details (same account only).
-# - Session generations: replacement invalidates earlier callbacks; hence
-#   supersede-on-bump.
-# - Leaving stops the local session while the remote pane survives;
-#   close is a separate explicit action; hence release() vs
-#   close_attachment().
+# - Shell attach does not take over by default; agent attach takes ownership.
+# - A refusal because another terminal is open names the holder (lease_conflict owner details,
+#   same account only).
+# - Replacing a session invalidates earlier callbacks, hence supersede-on-bump.
+# - Leaving stops the local session while the remote pane survives; close is a separate
+#   explicit action, hence release() vs close_attachment().
 
 from __future__ import annotations
 

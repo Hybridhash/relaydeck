@@ -16,6 +16,7 @@ from relaydeck_terminal.terminal import TerminalOverflowError
 
 from relaydeck.client.features.inventory.routing import RouteBridge
 from relaydeck.client.features.sync.transport import TransportError
+from relaydeck.client.features.terminal.foreground_recovery import ForegroundRecovery
 from relaydeck.gateway import terminal_wire
 from tests.support.host_harness import run
 from tests.support.terminal.resume import _MuxConn, _open_term, _report, _write_payloads
@@ -281,6 +282,8 @@ def test_nonprogressing_output_gets_one_bounded_remount_not_endless_live_probes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr("relaydeck.client.resources.OUTPUT_ACK_DEADLINE", 0.04)
+    # Isolates the bounded remount; the reconnect that follows has its own tests.
+    monkeypatch.setattr(ForegroundRecovery, "note", lambda self, entry: None)
 
     async def scenario() -> None:
         scripted, session, entry, resources, app, term, old = await mounted(kind)

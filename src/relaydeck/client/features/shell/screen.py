@@ -100,6 +100,7 @@ SHELL_CONFLICT_KEY = "shell-conflict"
 SHELL_CONFLICT_OWNER_KEY = "shell-conflict-owner"
 SHELL_CONNECTING_KEY = "shell-connecting"
 SHELL_DISCONNECTED_KEY = "shell-disconnected"
+SHELL_RECONNECTING_KEY = "shell-reconnecting"
 SHELL_EXITED_KEY = "shell-exited"
 SHELL_EXITED_DETAIL_KEY = "shell-exited-detail"
 SHELL_NOTICE_KEY = "shell-notice"
@@ -223,7 +224,7 @@ def ShellScreen(
     on_remove_picture: Any = None,
     cached_screen: str = "",
 ) -> Any:
-    """Shell detail in the DESIGN.md terminal window.
+    """Shell detail in the terminal window.
 
     Header: name, mono host line, state pill, Disconnect, and a More
     menu (New terminal, Close terminal with confirmation). Back is a
@@ -512,7 +513,11 @@ def ShellScreen(
                 ),
             )
         )
-    if view.phase == SHELL_DISCONNECTED:
+    if view.phase == SHELL_DISCONNECTED and view.reconnecting:
+        controls.append(
+            ft.Text("Reconnecting…", key=SHELL_RECONNECTING_KEY, color=tokens["muted"], size=13)
+        )
+    elif view.phase == SHELL_DISCONNECTED:
         controls.append(
             ft.Container(
                 key=SHELL_DISCONNECTED_FRAME_KEY,

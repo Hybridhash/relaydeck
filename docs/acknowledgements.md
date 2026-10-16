@@ -56,11 +56,10 @@ the mobile pin versions are not measured separately.
 | typing-extensions | 4.16.0 | PSF-2.0 | License-Expression |
 | websockets | 16.0 | BSD-3-Clause | License-Expression |
 
-## 2. Python packages added on the Mac (gateway and web groups)
+## 2. Python packages added on the Mac (`companion` extra)
 
-Not part of the phone apps. They run in the companion and the dev web server
-(`gateway` and `web` dependency groups, including `uvicorn`'s optional extras
-as resolved in the lock).
+Not part of the phone apps. They run in the companion (`relaydeck[companion]`,
+including `uvicorn`'s optional extras as resolved in the lock).
 
 | Package | Locked version | License | How verified |
 |---|---|---|---|
@@ -175,6 +174,7 @@ Copyleft/dual-license notes (measured):
 | flutter | (sdk) | BSD-3-Clause | Flutter SDK (flutter/flutter LICENSE); provided by pinned Flutter 3.44.8, not a package | relaydeck_terminal |
 | flutter_lints | ^3.0.0 (dev) | BSD-3-Clause | verified table: dart-lang/lints LICENSE (BSD, (c) 2021 Dart project authors) | relaydeck_terminal |
 | flutter_test |  (dev) | BSD-3-Clause | Flutter SDK (flutter/flutter LICENSE); provided by pinned Flutter 3.44.8, not a package | relaydeck_terminal |
+| web | ^1.1.1 | BSD-3-Clause | verified table: pub.dev archive web-1.1.1 LICENSE (BSD, (c) 2023 Dart project authors) | relaydeck_terminal |
 | xterm2 | ^5.2.0 | MIT | verified table: pub.dev archive xterm2-5.2.0 LICENSE (MIT, (c) 2020 xuty) | relaydeck_terminal |
 
 Transitive Dart dependencies are pinned in

@@ -24,10 +24,12 @@ from relaydeck.usage.hook_setup import (
     HOOK_FILENAME,
     HOOK_SHA256,
     HOOK_VERSION,
-    PREVIOUS_HOOK_SHA256,
     HookSetupCheck,
     default_hook_path,
     managed_command,
+)
+from relaydeck.usage.hook_setup import (
+    PREVIOUS_HOOK_SHA256 as PREVIOUS_HOOK_SHA256,
 )
 
 

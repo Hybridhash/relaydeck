@@ -138,7 +138,7 @@ def test_expired_hold_is_refused(tmp_path: Path) -> None:
     asyncio.run(scenario())
 
 
-def test_completed_hold_cannot_complete_twice(tmp_path: Path) -> None:
+def test_a_consumed_attempt_cannot_complete_again(tmp_path: Path) -> None:
     async def scenario() -> None:
         h, gateway, store, app = _setup(tmp_path)
         try:
@@ -160,7 +160,121 @@ def test_completed_hold_cannot_complete_twice(tmp_path: Path) -> None:
                         json={"flet_session_id": page_id},
                     )
                     assert response.status_code == 404
-                assert len(store._sessions) == 1  # exactly one session minted
+                    assert "set-cookie" not in response.headers
+                assert len(store._sessions) == 1
+                # The finish page treats a live signed-in browser as success.
+                live = await browser.post("/v1/auth/session/check", headers={"Origin": ORIGIN})
+                assert live.status_code == 204
+        finally:
+            await h.close()
+
+    asyncio.run(scenario())
+
+
+def test_distinct_attempts_of_one_browser_never_share_a_completion(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        h, gateway, store, app = _setup(tmp_path)
+        try:
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url=ORIGIN
+            ) as browser:
+                await _bind_page(browser, store, "page-1")
+                await _bind_page(browser, store, "page-2")
+                await _ready_hold(h, store, gateway, "page-1")
+                await _ready_hold(h, store, gateway, "page-2")
+                results = await asyncio.gather(
+                    *(
+                        browser.post(
+                            "/v1/auth/pairing/complete",
+                            headers={"Origin": ORIGIN},
+                            json={"flet_session_id": page_id},
+                        )
+                        for page_id in ("page-1", "page-2")
+                    )
+                )
+                assert [r.status_code for r in results] == [200, 200]
+                assert len(store._sessions) == 2  # one session per attempt
+                assert not store.pairing_ready
+        finally:
+            await h.close()
+
+    asyncio.run(scenario())
+
+
+def test_a_revoked_gateway_session_is_not_signed_in(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        h, gateway, store, app = _setup(tmp_path)
+        try:
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url=ORIGIN
+            ) as browser:
+                await _bind_page(browser, store, "page-1")
+                await _ready_hold(h, store, gateway, "page-1")
+                device = store.pairing_ready["page-1"][2]["device_id"]
+                assert (
+                    await browser.post(
+                        "/v1/auth/pairing/complete",
+                        headers={"Origin": ORIGIN},
+                        json={"flet_session_id": "page-1"},
+                    )
+                ).status_code == 200
+                h.state.sessions.revoke_device("owner", device)
+                response = await browser.post("/v1/auth/session/check", headers={"Origin": ORIGIN})
+                assert response.status_code == 401
+                assert "set-cookie" not in response.headers  # an observer never clears
+        finally:
+            await h.close()
+
+    asyncio.run(scenario())
+
+
+def test_concurrent_completers_share_one_consumption(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        h, gateway, store, app = _setup(tmp_path)
+        try:
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url=ORIGIN
+            ) as browser:
+                await _bind_page(browser, store, "page-1")
+                await _ready_hold(h, store, gateway, "page-1")
+                results = await asyncio.gather(
+                    *(
+                        browser.post(
+                            "/v1/auth/pairing/complete",
+                            headers={"Origin": ORIGIN},
+                            json={"flet_session_id": page_id},
+                        )
+                        for page_id in ("page-1", "page-1", "page-1")
+                    )
+                )
+                assert [r.status_code for r in results] == [200, 200, 200]
+                assert len(store._sessions) == 1  # one consumption, shared by the same attempt
+                assert "page-1" not in store.pairing_ready
+        finally:
+            await h.close()
+
+    asyncio.run(scenario())
+
+
+def test_an_approval_after_the_page_session_was_replaced_still_completes(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        h, gateway, store, app = _setup(tmp_path)
+        try:
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url=ORIGIN
+            ) as browser:
+                await _bind_page(browser, store, "page-1")
+                await _bind_page(browser, store, "page-2-reconnected")  # new transport, same tab
+                await _ready_hold(h, store, gateway, "page-1")  # approval arrives afterwards
+                response = await browser.post(
+                    "/v1/auth/pairing/complete",
+                    headers={"Origin": ORIGIN},
+                    json={"flet_session_id": "page-2-reconnected"},
+                )
+                assert response.status_code == 200
+                assert "rd_session" in browser.cookies
         finally:
             await h.close()
 
@@ -190,6 +304,275 @@ def test_original_page_id_wins_over_fallback(tmp_path: Path) -> None:
                 assert "page-1" not in store.pairing_ready
                 # The fallback (latest expiry) was NOT used: page-2's hold survives.
                 assert "page-2" in store.pairing_ready
+        finally:
+            await h.close()
+
+    asyncio.run(scenario())
+
+
+def test_an_authenticated_page_cannot_consume_another_tabs_attempt(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        h, gateway, store, app = _setup(tmp_path)
+        try:
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url=ORIGIN
+            ) as browser:
+                await _bind_page(browser, store, "page-1")
+                await _bind_page(browser, store, "page-2")
+                await _ready_hold(h, store, gateway, "page-1")
+                await _ready_hold(h, store, gateway, "page-2")
+                first = await browser.post(
+                    "/v1/auth/pairing/complete",
+                    headers={"Origin": ORIGIN},
+                    json={"flet_session_id": "page-1"},
+                )
+                assert first.status_code == 200
+                sid = next(iter(store._sessions))
+                store._owners["page-1-registered"] = sid  # the signed-in page after a reload
+                store.browser_pages["page-1-registered"] = store.browser_pages["page-1"]
+                for page_id in ("page-1-registered", "page-1"):
+                    response = await browser.post(
+                        "/v1/auth/pairing/complete",
+                        headers={"Origin": ORIGIN},
+                        json={"flet_session_id": page_id},
+                    )
+                    assert response.status_code == 404
+                    assert "set-cookie" not in response.headers
+                assert "page-2" in store.pairing_ready  # the other attempt is untouched
+                assert len(store._sessions) == 1
+        finally:
+            await h.close()
+
+    asyncio.run(scenario())
+
+
+def test_a_caller_joins_the_completion_paused_at_session_creation(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        h, gateway, store, app = _setup(tmp_path)
+        try:
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url=ORIGIN
+            ) as browser:
+                await _bind_page(browser, store, "page-1")
+                await _ready_hold(h, store, gateway, "page-1")
+                entered = asyncio.Event()
+                release = asyncio.Event()
+                original = store.run_private
+
+                async def paused(operation: Any) -> Any:
+                    if "page-1" not in store.pairing_ready and not entered.is_set():
+                        entered.set()
+                        await release.wait()
+                    return await original(operation)
+
+                store.run_private = paused  # type: ignore[method-assign]
+
+                def post() -> Any:
+                    return browser.post(
+                        "/v1/auth/pairing/complete",
+                        headers={"Origin": ORIGIN},
+                        json={"flet_session_id": "page-1"},
+                    )
+
+                first = asyncio.ensure_future(post())
+                await asyncio.wait_for(entered.wait(), 2)
+                assert "page-1" not in store.pairing_ready  # already consumed
+                second = asyncio.ensure_future(post())
+                await asyncio.sleep(0.05)
+                release.set()
+                results = await asyncio.gather(first, second)
+                assert [r.status_code for r in results] == [200, 200]
+                assert len(store._sessions) == 1
+                assert results[0].headers["set-cookie"] == results[1].headers["set-cookie"]
+        finally:
+            await h.close()
+
+    asyncio.run(scenario())
+
+
+def _principal(store: WebSessionStore, response: httpx.Response) -> str:
+    cookie = response.headers["set-cookie"].split(";")[0].split("=", 1)[1]
+    sid = store.signed_sid(cookie)
+    assert sid is not None
+    return store._sessions[sid].identity.device_id
+
+
+def _pause_creation(store: WebSessionStore, hold_page: str) -> tuple[asyncio.Event, asyncio.Event]:
+    entered, release = asyncio.Event(), asyncio.Event()
+    original = store.run_private
+
+    async def paused(operation: Any) -> Any:
+        if hold_page not in store.pairing_ready and not entered.is_set():
+            entered.set()
+            await release.wait()
+        return await original(operation)
+
+    store.run_private = paused  # type: ignore[method-assign]
+    return entered, release
+
+
+def _post(browser: httpx.AsyncClient, page_id: str) -> Any:
+    return browser.post(
+        "/v1/auth/pairing/complete", headers={"Origin": ORIGIN}, json={"flet_session_id": page_id}
+    )
+
+
+def test_a_newer_attempt_on_the_same_page_never_joins_the_older_running_one(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        h, gateway, store, app = _setup(tmp_path)
+        try:
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url=ORIGIN
+            ) as browser:
+                await _bind_page(browser, store, "page-1")
+                await _ready_hold(h, store, gateway, "page-1")
+                principal_a = store.pairing_ready["page-1"][2]["device_id"]
+                entered, release = _pause_creation(store, "page-1")
+                first = asyncio.ensure_future(_post(browser, "page-1"))
+                await asyncio.wait_for(entered.wait(), 2)
+                await _ready_hold(h, store, gateway, "page-1")  # a newer attempt, same page
+                principal_b = store.pairing_ready["page-1"][2]["device_id"]
+                assert principal_a != principal_b
+                second = await _post(browser, "page-1")
+                assert second.status_code == 200
+                assert _principal(store, second) == principal_b
+                release.set()
+                first_result = await first
+                assert first_result.status_code == 200
+                assert _principal(store, first_result) == principal_a
+        finally:
+            await h.close()
+
+    asyncio.run(scenario())
+
+
+def test_an_ambiguous_replacement_page_gets_nothing(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        h, gateway, store, app = _setup(tmp_path)
+        try:
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url=ORIGIN
+            ) as browser:
+                await _bind_page(browser, store, "page-1")
+                await _bind_page(browser, store, "page-2")
+                await _ready_hold(h, store, gateway, "page-1")
+                entered, release = _pause_creation(store, "page-1")
+                first = asyncio.ensure_future(_post(browser, "page-1"))
+                await asyncio.wait_for(entered.wait(), 2)
+                await _ready_hold(h, store, gateway, "page-2")  # a second, held candidate
+                await _bind_page(browser, store, "page-new")
+                response = await _post(browser, "page-new")
+                assert response.status_code == 404  # two candidates: refuse, never guess
+                assert "set-cookie" not in response.headers
+                assert "page-2" in store.pairing_ready
+                release.set()
+                assert (await first).status_code == 200
+        finally:
+            await h.close()
+
+    asyncio.run(scenario())
+
+
+def test_a_single_candidate_completes_with_its_own_principal(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        h, gateway, store, app = _setup(tmp_path)
+        try:
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url=ORIGIN
+            ) as browser:
+                await _bind_page(browser, store, "page-1")
+                await _ready_hold(h, store, gateway, "page-1")
+                expected = store.pairing_ready["page-1"][2]["device_id"]
+                await _bind_page(browser, store, "page-new")
+                response = await _post(browser, "page-new")
+                assert response.status_code == 200
+                assert _principal(store, response) == expected
+        finally:
+            await h.close()
+
+    asyncio.run(scenario())
+
+
+def test_unavailable_session_storage_is_a_temporary_failure_not_signed_out(
+    tmp_path: Path,
+) -> None:
+    from relaydeck.persistence_contracts import StorageUnavailable
+
+    async def scenario() -> None:
+        h, gateway, store, app = _setup(tmp_path)
+        try:
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url=ORIGIN
+            ) as browser:
+                await _bind_page(browser, store, "page-1")
+                await _ready_hold(h, store, gateway, "page-1")
+                assert (await _post(browser, "page-1")).status_code == 200
+
+                class Storage:
+                    async def run_draft(self, operation: Any) -> Any:
+                        return operation()
+
+                def unavailable(_sid: str) -> Any:
+                    raise StorageUnavailable("synthetic")
+
+                store.persistence = Storage()  # type: ignore[assignment]
+                store._read_web = unavailable  # type: ignore[method-assign]
+                response = await browser.post("/v1/auth/session/check", headers={"Origin": ORIGIN})
+                assert response.status_code == 503
+                assert "set-cookie" not in response.headers
+        finally:
+            await h.close()
+
+    asyncio.run(scenario())
+
+
+def test_a_replacement_page_joins_a_completion_paused_at_the_authority_check(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        h = Harness(tmp_path / "state")
+        gateway = create_app(h.state)
+        entered, release = asyncio.Event(), asyncio.Event()
+
+        @gateway.middleware("http")
+        async def pause(request: Any, call_next: Any) -> Any:
+            if request.url.path == "/v1/me" and not entered.is_set() and armed:
+                entered.set()
+                await release.wait()
+            return await call_next(request)
+
+        armed = False
+        store = WebSessionStore(ORIGIN, b"s" * 32, now_ms=lambda: h.clock[0])
+        app, _ = build_web_app(
+            gateway_state=h.state,
+            gateway_app=gateway,
+            flet_main=lambda page: None,
+            public_origin=ORIGIN,
+            cookie_secret=b"s" * 32,
+            store=store,
+        )
+        try:
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url=ORIGIN
+            ) as browser:
+                await _bind_page(browser, store, "page-a")
+                await _ready_hold(h, store, gateway, "page-a")
+                expected = store.pairing_ready["page-a"][2]["device_id"]
+                await _bind_page(browser, store, "page-b")
+                armed = True
+                first = asyncio.ensure_future(_post(browser, "page-a"))
+                await asyncio.wait_for(entered.wait(), 2)
+                assert "page-a" in store.pairing_ready  # not yet consumed
+                second = asyncio.ensure_future(_post(browser, "page-b"))
+                await asyncio.sleep(0.05)
+                release.set()
+                results = await asyncio.gather(first, second)
+                assert [r.status_code for r in results] == [200, 200]
+                assert [_principal(store, r) for r in results] == [expected, expected]
+                assert results[0].headers["set-cookie"] == results[1].headers["set-cookie"]
+                assert len(store._sessions) == 1
         finally:
             await h.close()
 

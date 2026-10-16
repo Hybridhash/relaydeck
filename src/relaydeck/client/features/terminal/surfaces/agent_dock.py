@@ -64,13 +64,9 @@ def build_agent_dock(
     """The tools-key dock (inline, overlay or typing-column slot) and picture progress.
 
     Appends to `bottom`; returns `(dock_overlay, split_dock)`."""
-    # The open dock sits directly under the key row,
-    # above the picture/status line and the composer (never below the
-    # composer). This desktop-only branch is always the expanded tier,
-    # so the dock dedupes against the inline row whenever
-    # that row is visible; a hidden/collapsed row keeps the full legacy
-    # grid so no key becomes unreachable. Compact phones never reach
-    # this branch and keep the legacy grid via the default.
+    # The open dock sits under the key row, above the picture/status line and composer. This desktop
+    # branch is always expanded, so the dock dedupes against the visible inline row; a hidden row
+    # keeps the full grid so no key is unreachable.
     dock_overlay: Any = None
     split_dock: Any = None
     if in_control and not phone and keyboard == KEYBOARD_KEYS:

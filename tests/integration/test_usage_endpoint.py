@@ -133,6 +133,7 @@ def test_wire_metadata_and_privacy_through_http_bridge(endpoint, tmp_path):
             "credits_reported": False,  # additive v2 field; token kinds report no credits
             "limits_setup": None,
             "limits_refresh": unconfigured,
+            "last_activity_ms": body["kinds"][0]["last_activity_ms"],  # latest event, additive
         },
         {
             "kind": "kind-b",
@@ -141,8 +142,11 @@ def test_wire_metadata_and_privacy_through_http_bridge(endpoint, tmp_path):
             "credits_reported": False,
             "limits_setup": None,
             "limits_refresh": unconfigured,
+            "last_activity_ms": None,
         },
     ]
+    assert isinstance(body["kinds"][0]["last_activity_ms"], int)
+    assert body["kinds"][1]["last_activity_ms"] is None  # no events: null, never a guess
     assert body["kinds"][0]["sources"] == [
         {"format": "jsonl-message-usage-v1", "limits_setup": None}
     ]

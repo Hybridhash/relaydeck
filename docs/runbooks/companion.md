@@ -247,7 +247,7 @@ Without a terminal, setup writes nothing. It lists the pending choices and exits
 Use this to install a published release tag from the public repository.
 
 ```sh
-uv tool install --managed-python --python 3.13 "relaydeck[companion] @ git+https://github.com/Hybridhash/relaydeck@v0.2.0"
+uv tool install --managed-python --python 3.13 "relaydeck[companion] @ git+https://github.com/Hybridhash/relaydeck@v0.2.1"
 ```
 
 From a local clone of the same tag:
