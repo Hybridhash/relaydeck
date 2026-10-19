@@ -326,6 +326,7 @@ class LimitsScheduler:
         self._clock = clock or (lambda: int(time.time() * 1000))
         self._stop = threading.Event()
         self._wake = threading.Event()
+        self._open_requested = threading.Event()
         self._sleep = sleep or self._wake.wait
         self._jitter = jitter or random.random
         self._lock = threading.Lock()
@@ -404,6 +405,12 @@ class LimitsScheduler:
         reading, without waiting out the background interval. Each block is weighed at most once per
         cooldown however many devices open the page. Returns how many reads were started."""
         return self._auto_sweep(self._clock(), on_open=True)
+
+    def notify_usage_open(self) -> None:
+        """Coalesce HTTP polls without taking scheduler/store locks on their threads."""
+        if not self._stop.is_set():
+            self._open_requested.set()
+            self._wake.set()
 
     def _auto_sweep(self, now_ms: int, *, on_open: bool = False) -> int:
         started = 0
@@ -663,9 +670,12 @@ class LimitsScheduler:
 
     def _run(self) -> None:
         while not self._stop.is_set():
+            self._wake.clear()
+            if self._open_requested.is_set():
+                self._open_requested.clear()
+                self.request_auto_on_open()
             self._auto_sweep(self._clock())
             self.run_once(self._clock())
             if self._stop.is_set():
                 break
-            self._wake.clear()
             self._sleep(self._run_loop_sleep_s(self._clock()))

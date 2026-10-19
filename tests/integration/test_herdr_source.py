@@ -467,7 +467,8 @@ def test_dispatch_through_source_records_wire_params(
         ]
         assert len(creates) == 2
         assert creates[0] == {"workspace_id": "w1", "label": "ops"}
-        assert creates[1] == {"workspace_id": "w1"}
+        # The requested display name is persisted on the agent's tab at creation.
+        assert creates[1] == {"workspace_id": "w1", "label": "web"}
         assert seen["agent.start"]["pane_id"].startswith("pane-")
         assert seen["agent.start"]["args"] == ["--x"]
         assert seen["agent.prompt"] == {"target": started["result"]["agent_id"], "text": "hi"}

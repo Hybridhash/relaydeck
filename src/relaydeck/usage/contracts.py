@@ -548,6 +548,10 @@ class UsageReport:
     # (wire space id, historical label) for spaces in this report whose label was
     # stored with an episode; the gateway prefers live inventory labels, then these.
     workspace_labels: tuple[tuple[str, str], ...] = ()
+    # Pinned by the same SQLite read snapshot as the rows, not a preflight read.
+    data_generation: int = -1
+    as_of_ms: int | None = None
+    kind_activity: tuple[tuple[str, int], ...] = ()
 
 
 class UsageUnavailable(RuntimeError):

@@ -6,6 +6,11 @@ the terminal is fully ready, or when the open is superseded or times out. Lines 
 numbers and enum-like flags only: never ids,
 output, drafts or sizes' meaning beyond counts.
 
+Paint is the phone's acknowledgement of output applied to the renderer this open bound, confirmed
+by the next frame report or, when geometry is quiet and no report follows, by a settled tick. It
+latches: later output on a busy terminal never un-paints a ready terminal. Only a replaced or
+reset renderer has to paint again.
+
 Steps reached through the opening task (gateway calls, stream socket, first bytes) find the record
 through a context variable, which tasks created by that open inherit; steps driven by page events
 (size reports, input verification, the phone's acknowledgement) find it on the session.
@@ -48,6 +53,7 @@ STEPS = (
     "fully_ready",
 )
 COUNTS = ("size_reports", "resizes", "probe_cancels")
+PAINT_SETTLE_S = 0.1
 # Stream steps seen before the control attach belong to the view connection that kept the
 # terminal warm; the attach starts the control connection's own steps.
 _VIEW_STEPS = {"ticket": "view_ticket", "socket": "view_socket", "first_byte": "view_first_byte"}
@@ -75,7 +81,7 @@ class OpenTiming:
         self._term: Any = None
         self._identity: tuple[int, int, int] | None = None
         self._base_acked = 0
-        self._paint_acked = 0
+        self._ack_pending_since: float | None = None
         self._paint_valid = False
         self._hold_released = False
         self.done = False
@@ -121,7 +127,7 @@ class OpenTiming:
         self._term, self._identity = term, identity
         self._base_acked = 0 if same_term else getattr(term, "_acked_bytes", 0)
         self._paint_valid = False
-        self._paint_acked = 0
+        self._ack_pending_since = None
         if term not in _observed:
             target = weakref.ref(term)
 
@@ -140,17 +146,21 @@ class OpenTiming:
         if acked > self._base_acked:
             self.mark("first_output")
             self.mark("first_ack")
+            if not self._paint_valid and self._ack_pending_since is None:
+                self._ack_pending_since = self._clock()
         return acked
+
+    def _painted(self) -> None:
+        self._paint_valid = True
+        self._ack_pending_since = None
+        self.mark("painted")
 
     def _frame(self, term: Any) -> None:
         # This callback runs at VIEW_REPORT dispatch, so it proves the report followed ACK.
         # Sampling two cumulative counters later cannot establish that ordering.
         self.observe(term)
-        acked = self._ack(term)
-        if acked > 0:
-            self._paint_valid = True
-            self._paint_acked = acked
-            self.mark("painted")
+        if self._ack(term) > 0:
+            self._painted()
         if self.kind == "shell" and "hold_armed" not in self._marks:
             self.mark("hold_released")
 
@@ -174,8 +184,12 @@ class OpenTiming:
             if ready:
                 self.mark("input_ready")
         if term is not None:
-            if self._ack(term) > self._paint_acked:
-                self._paint_valid = False
+            self._ack(term)
+            since = self._ack_pending_since
+            # A renderer that reports no frame (no geometry change after the output) still
+            # painted: the acknowledgement precedes the draw by at most a frame.
+            if since is not None and round((self._clock() - since) * 1000) >= PAINT_SETTLE_S * 1000:
+                self._painted()
         if ready and self._hold_released and self._paint_valid:
             self.mark("fully_ready")
             self.finish("ready")

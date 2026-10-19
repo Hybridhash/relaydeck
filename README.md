@@ -14,8 +14,6 @@
 
 <p align="center">
   <a href="LICENSE">MIT License</a> ·
-  <a href="docs/runbooks/install.md">Install guide</a> ·
-  <a href="docs/runbooks/companion.md">Operations</a> ·
   <a href="CHANGELOG.md">Changelog</a>
 </p>
 
@@ -105,8 +103,7 @@ login. RelayDeck does not store vendor credentials or send usage data to any ven
 ## Install
 
 There are no release downloads yet: you install the companion from source and build the web app
-yourself. Steps 1 to 6 give a working host; the full walkthrough with every option is
-[docs/runbooks/install.md](docs/runbooks/install.md).
+yourself. Steps 1 to 6 give a working host; step 7 pairs your first device.
 
 ### 1. Install the companion
 
@@ -114,7 +111,7 @@ From the public repository at the latest tag:
 
 ```sh
 uv tool install --managed-python --python 3.13 \
-  "relaydeck[companion] @ git+https://github.com/Hybridhash/relaydeck@v0.2.1"
+  "relaydeck[companion] @ git+https://github.com/Hybridhash/relaydeck@v0.2.2"
 relaydeck --version
 ```
 
@@ -123,7 +120,7 @@ Or from a local clone (needed for step 4 anyway):
 ```sh
 git clone https://github.com/Hybridhash/relaydeck.git
 cd relaydeck
-git checkout v0.2.1
+git checkout v0.2.2
 uv tool install --managed-python --python 3.13 ".[companion]"
 ```
 
@@ -141,27 +138,38 @@ relaydeck setup --check    # read-only readiness report (10 checks with the next
 Setup never prints secrets. It asks before every change: creating `~/.config/relaydeck/` (owner-only)
 and `companion.toml` when they are missing; the usage hook, usage sources and the `tailscale serve`
 mapping are applied only after you confirm (`--yes` approves the Serve mapping without prompting).
-A full example config is in
-[examples/companion.toml](examples/companion.toml).
+The config it writes is the full, commented template
+([companion.template.toml](src/relaydeck/companion/companion.template.toml)).
 
 ### 3. Provide the secret files and enroll the connector
 
 Setup does not create credentials or enroll the connector, so the host is not ready after step 2.
-Follow these parts of the install guide:
+Do both here:
 
 1. Create the two secret files named in `companion.toml` (`cookie_secret_file`, `cursor_secret_file`): mode
-   0600, each at least 32 bytes, different from each other
-   ([install guide §3](docs/runbooks/install.md#3-create-the-private-configuration)). With the default
-   paths, generated on the Mac itself:
+   0600, each at least 32 bytes, different from each other. With the default paths, generated on the Mac
+   itself:
 
    ```sh
    (umask 077; openssl rand -hex 32 > ~/.config/relaydeck/cookie.secret)
    (umask 077; openssl rand -hex 32 > ~/.config/relaydeck/cursor.secret)
    ```
 
-2. Enroll the connector: `relaydeck-connector keygen`, `relaydeck-gateway issue-enrollment`, then
-   `relaydeck-connector enroll` ([install guide §6](docs/runbooks/install.md#6-enroll-the-connector-keygen--issue-enrollment--enroll)).
-   Both commands are installed with RelayDeck in step 1.
+2. Enroll the connector, once. All three commands are installed with RelayDeck in step 1; `keygen` creates
+   the connector's key and `fingerprint` prints its public `ssh-ed25519` line:
+
+   ```sh
+   relaydeck-connector keygen
+   relaydeck-connector fingerprint
+   relaydeck-gateway issue-enrollment --host-label "My Mac" --pubkey "<ssh-ed25519 line>" \
+     --account owner --origin https://your-mac.your-tailnet.ts.net:8445 --ttl-seconds 600 \
+     --store "$HOME/Library/Application Support/RelayDeck/enrollments.json"
+   relaydeck-connector enroll --gateway https://your-mac.your-tailnet.ts.net:8445 \
+     --id <enr_...> --code <XXXX-XXXX-XXXX> --host home-mac
+   ```
+
+   Use the invitation id and code that `issue-enrollment` prints, and the `host_id` from your
+   `companion.toml`. Never run `keygen --force` unless you mean to re-enroll: it replaces the key.
 
 ### 4. Build and install the web app
 
@@ -177,15 +185,19 @@ relaydeck web install ~/relaydeck-web
 
 ### 5. (Optional) Herdr plugin
 
-The Herdr plugin adds **Set up**, **Pair a device** and **Status** actions in Herdr. It is optional:
-the same commands are available from the `relaydeck` CLI. Install RelayDeck first (step 1), then:
+The Herdr plugin adds three popup actions in Herdr: **RelayDeck: Set up** (`relaydeck setup`),
+**RelayDeck: Pair a device** (opens a pairing window; you approve each device there) and
+**RelayDeck: Status** (read-only status and doctor). It only launches the installed `relaydeck`
+commands, installs nothing and never approves a pairing on its own. It is optional: the same commands
+are available from the `relaydeck` CLI. Install RelayDeck first (step 1), then:
 
 ```sh
-herdr plugin install Hybridhash/relaydeck/plugin --ref v0.2.1
+herdr plugin install Hybridhash/relaydeck/plugin --ref v0.2.2
 ```
 
 Herdr shows a preview of the manifest and commands before confirming. To remove it later:
-`herdr plugin uninstall relaydeck`.
+`herdr plugin uninstall relaydeck`. While developing, link a local checkout instead:
+`herdr plugin link <clone>/plugin`.
 
 ### 6. Start
 
@@ -212,8 +224,8 @@ relaydeck pairing approve --code <XXX-XXX>
 
 **Approve only when the code matches exactly what the device shows.** A paired device stays signed in for
 up to 30 days after its last use. The sign-in survives a companion restart only when durable sign-ins are
-enabled (`RELAYDECK_DURABLE_SIGNINS=1` and the Mac key store available; see
-[companion operations](docs/runbooks/companion.md)); otherwise the device must pair again after a restart.
+enabled (`RELAYDECK_DURABLE_SIGNINS=1` and the Mac key store available); otherwise the device must pair
+again after a restart.
 
 On iPhone or iPad, use Safari's **Share → Add to Home Screen**, open RelayDeck from the Home Screen, then
 tap **Get notifications** to receive alerts.
@@ -225,7 +237,7 @@ tap **Get notifications** to receive alerts.
 Native Android and iOS apps are in progress and not yet released. Until then, use the web app above on
 any device. Developers can build the Android app from source with `scripts/build_native.py`
 (`stage --platform android`, then `build --platform android --run`); pins and build notes are in
-[patches/native-runtime-pins/README.md](patches/native-runtime-pins/README.md).
+[patches/README.md](patches/README.md).
 
 ## Daily use
 
@@ -282,6 +294,8 @@ rm -rf ~/.config/relaydeck "$HOME/Library/Application Support/RelayDeck"   # con
   setting; it shows what it will change and asks first, keeps every other field, and never overwrites a status
   line you configured yourself.
 - Logs for the login service are in `~/Library/Logs/RelayDeck/`.
+- **The companion looks stalled**: with its pid from `relaydeck status`, run `kill -USR1 <pid>` to dump the
+  thread stacks to its log (stack locations only, no data; it does not stop the companion).
 - A device that cannot reach the address needs to be signed in to the same tailnet; the address is never
   public.
 
@@ -311,12 +325,8 @@ Native Android and iOS builds (in progress): see [patches/README.md](patches/REA
 
 </details>
 
-## Documentation
+## More
 
-- [Install guide](docs/runbooks/install.md)
-- [Companion operations](docs/runbooks/companion.md)
-- [Device pairing](docs/runbooks/device-pairing.md)
-- [All runbooks](docs/runbooks/)
 - [Changelog](CHANGELOG.md)
 - [Third-party software and licences](docs/acknowledgements.md)
 

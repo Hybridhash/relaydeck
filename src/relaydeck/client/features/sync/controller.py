@@ -599,6 +599,8 @@ class TerminalStreamClient:
     _opens: int = 0
     # True while opening again on a lease this client already streamed: the socket must then
     # carry `resume_query()`, because the server holds the lease for exactly that reader.
+    reset_to_live: bool = False
+    on_baseline: Callable[[dict[str, Any]], Awaitable[bool]] | None = None
     reopening: bool = False
 
     def _lease_trace(self) -> LeaseTrace:
@@ -702,6 +704,27 @@ class TerminalStreamClient:
                     self.on_gap("bad_control")
                     trace.emit("socket_close", reason="bad_control", socket=socket)
                     return
+                if doc.get("kind") == "history_reset":
+                    if (
+                        not isinstance(doc.get("epoch"), str)
+                        or not 1 <= len(doc["epoch"]) <= 128
+                        or type(doc.get("offset")) is not int
+                        or doc["offset"] < 0
+                        or type(doc.get("incomplete")) is not bool
+                        or (not self.reset_to_live and (self.epoch or self.next_offset))
+                        or (self.epoch and doc["epoch"] != self.epoch)
+                        or self.on_baseline is None
+                    ):
+                        self.on_gap("bad_control")
+                        return
+                    if not await self.on_baseline(doc) or self._socket is not socket:
+                        return
+                    self.epoch = doc["epoch"]
+                    self.next_offset = self._acked = doc["offset"]
+                    self.offered_offset = None
+                    self.reset_to_live = False
+                    self.on_output(self.next_offset, b"")
+                    continue
                 if doc.get("kind") == "reset":
                     self._report_reset(str(doc.get("detail", "reset")))
                     trace.emit("socket_close", reason="reset", socket=socket)
@@ -714,8 +737,13 @@ class TerminalStreamClient:
                 ):
                     self.on_input_failure(doc["generation"], doc["input_seq"])
                 if doc.get("kind") == "gap":
+                    if doc.get("detail") == "rate_limited":
+                        # Only this input was refused; output continuity is intact.
+                        # Report the control doc without recovery or input replay.
+                        self.on_control(doc)
+                        continue
                     self.on_gap(str(doc.get("detail", "gap")))
-                    trace.emit("socket_close", reason="gap", socket=socket)
+                    trace.emit("socket_close", reason=doc.get("detail", "gap"), socket=socket)
                     return
                 self.on_control(doc)
                 if doc.get("kind") == "bye":
@@ -741,7 +769,10 @@ class TerminalStreamClient:
         """Query fragment carrying (epoch, offset) so a reconnect resumes
         exactly where this client stopped. Factories append it to the
         ticket URL: `?ticket=...&` + resume_query()."""
-        return f"epoch={quote(self.epoch, safe='')}&offset={self.next_offset}"
+        reset = "&live_edge=1" if self.reset_to_live else ""
+        return (
+            f"epoch={quote(self.epoch, safe='')}&offset={self.next_offset}&output_reset=v1{reset}"
+        )
 
     async def _send(self, kind: str, data: bytes) -> bool:
         socket = self._socket
@@ -790,8 +821,4 @@ class TerminalStreamClient:
                     trace.emit("socket_close", reason="local_close", socket=socket)
 
     def resume_offset(self) -> int:
-        return self.next_offset
-
-    def resume_seq(self) -> int:
-        """Back-compat alias: resume offsets replaced sequences in wire v2."""
         return self.next_offset

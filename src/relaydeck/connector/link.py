@@ -49,6 +49,7 @@ from relaydeck.connector.source import LinkSource, LiveSource
 from relaydeck.contracts.schemas import SchemaError, validate
 from relaydeck.contracts.tunnel import SEND_TIMEOUT_S, parse_terminal_input
 from relaydeck.journal import CommandJournal, digest_for
+from relaydeck.tunnel_queue import BoundedInbox, TunnelCapacityError, TunnelWriter, cancel_tasks
 
 __all__ = [
     "CHUNK_BYTES",
@@ -92,8 +93,10 @@ PUSH_FAIL_LIMIT = 5
 LIVE_TICK_S = 0.1
 LIVE_DRAIN_S = 0.05
 # Bound output publication batching, not PTY reads. Ready descriptors are
-# drained immediately while these few milliseconds coalesce a repaint.
+# drained immediately; a batch closes after this quiet gap, or at the cap
+# when a burst keeps refilling a PTY one small buffer at a time.
 OUTPUT_COALESCE_S = 0.005
+OUTPUT_COALESCE_MAX_S = 0.025
 
 # Raw snapshot bytes per chunked-transfer frame (b64 inflates ~4/3, so
 # frames stay well under TUNNEL_MAX_TEXT with envelope).
@@ -202,6 +205,8 @@ class _WebsocketTransport:
                 open_timeout=HELLO_TIMEOUT_S,
                 close_timeout=SEND_TIMEOUT_S,
                 create_connection=_PongTrackedConnection,
+                ping_interval=20,
+                ping_timeout=20,
             )
         except Exception as exc:
             if type(exc).__name__ in ("InvalidStatus", "InvalidHandshake", "InvalidURI"):
@@ -228,6 +233,10 @@ class _WebsocketTransport:
                 await ws.close()
             except Exception:  # noqa: BLE001 - close is best-effort
                 pass
+
+    async def close_queue_full(self) -> None:
+        if self._ws is not None:
+            await self._ws.close(code=1013, reason="tunnel_queue_full")
 
 
 def _close_reason(exc: BaseException) -> tuple[int | None, str]:
@@ -303,6 +312,12 @@ class ConnectorLink:
         self._last_epochs: dict[str, str] = {}
         self._input_highwater: dict[tuple[str, str, str, int], int] = {}
         self._output_send_lock = asyncio.Lock()
+        self._inflight = "idle"
+        self._inflight_at: float | None = None
+        self._last_recv_at: float | None = None
+        self._writer_task: asyncio.Task[None] | None = None
+        self._writer: TunnelWriter | None = None
+        self._writer_transport: TunnelTransport | None = None
 
     async def _open_transport(self) -> TunnelTransport:
         transport = _WebsocketTransport(_ws_url(self._config.gateway_url), self._config.host_token)
@@ -390,7 +405,15 @@ class ConnectorLink:
         """One tunnel session. Returns stop | drop | once-done |
         auth-failed | push-failed | snapshot-too-large."""
         transport = await self._opener()
+        self._writer_transport = transport
+        self._writer = TunnelWriter(
+            transport.send_text, lambda: self._writer_transport is transport
+        )
+        writer_task = self._writer_task = asyncio.create_task(self._writer.run())
         self._last_application_pong_at: float | None = None
+        self._inflight = "idle"
+        self._inflight_at = None
+        self._last_recv_at = asyncio.get_running_loop().time()
         try:
             try:
                 raw_hello = await asyncio.wait_for(transport.recv_text(), HELLO_TIMEOUT_S)
@@ -407,6 +430,9 @@ class ConnectorLink:
             if hello.get("host_id") != self._config.host_id:
                 raise _ProtocolDrop("hello host mismatch")
             self._sessions += 1
+            enable = getattr(self._source, "enable_async_attachments", None)
+            if callable(enable):
+                enable()
             self._apply_hello_extras(hello)
             prepared = await self._prepare_source()
             if prepared == "drop":
@@ -453,6 +479,10 @@ class ConnectorLink:
                 self._log_tunnel_failure(transport, exc, "session")
             raise
         finally:
+            self._writer_transport = None
+            await cancel_tasks([writer_task])
+            self._writer = None
+            self._writer_task = None
             try:
                 await asyncio.wait_for(transport.close(), SEND_TIMEOUT_S)
             except (OSError, TimeoutError):
@@ -466,7 +496,10 @@ class ConnectorLink:
 
     async def _send_text(self, transport: TunnelTransport, text: str) -> None:
         try:
-            await asyncio.wait_for(transport.send_text(text), SEND_TIMEOUT_S)
+            if self._writer is not None and self._writer_transport is transport:
+                await asyncio.wait_for(self._writer.send(text), SEND_TIMEOUT_S)
+            else:
+                await asyncio.wait_for(transport.send_text(text), SEND_TIMEOUT_S)
         except TimeoutError as exc:
             self._log_tunnel_failure(transport, exc, "send_timeout")
             raise
@@ -490,7 +523,8 @@ class ConnectorLink:
         last_app_pong = getattr(self, "_last_application_pong_at", None)
         LOG.warning(
             "tunnel closed stage=%s exception=%s code=%s sent_code=%s cause=%s "
-            "last_pong_age_s=%s last_app_pong_age_s=%s",
+            "last_pong_age_s=%s last_app_pong_age_s=%s "
+            "inflight=%s inflight_age_s=%s recv_idle_s=%s",
             stage,
             _safe_exception_type(exc),
             code,
@@ -498,7 +532,18 @@ class ConnectorLink:
             cause,
             round(now - last_pong, 3) if last_pong is not None else None,
             round(now - last_app_pong, 3) if last_app_pong is not None else None,
+            self._inflight,
+            round(now - self._inflight_at, 3) if self._inflight_at is not None else None,
+            round(now - self._last_recv_at, 3) if self._last_recv_at is not None else None,
         )
+
+    async def _track_await[T](self, kind: str, work: Awaitable[T]) -> T:
+        self._inflight = kind
+        self._inflight_at = asyncio.get_running_loop().time()
+        result = await work
+        self._inflight = "idle"
+        self._inflight_at = None
+        return result
 
     async def _push_outputs(self, transport: TunnelTransport) -> None:
         async with self._output_send_lock:
@@ -690,7 +735,12 @@ class ConnectorLink:
     async def _refresh_after_creation(
         self, transport: TunnelTransport, message: dict[str, Any], result: dict[str, Any]
     ) -> None:
-        if message.get("gateway_kind") not in ("agent.start", "shell.create", "session.close"):
+        if message.get("gateway_kind") not in (
+            "agent.start",
+            "agent.rename",
+            "shell.create",
+            "session.close",
+        ):
             return
         if result.get("status") == "rejected":
             return
@@ -711,8 +761,7 @@ class ConnectorLink:
         transfer_id = uuid.uuid4().hex
         digest = hashlib.sha256(raw).hexdigest()
         chunks = [raw[at : at + CHUNK_BYTES] for at in range(0, len(raw), CHUNK_BYTES)]
-        await self._send(
-            transport,
+        docs = [
             {
                 "kind": "snapshot.begin",
                 "host_id": self._config.host_id,
@@ -720,24 +769,27 @@ class ConnectorLink:
                 "total_bytes": len(raw),
                 "total_chunks": len(chunks),
                 "sha256": digest,
-            },
+            }
+        ]
+        docs.extend(
+            {
+                "kind": "snapshot.chunk",
+                "host_id": self._config.host_id,
+                "transfer_id": transfer_id,
+                "seq": seq,
+                "data_b64": base64.b64encode(piece).decode(),
+            }
+            for seq, piece in enumerate(chunks)
         )
-        for seq, piece in enumerate(chunks):
-            await self._send(
-                transport,
-                {
-                    "kind": "snapshot.chunk",
-                    "host_id": self._config.host_id,
-                    "transfer_id": transfer_id,
-                    "seq": seq,
-                    "data_b64": base64.b64encode(piece).decode(),
-                },
-            )
-            self._pushed_chunks += 1
-        await self._send(
-            transport,
-            {"kind": "snapshot.end", "host_id": self._config.host_id, "transfer_id": transfer_id},
+        docs.append(
+            {"kind": "snapshot.end", "host_id": self._config.host_id, "transfer_id": transfer_id}
         )
+        if self._writer is not None and self._writer_transport is transport:
+            await self._writer.batch(tuple(json.dumps(d, separators=(",", ":")) for d in docs))
+        else:
+            for doc in docs:
+                await self._send(transport, doc)
+        self._pushed_chunks += len(chunks)
 
     def _precheck(self, message: dict[str, Any]) -> str:
         """Fail-closed gate before ack: host binding + digest. Returns the
@@ -852,8 +904,21 @@ class ConnectorLink:
             frame = parse_terminal_input(doc, self._config.host_id)
         except (ValueError, UnicodeError) as exc:
             raise _ProtocolDrop("malformed terminal input") from exc
+        wait_attached = getattr(self._source, "wait_attachments", None)
+        if callable(wait_attached):
+            await wait_attached(frame.terminal_id, frame.epoch)
         if self._last_epochs.get(frame.terminal_id) != frame.epoch:
-            raise _ProtocolDrop("stale input epoch")
+            await self._send(
+                transport,
+                {
+                    "kind": "terminal.input_failed",
+                    "host_id": self._config.host_id,
+                    "lease_id": frame.lease_id,
+                    "generation": frame.generation,
+                    "input_seq": frame.input_seq,
+                },
+            )
+            return
         key = (frame.terminal_id, frame.epoch, frame.lease_id, frame.generation)
         if frame.input_seq <= self._input_highwater.get(key, 0):
             return
@@ -932,122 +997,182 @@ class ConnectorLink:
             await wait_ready()
 
     async def _forward_pty(self, transport: TunnelTransport, available: asyncio.Event) -> None:
+        loop = asyncio.get_running_loop()
         while True:
             await available.wait()
-            # A PTY can refill in multiple readable wakeups as a blocked
-            # producer is released. Keep those ordered pieces in one batch;
-            # the independent reader remains immediate and never awaits sends.
-            await asyncio.sleep(OUTPUT_COALESCE_S)
+            # A PTY refills in many readable wakeups as its blocked producer is
+            # released, at the scheduler's pace. The window extends while pieces
+            # keep arriving and closes after a quiet gap or at the cap, so one
+            # repaint stays one batch; the reader never awaits sends.
+            deadline = loop.time() + OUTPUT_COALESCE_MAX_S
+            while True:
+                available.clear()
+                await asyncio.sleep(OUTPUT_COALESCE_S)
+                if not available.is_set() or loop.time() >= deadline:
+                    break
             available.clear()
             await self._push_terminal_updates(transport)
 
     async def _serve_messages(
-        self, transport: TunnelTransport, stop: asyncio.Event, *, outputs: bool = True
+        self,
+        transport: TunnelTransport,
+        stop: asyncio.Event,
+        *,
+        outputs: bool = True,
+        once: bool = False,
     ) -> str:
-        live = isinstance(self._source, LiveSource)
-        tick = LIVE_TICK_S if live else RECV_POLL_S
-        last_ping = asyncio.get_running_loop().time()
-        while True:
-            if stop.is_set():
-                try:
-                    await self._send(transport, {"kind": "bye"})
-                except Exception:  # noqa: BLE001 - shutdown best-effort
-                    pass
-                return "stop"
-            interval = self._config.ping_interval_s
-            if interval > 0 and asyncio.get_running_loop().time() - last_ping >= interval:
-                await self._send(transport, {"kind": "ping"})
-                last_ping = asyncio.get_running_loop().time()
-            try:
-                raw = await asyncio.wait_for(transport.recv_text(), tick)
-            except TimeoutError:
-                raw = ""
-            if live and not await self._push_live(transport, outputs=outputs):
-                return "drop"
-            if not raw:
-                continue
-            if len(raw.encode()) > TUNNEL_MAX_TEXT:
-                raise _ProtocolDrop("inbound tunnel frame too large")
-            try:
-                message = json.loads(raw)
-            except ValueError as exc:
-                raise _ProtocolDrop("tunnel message is not JSON") from exc
-            if not isinstance(message, dict):
-                raise _ProtocolDrop("tunnel message is not an object")
-            kind = message.get("kind")
-            if kind == "pong":
-                self._last_application_pong_at = asyncio.get_running_loop().time()
-                continue
-            if kind == "terminal.epochs":
-                self._handle_epochs(message)
-                continue
-            if kind in ("terminal.input", "terminal.resize"):
-                await self._handle_terminal(transport, message)
-                continue
-            if kind != "command.dispatch":
-                raise _ProtocolDrop(f"unexpected tunnel kind {kind!r}")
-            command_id = self._precheck(message)
-            await self._send(
-                transport,
-                {"kind": ACK_KIND, "command_id": command_id, "host_id": self._config.host_id},
+        owns_writer = self._writer is None
+        if owns_writer:
+            self._writer_transport = transport
+            self._writer = TunnelWriter(
+                transport.send_text, lambda: self._writer_transport is transport
             )
-            self._dispatches += 1
-            result = await self._dispatch.dispatch(message)
-            await self._send(transport, result)
-            self._results += 1
-            await self._refresh_after_creation(transport, message, result)
+            self._writer_task = asyncio.create_task(self._writer.run())
+        live = isinstance(self._source, LiveSource)
+        self._inflight, self._inflight_at = "receive", asyncio.get_running_loop().time()
+        tick = LIVE_TICK_S if live else RECV_POLL_S
+        inbox: BoundedInbox[dict[str, Any]] = BoundedInbox()
+        refresh = asyncio.Event()
+        refresh_work: list[tuple[dict[str, Any], dict[str, Any]]] = []
+        done = asyncio.Event()
 
-    async def _drain_once(self, transport: TunnelTransport, stop: asyncio.Event) -> str:
-        """Single session for `--once`: process until the first result (or
-        the timeout), then say bye. Used by smoke runs and loopback tests."""
-        try:
-            async with asyncio.timeout(self._config.once_timeout_s):
-                while not stop.is_set():
-                    try:
-                        raw = await asyncio.wait_for(transport.recv_text(), RECV_POLL_S)
-                    except TimeoutError:
-                        continue
-                    if len(raw.encode()) > TUNNEL_MAX_TEXT:
-                        raise _ProtocolDrop("inbound tunnel frame too large")
-                    try:
-                        message = json.loads(raw)
-                    except ValueError as exc:
-                        raise _ProtocolDrop("tunnel message is not JSON") from exc
-                    if not isinstance(message, dict):
-                        raise _ProtocolDrop("tunnel message is not an object")
-                    if message.get("kind") == "pong":
-                        self._last_application_pong_at = asyncio.get_running_loop().time()
-                        continue
-                    if message.get("kind") == "terminal.epochs":
-                        self._handle_epochs(message)
-                        continue
+        async def reader() -> None:
+            last_ping = asyncio.get_running_loop().time()
+            while not stop.is_set() and not done.is_set():
+                interval = self._config.ping_interval_s
+                if interval > 0 and asyncio.get_running_loop().time() - last_ping >= interval:
+                    if self._writer is not None:
+                        self._writer.post((json.dumps({"kind": "ping"}),), control=True)
+                    else:
+                        await self._send(transport, {"kind": "ping"})
+                    last_ping = asyncio.get_running_loop().time()
+                if self._inflight == "idle":
+                    self._inflight, self._inflight_at = "receive", asyncio.get_running_loop().time()
+                try:
+                    raw = await asyncio.wait_for(transport.recv_text(), tick)
+                except TimeoutError:
+                    continue
+                self._last_recv_at = asyncio.get_running_loop().time()
+                if len(raw.encode()) > TUNNEL_MAX_TEXT:
+                    raise _ProtocolDrop("inbound tunnel frame too large")
+                try:
+                    message = json.loads(raw)
+                except ValueError:
+                    raise _ProtocolDrop("malformed tunnel document") from None
+                if not isinstance(message, dict):
+                    raise _ProtocolDrop("tunnel message is not an object")
+                kind = message.get("kind")
+                if kind == "pong":
+                    self._last_application_pong_at = asyncio.get_running_loop().time()
+                elif kind == "terminal.epochs":
+                    # Invalidation happens before an old queued input can reach its worker.
+                    self._handle_epochs(message)
+                elif kind in ("terminal.input", "terminal.resize", "command.dispatch"):
+                    inbox.put(message, len(raw.encode()))
+                else:
+                    raise _ProtocolDrop("unexpected tunnel kind")
+
+        async def worker() -> None:
+            while True:
+                entry = await inbox.get()
+                message = entry[0]
+                try:
                     if message.get("kind") in ("terminal.input", "terminal.resize"):
-                        await self._handle_terminal(transport, message)
+                        await self._track_await(
+                            "terminal", self._handle_terminal(transport, message)
+                        )
                         continue
-                    if message.get("kind") != "command.dispatch":
-                        raise _ProtocolDrop(f"unexpected tunnel kind {message.get('kind')!r}")
                     command_id = self._precheck(message)
-                    await self._send(
-                        transport,
-                        {
-                            "kind": ACK_KIND,
-                            "command_id": command_id,
-                            "host_id": self._config.host_id,
-                        },
+                    await self._track_await(
+                        "command_ack",
+                        self._send(
+                            transport,
+                            {
+                                "kind": ACK_KIND,
+                                "command_id": command_id,
+                                "host_id": self._config.host_id,
+                            },
+                        ),
                     )
                     self._dispatches += 1
-                    result = await self._dispatch.dispatch(message)
-                    await self._send(transport, result)
+                    result = await self._track_await("dispatch", self._dispatch.dispatch(message))
+                    await self._track_await("command_result", self._send(transport, result))
                     self._results += 1
+                    if once:
+                        await self._refresh_after_creation(transport, message, result)
+                        done.set()
+                        return
+                    refresh_work[:] = [(message, result)]
+                    refresh.set()
+                finally:
+                    inbox.finish(entry)
+
+        async def metadata() -> None:
+            while True:
+                try:
+                    await asyncio.wait_for(refresh.wait(), tick)
+                except TimeoutError:
+                    pass
+                refresh.clear()
+                if refresh_work:
+                    message, result = refresh_work.pop()
                     await self._refresh_after_creation(transport, message, result)
-                    break
+                if live and not await self._push_live(transport, outputs=outputs):
+                    return
+
+        tasks = [
+            asyncio.create_task(reader()),
+            asyncio.create_task(worker()),
+            asyncio.create_task(stop.wait()),
+            asyncio.create_task(done.wait()),
+        ]
+        if not once:
+            tasks.append(asyncio.create_task(metadata()))
+        try:
+            supervised = tasks + ([self._writer_task] if self._writer_task is not None else [])
+            completed, _ = await asyncio.wait(supervised, return_when=asyncio.FIRST_COMPLETED)
+            for task in completed:
+                task.result()
+            return "once-done" if done.is_set() else ("stop" if stop.is_set() else "drop")
+        except TunnelCapacityError:
+            LOG.warning("tunnel_queue_full")
+            close = getattr(transport, "close_queue_full", transport.close)
+            async with asyncio.timeout(SEND_TIMEOUT_S):
+                await close()
+            raise _ProtocolDrop("tunnel_queue_full") from None
+        finally:
+            writer = self._writer
+            LOG.info(
+                "tunnel_queue queued=%d bytes=%d oldest_s=%.3f phase=%s "
+                "writer=%s write_queued=%d write_bytes=%d write_oldest_s=%.3f",
+                inbox.count,
+                inbox.bytes,
+                inbox.oldest_age,
+                self._inflight,
+                writer.phase if writer is not None else "closed",
+                writer.inbox.count if writer is not None else 0,
+                writer.inbox.bytes if writer is not None else 0,
+                writer.inbox.oldest_age if writer is not None else 0,
+            )
+            await cancel_tasks(tasks)
+            if owns_writer and self._writer_task is not None:
+                self._writer_transport = None
+                await cancel_tasks([self._writer_task])
+                self._writer = None
+                self._writer_task = None
+
+    async def _drain_once(self, transport: TunnelTransport, stop: asyncio.Event) -> str:
+        result = "once-done"
+        try:
+            async with asyncio.timeout(self._config.once_timeout_s):
+                result = await self._serve_messages(transport, stop, once=True)
         except TimeoutError:
             pass
         try:
             await self._send(transport, {"kind": "bye"})
-        except Exception:  # noqa: BLE001 - shutdown best-effort
+        except Exception:  # noqa: BLE001 - shutdown best effort
             pass
-        return "once-done" if not stop.is_set() else "stop"
+        return result
 
     async def close(self) -> None:
         if self._own_journal:

@@ -24,7 +24,7 @@ from relaydeck.client.features.create.validation import (
 )
 from relaydeck.client.features.terminal.events import event_text
 from relaydeck.client.theme import FONT_SIZE, MIN_TOUCH, RADIUS, palette
-from relaydeck.contracts.launch import default_agent_name
+from relaydeck.contracts.launch import AGENT_NAME_HELP, agent_name_error, default_agent_name
 
 START_AGENT_SHEET_KEY = "start-agent-sheet"
 NEW_TERMINAL_SHEET_KEY = "new-terminal-sheet"
@@ -217,6 +217,7 @@ def StartAgentSheet(
         set_kind(next_kinds[0] if next_kinds else "")
 
     kinds = kind_catalogs.get(host_id, ()) if kind_catalogs is not None else kinds
+    name_validation = agent_name_error(name or _default_name(kind, host_id, existing_names_by_host))
 
     def attempt() -> None:
         found = validate_agent(
@@ -236,6 +237,8 @@ def StartAgentSheet(
             },
             kinds=kinds,
         )
+        if name_validation:
+            found["name"] = name_validation
         set_errors(found)
         if not found and not submitting:
             argv, _ = parse_argv(argv_text)
@@ -303,9 +306,13 @@ def StartAgentSheet(
                         key="agent-name",
                         label="Name (optional)",
                         hint_text=_default_name(kind, host_id, existing_names_by_host),
+                        helper=AGENT_NAME_HELP,
+                        helper_max_lines=3,
+                        error_max_lines=3,
+                        max_length=32,
                         value=name,
                         content_padding=ft.Padding.symmetric(horizontal=12, vertical=16),
-                        error=errors.get("name"),
+                        error=name_validation or None,
                         on_change=lambda e: set_name(event_text(e)),
                     ),
                     _dropdown(
@@ -349,7 +356,7 @@ def StartAgentSheet(
                             ft.Button(
                                 "Start",
                                 key="sheet-submit",
-                                disabled=submitting or not kinds,
+                                disabled=submitting or not kinds or bool(name_validation),
                                 height=MIN_TOUCH,
                                 expand=True,
                                 on_click=lambda e: attempt(),

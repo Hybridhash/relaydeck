@@ -403,9 +403,9 @@ def test_root_launch_observes_http_outcome_and_fences_duplicate_clicks(
             click(None)
             await _wait(lambda: len(transport.submitted) == 1)
             await _wait(
-                lambda: (backend.journal.record(transport.submitted[0]["command_id"]) or {})[
+                lambda: (backend.journal.record(transport.submitted[0]["command_id"]) or {}).get(
                     "status"
-                ]
+                )
                 in ("succeeded", "failed", "unknown")
             )
             await app.settle(50)

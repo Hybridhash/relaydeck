@@ -34,8 +34,9 @@ from relaydeck.client.theme import (
 __all__ = ["agent_tile", "empty_hint", "host_tile", "shell_tile"]
 
 
-def _shape(selected: bool) -> Any:
-    return ft.RoundedRectangleBorder(radius=8 if selected else 0)
+def _shape(selected: bool, highlighted: bool = False, ring: str = "") -> Any:
+    side = ft.BorderSide(2, ring) if highlighted else None
+    return ft.RoundedRectangleBorder(radius=8 if selected or highlighted else 0, side=side)
 
 
 def _text(value: str, color: str, *, title: bool = False, phone: bool = False) -> ft.Text:
@@ -56,15 +57,23 @@ def agent_tile(
     on_select: Callable[[str], Any],
     dark: bool = True,
     phone: bool = False,
+    title: str | None = None,
+    highlighted: bool = False,
+    on_name_double_tap: Callable[[], Any] | None = None,
 ) -> ft.ListTile:
     tokens = palette(dark)
+    name: ft.Control = _text(title or row.title, tokens["text"], title=True, phone=phone)
+    if on_name_double_tap is not None:
+        name = ft.GestureDetector(
+            key=f"agent-name-{row.key}", on_double_tap=lambda _e: on_name_double_tap(), content=name
+        )
     identity = agent_identity(row.agent, dark)
     rest = agent_subtitle_rest(row.subtitle, row.agent)
     meta_value = f" · {rest}" if rest and rest != row.subtitle else rest
     return ft.ListTile(
         key=f"agent-{row.key}",
         leading=StatusDot(row.status.value, dark=dark),
-        title=_text(row.title, tokens["text"], title=True, phone=phone),
+        title=name,
         subtitle=ft.Row(
             spacing=6,
             vertical_alignment=ft.CrossAxisAlignment.CENTER,
@@ -115,7 +124,7 @@ def agent_tile(
         ),
         selected=selected,
         selected_tile_color=tokens["active_row_bg"],
-        shape=_shape(selected),
+        shape=_shape(selected, highlighted, tokens["accent_text"]),
         content_padding=ft.Padding.symmetric(horizontal=10, vertical=12),
         min_height=64,
         text_color=tokens["text"],

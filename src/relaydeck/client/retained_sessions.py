@@ -639,6 +639,72 @@ class RetainedSessions:
             self.reconcile_ui(entry)
             session._notify()
 
+    async def resume_output(self, entry: RetainedSession, current: Callable[[], bool]) -> bool:
+        """Reopen only this viewer's output, retaining its lease and native parent."""
+        session = entry.session
+        controller, lease, attachment, term = (
+            session.controller,
+            session.lease,
+            session.attachment,
+            session.current_term,
+        )
+        if (
+            controller is None
+            or not controller.live_edge_pending
+            or entry.ui_recovering
+            or controller._live_edge_opening
+            or controller._overflow_attempts >= 3
+        ):
+            return False
+        transition = terminal_transition(session)
+        recovery = transition.begin_recovery()
+        if recovery is None:
+            return False
+        lifecycle = session.interaction_generation
+
+        def owned() -> bool:
+            return bool(
+                current()
+                and not session.disposed
+                and not session.paused
+                and session.foreground
+                and session.controller is controller
+                and session.lease is lease
+                and session.attachment is attachment
+                and session.current_term is term
+                and session.interaction_generation == lifecycle
+                and not controller.writer_revoked
+                and transition.recovery is recovery
+                and transition.control is None
+            )
+
+        entry.ui_recovering = True
+        session.set_recovering(True)
+        session.set_recovery_guard(owned)
+        success = False
+        try:
+            if not owned():
+                return False
+            task, entry.task = entry.task, None
+            if task is not None and task is not asyncio.current_task():
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+            if not owned():
+                return False
+            success = await session.drive_recovery() == "resumed" and owned()
+            if success:
+                session._phase = session._PHASE_LIVE  # Output/native ACK still gates input.
+            return success
+        finally:
+            resume = success and owned()
+            session.set_recovery_guard(None)
+            entry.ui_recovering = False
+            transition.end_recovery(recovery)
+            session.set_recovering(False)
+            if resume and current() and session.controller is controller and session.lease is lease:
+                entry.supervise(session)
+            session._notify()
+
     def invalidate(self, host_id: str | None = None) -> None:
         """Synchronous input fence precedes asynchronous teardown/revocation."""
         self._cache_revision += 1

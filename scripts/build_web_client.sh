@@ -10,7 +10,7 @@
 #                          (default ~/Library/Caches/RelayDeck/patches)
 #   RD_BUILD_DRY_RUN=1     run the patch preflight only, build nothing
 #
-# Patches (see patches/*/README.md). Each patch is one delimited block below
+# Patches (see patches/README.md). Each patch is one delimited block below
 # plus its folder; remove a patch by deleting both. The post-build gate fails
 # the build if the compiled main.dart.js lacks a listed patch's repair markers.
 set -euo pipefail

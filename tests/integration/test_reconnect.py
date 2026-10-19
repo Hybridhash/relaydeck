@@ -1,9 +1,10 @@
 """reconnect recovery against the real gateway.
 
-No scripted transports: HttpxGatewayTransport talks to a live uvicorn
+Live cases use no scripted transports: HttpxGatewayTransport talks to a live uvicorn
 serving the real app (auth, cursors, envelopes, SSE framing). Drops
 before and after snapshot boundaries plus a mid-stream host restart
 prove the controller resyncs instead of wiping or stalling.
+The paused-HTTP regression separately pins readiness versus replay completion.
 """
 
 from __future__ import annotations
@@ -12,10 +13,12 @@ import asyncio
 import contextlib
 import json
 import time
+from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
 
 import httpx
+import pytest
 
 from relaydeck.client.features.sync.backoff import Backoff
 from relaydeck.client.features.sync.controller import SyncController
@@ -23,7 +26,7 @@ from relaydeck.client.features.sync.transport import HttpxGatewayTransport
 from relaydeck.domain.models import ConnectionState
 from relaydeck.gateway.app import GatewayState, create_app
 from relaydeck.gateway.backend import FakeBackend
-from relaydeck.gateway.cursors import encode_cursor
+from relaydeck.gateway.cursors import AFTER_SEQUENCE_HEADER, encode_cursor
 from tests.support.live_server import LiveGateway
 
 FIXTURES = Path(__file__).resolve().parent.parent / "fixtures" / "gateway"
@@ -65,12 +68,82 @@ def _event(resource_id: str, **kw: Any) -> dict[str, Any]:
     return template
 
 
-async def _wait_until(pred: Any, timeout: float = 15.0) -> None:
+async def _wait_until(pred: Any, timeout: float = 30.0) -> None:
     deadline = asyncio.get_running_loop().time() + timeout
     while not pred():
         if asyncio.get_running_loop().time() > deadline:
             raise AssertionError("timed out waiting for sync condition")
         await asyncio.sleep(0.01)
+
+
+async def _wait_for_replay(controller: SyncController, sequence: int) -> None:
+    # LIVE confirms accepted SSE headers, including for hosts without metadata.
+    # It does not promise that this test's retained replay has finished applying.
+    await _wait_until(
+        lambda: controller.state.connection.state == ConnectionState.LIVE
+        and controller.state.connection.last_sequence == sequence
+    )
+
+
+@pytest.mark.parametrize("paused_after", [0, 1, 2])
+def test_replay_wait_does_not_confuse_live_with_caught_up(paused_after: int) -> None:
+    """Real HTTP parser/controller, with the remaining replay held by an event."""
+
+    async def scenario() -> None:
+        state, backend = _seed()
+        paused, release, finish = asyncio.Event(), asyncio.Event(), asyncio.Event()
+        stopped = False
+
+        class ReplayBody(httpx.AsyncByteStream):
+            async def __aiter__(self) -> AsyncIterator[bytes]:
+                for index, event in enumerate(backend.event_logs["home-mac"]):
+                    if index == paused_after:
+                        paused.set()
+                        await release.wait()
+                    yield f"event: metadata\ndata: {json.dumps(event)}\n\n".encode()
+                await finish.wait()
+
+        def respond(request: httpx.Request) -> httpx.Response:
+            if request.url.path.endswith("/snapshot"):
+                return httpx.Response(200, json=backend.snapshot("home-mac"))
+            assert request.url.path == "/v1/events"
+            return httpx.Response(
+                200,
+                headers={AFTER_SEQUENCE_HEADER: "0"},
+                stream=ReplayBody(),
+            )
+
+        async def token() -> str:
+            return "synthetic"
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as http:
+            transport = HttpxGatewayTransport("https://gateway.test", token, http)
+            controller = SyncController(transport)
+            task = asyncio.create_task(controller.run("home-mac", lambda: stopped))
+            waiting: asyncio.Task[None] | None = None
+            try:
+                await asyncio.wait_for(paused.wait(), 5)
+                assert controller.state.connection.state == ConnectionState.LIVE
+                assert controller.state.connection.last_sequence == paused_after
+                waiting = asyncio.create_task(_wait_for_replay(controller, 3))
+                await asyncio.sleep(0)  # Run the waiter; no elapsed-time readiness assumption.
+                assert not waiting.done(), "LIVE did not yet include the full replay"
+                release.set()
+                await asyncio.wait_for(waiting, 5)
+                assert controller.state.connection.last_sequence == 3
+                assert controller.state.connection.cursor == "c3"
+            finally:
+                stopped = True
+                release.set()
+                finish.set()
+                if waiting is not None and not waiting.done():
+                    waiting.cancel()
+                if waiting is not None:
+                    await asyncio.gather(waiting, return_exceptions=True)
+                await asyncio.wait_for(task, 5)
+                state.push.close()
+
+    asyncio.run(scenario())
 
 
 def test_controller_live_apply_gap_resync() -> None:
@@ -99,10 +172,9 @@ def test_controller_live_apply_gap_resync() -> None:
                 controller.subscribe(lambda s: states.append(s.connection.state.value))
                 task = asyncio.create_task(controller.run("home-mac", lambda: stopped))
                 try:
-                    await _wait_until(
-                        lambda: controller.state.connection.state == ConnectionState.LIVE
-                    )
+                    await _wait_for_replay(controller, 3)
                     assert controller.state.connection.last_sequence == 3
+                    assert controller.state.connection.cursor == "c3"
                     assert snapshots == 1
 
                     backend.publish(
@@ -247,10 +319,7 @@ def test_controller_recovers_after_transport_drop() -> None:
                     controller = SyncController(transport=transport, backoff=Backoff.seeded(3))
                     task = asyncio.create_task(controller.run("home-mac", lambda: stopped))
                     try:
-                        await _wait_until(
-                            lambda: controller.state.connection.state == ConnectionState.LIVE
-                        )
-                        await _wait_until(lambda: controller.state.connection.last_sequence == 3)
+                        await _wait_for_replay(controller, 3)
                         proxy.kill()  # whole transport loss, mid-stream
                         await _wait_until(
                             lambda: controller.state.connection.state

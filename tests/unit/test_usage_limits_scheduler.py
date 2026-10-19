@@ -7,6 +7,7 @@ CLI) with distinctive arguments.
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 import time
@@ -346,14 +347,15 @@ def test_run_bounded_command_truncates_stdout() -> None:
 
 
 def test_timeout_kills_the_child() -> None:
-    before = subprocess.run(["pgrep", "-f", "sleep 31"], capture_output=True, text=True).stdout
-    assert before == ""
+    marker = f"31.{os.getpid()}"  # Only this process's child matches, not a parallel run's.
+    before = subprocess.run(["pgrep", "-f", f"sleep {marker}"], capture_output=True, text=True)
+    assert before.stdout == ""
     started = time.monotonic()
     with pytest.raises(TimeoutError):
-        run_bounded_command(("/bin/sleep", "31"), timeout_s=0.2)
+        run_bounded_command(("/bin/sleep", marker), timeout_s=0.2)
     assert time.monotonic() - started < 10
-    after = subprocess.run(["pgrep", "-f", "sleep 31"], capture_output=True, text=True).stdout
-    assert after == ""  # no orphan: the group kill reaped it
+    after = subprocess.run(["pgrep", "-f", f"sleep {marker}"], capture_output=True, text=True)
+    assert after.stdout == ""  # no orphan: the group kill reaped it
 
 
 def test_fetch_timeout_recorded_as_error(tmp_path: Path) -> None:

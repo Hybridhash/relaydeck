@@ -253,7 +253,7 @@ def test_live_session_renews_lease_while_foreground() -> None:
         assert await session.confirm_takeover() == AGENT_LIVE
         assert session.lease is not None
         session.start_lease_renewal(interval_s=0.01)
-        await asyncio.sleep(0.05)
+        await _wait_for(lambda: len(renewals) >= 2)
         assert len(renewals) >= 2
         assert set(renewals) == {session.lease.lease_id}
         await session.stop_lease_renewal()
@@ -296,7 +296,7 @@ def test_pause_cancels_renewal_and_dispose_ends_it() -> None:
         session = _shell_session(factory, renew=renew)
         assert await session.open("term-1") == "live"
         session.start_lease_renewal(interval_s=0.01)
-        await asyncio.sleep(0.03)
+        await _wait_for(lambda: len(renewals) >= 1)
         assert len(renewals) >= 1
         await session.pause()
         count = len(renewals)

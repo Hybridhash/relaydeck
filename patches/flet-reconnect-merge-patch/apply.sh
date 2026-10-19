@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Materialise the patched flet 1.0.3 package from pristine pub.dev sources plus the diff.
 # Reads only: never touches the pub cache, no network, no builds.
-# Usage: apply.sh [--check] [--force] [--test] [DEST]; options and sources are in README.md.
+# Usage: apply.sh [--check] [--force] [--test] [DEST]; options and sources are in patches/README.md.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"

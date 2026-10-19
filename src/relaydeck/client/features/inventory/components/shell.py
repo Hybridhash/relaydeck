@@ -94,6 +94,7 @@ def AppShell(
     on_prefs: Callable[[TerminalPrefs], Any] | None = None,
     prefs_saved: bool = True,
     live_shells: frozenset[str] = frozenset(),
+    command_transport: Any = None,
 ) -> Any:
     (
         query,
@@ -140,7 +141,6 @@ def AppShell(
     split_gap = 20 if console_layout and is_wide else 8
     selection = state.selection.session_key
     tokens = palette(dark)
-    labels = {d: label for d, label, _ in DESTINATIONS}
     banner = connection_banner(state)
     host_label, host_status, host_reachable = host_context(state)
     context_header = HostContextHeader(
@@ -192,7 +192,7 @@ def AppShell(
         inventory_more=inventory_more,
         inventory_total=inventory_total,
         is_wide=is_wide,
-        labels=labels,
+        labels={d: label for d, label, _ in DESTINATIONS},
         list_destination=list_destination,
         live_detail=live_detail,
         live_shells=live_shells,
@@ -200,6 +200,7 @@ def AppShell(
         usage_fetch=usage_fetch,
         usage_identity=usage_identity,
         foreground=foreground,
+        command_transport=command_transport,
         usage_host_id=usage_host_id,
         on_open_usage=on_open_usage,
         mode=mode,

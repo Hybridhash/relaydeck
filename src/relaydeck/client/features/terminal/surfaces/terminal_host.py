@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any
 
 import flet as ft
 
+from relaydeck.client.features.terminal.events import click
 from relaydeck.client.features.terminal.input_modes import (
     KEYBOARD_KEYS,
     KEYBOARD_TEXT,
@@ -64,6 +65,7 @@ def build_terminal_host(
     on_scroll: Callable[[int | None], Any] | None,
     on_selection_change: Callable[[int, int], Any] | None,
     on_terminal: Callable[[Any | None], Any] | None,
+    on_tap: Callable[[], Any] | None = None,
     on_view_report: Callable[[Any, Any], Any] | None,
     phone: bool,
     report_size: Callable[[int, int], Any],
@@ -93,7 +95,7 @@ def build_terminal_host(
         content=ft.GestureDetector(
             key="terminal-direct-tap",
             # Taps never open the keyboard; only the keyboard button does.
-            on_tap=_ignore_tap,
+            on_tap=click(on_tap) if on_tap is not None else _ignore_tap,
             content=TerminalScreen(
                 cached_screen=cached_screen,
                 connecting=connecting,

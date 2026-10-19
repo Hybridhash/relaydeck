@@ -6,6 +6,8 @@ import asyncio
 import json
 from typing import Any
 
+import pytest
+
 from relaydeck.client.features.sync.backoff import Backoff
 from relaydeck.client.features.sync.controller import (
     SyncController,
@@ -263,6 +265,67 @@ def test_terminal_client_control_gap() -> None:
         await client.open("lease-1", 1, "rdt_test")
         await client.run()
         assert gaps == ["stale_revision"]
+
+    asyncio.run(scenario())
+
+
+def test_terminal_client_rate_limited_gap_keeps_output_and_never_replays_input() -> None:
+    from relaydeck.gateway import terminal_wire
+
+    async def scenario() -> None:
+        gap = {"kind": "gap", "detail": "rate_limited"}
+        sock = _ScriptedSocket(
+            [
+                ("bytes", terminal_wire.encode_output("e1", 0, b"before")),
+                *[("text", json.dumps(gap)) for _ in range(50)],
+                ("bytes", terminal_wire.encode_output("e1", 6, b"after")),
+                ("text", json.dumps({"kind": "bye"})),
+            ]
+        )
+        outputs, controls, gaps = [], [], []
+        client = TerminalStreamClient(
+            socket_factory=lambda _: sock,
+            on_output=lambda offset, data: outputs.append((offset, data)),
+            on_control=controls.append,
+            on_gap=gaps.append,
+        )
+        await client.open("lease-1", 1, "ticket")
+        await client.send_input(b"dropped")
+        await asyncio.wait_for(client.run(), 1)
+        assert gaps == []
+        assert outputs == [(0, b"before"), (6, b"after")]
+        assert controls == [*[gap] * 50, {"kind": "bye"}]
+        assert client.next_offset == 11
+        assert [terminal_wire.decode_input(frame).data for frame in sock.sent_bytes] == [b"dropped"]
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("mode", ["control", "view"])
+def test_terminal_controller_rate_limited_gap_does_not_schedule_recovery(mode: str) -> None:
+    from relaydeck.client.features.terminal.controller import TerminalController
+    from relaydeck.gateway import terminal_wire
+
+    async def scenario() -> None:
+        sock = _ScriptedSocket(
+            [
+                ("bytes", terminal_wire.encode_output("e1", 0, b"a")),
+                ("text", json.dumps({"kind": "gap", "detail": "rate_limited"})),
+                ("bytes", terminal_wire.encode_output("e1", 1, b"b")),
+                ("text", json.dumps({"kind": "bye"})),
+            ]
+        )
+        output, states = [], []
+        controller = TerminalController(
+            lambda _: sock, "lease-1", 1, mode, output.append, states.append
+        )
+        await controller.start("ticket")
+        await asyncio.wait_for(controller.run(), 1)
+        assert output == [b"a", b"b"]
+        assert controller.pending_resume is None and not controller.reattach_needed
+        assert controller.gap_detail == "" and controller.gap_recovery.attempt == 0
+        assert not controller.writer_revoked and not controller.ui_input_fenced
+        assert not sock.sent_bytes and not sock.closed
 
     asyncio.run(scenario())
 

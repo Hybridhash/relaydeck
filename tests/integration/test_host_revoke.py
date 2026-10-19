@@ -3,7 +3,7 @@
 `revoke-host --spool` queues a request file; the serving process drains
 the spool and revokes exactly that host (tunnels + leases severed,
 every other host untouched). The serving-process drain loop lives in
-app.py (coordinator-owned, proposed in the runbook); this file proves
+app.py (coordinator-owned); this file proves
 the CLI writer, the spool format, and the drain+revoke round-trip
 against a real GatewayState. Synthetic loopback only.
 """

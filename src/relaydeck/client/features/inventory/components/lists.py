@@ -16,9 +16,14 @@ from relaydeck.client.components.design_system import tokens as console_tokens
 from relaydeck.client.components.design_system.hosts import HostGroupLabel, HostsHeader
 from relaydeck.client.components.session_rows import agent_tile, empty_hint, host_tile, shell_tile
 from relaydeck.client.features.a11y.announcer import LiveRegion
+from relaydeck.client.features.inventory.agent_gestures import AgentGestures
+from relaydeck.client.features.inventory.rename_flow import use_rename_flow
+from relaydeck.client.features.inventory.rename_wiring import card_label, shown_title, space_label
 from relaydeck.client.features.inventory.selectors import AgentRow, BannerModel, HostRow, ShellRow
+from relaydeck.client.features.terminal.diagnostics import diagnostics_logger
 from relaydeck.client.features.terminal.events import event_text
 from relaydeck.client.theme import BANNER_TONES, FONT_SIZE, MIN_TOUCH, palette
+from relaydeck.domain.models import AppState
 
 
 @ft.component
@@ -196,30 +201,120 @@ def AgentsList(
     on_refresh: Callable[[], Any] | None = None,
     show_header: bool = True,
     scroll_positions: Any = None,
+    command_transport: Any = None,
+    state: AppState | None = None,
+    foreground: bool = True,
+    pins: frozenset[str] = frozenset(),
+    on_pin: Callable[[str], Any] | None = None,
 ) -> Any:
+    flow = use_rename_flow(rows)
+    renamable = command_transport is not None and state is not None
     tokens = palette(dark)
+    # Cards whose inputs did not change keep their control instances, so a render caused by one
+    # row, a session tick or an inventory update behind an open terminal diffs only what moved.
+    # The callbacks read the current flow and selector through refs, never a stale render's.
+    current: Any = ft.use_ref(None)
+    current.current = (flow, on_select)
+    cards: Any = ft.use_ref({})
+
+    def rename_of(row: AgentRow, title: str) -> Callable[[], None]:
+        return lambda: current.current[0].open_rename(row.key, title)
+
+    def menu_of(row: AgentRow) -> Callable[[str], None]:
+        def open_menu(source: str) -> None:
+            diagnostics_logger().info("agent_menu open source=%s", source)
+            current.current[0].set_menu(row.key)
+
+        return open_menu
+
+    def card_menu_of(row: AgentRow) -> Callable[[], None]:
+        return lambda: menu_of(row)("card")
+
+    def select_of(row: AgentRow) -> Callable[[], Any]:
+        return lambda: current.current[1](row.key)
+
+    def select_card(key: str) -> Any:
+        return current.current[1](key)
+
     tiles: list[Any] = []
+    kept: dict[str, tuple[tuple[Any, ...], Any]] = {}
     for row in rows:
+        title = shown_title(row, flow.overrides)
+        signature = (
+            row,
+            title,
+            row.key == selected,
+            row.key == flow.highlight,
+            row.key in pins,
+            renamable,
+            phone,
+            dark,
+            space_label(row, state) if renamable else "",
+        )
+        cached = cards.current.get(row.key)
+        if cached is not None and cached[0] == signature:
+            kept[row.key] = cached
+            tiles.append(cached[1])
+            continue
         if dark:
             tile = AgentCard(
                 agent_id=row.key,
-                name=row.title,
+                name=title,
                 subject=row.subject,
                 status=row.status.value,
                 subtitle=row.subtitle,
                 meta_left="",
-                meta_right="Unread" if row.unread else "",
                 selected=row.key == selected,
-                on_select=on_select,
+                on_select=select_card,
                 agent=row.agent,
                 compact=phone,
+                meta_right="Unread" if row.unread else "",
+                highlighted=row.key == flow.highlight,
+                on_name_double_tap=rename_of(row, title) if renamable and not phone else None,
+                on_long_press=card_menu_of(row) if renamable else None,
+                pinned=row.key in pins,
             )
             # Set identity on this freshly built presentation control. The live
             # terminal owner below is untouched; row callbacks keep scoped IDs.
             tile.key = f"agent-{row.key}"
         else:
-            tile = agent_tile(row, row.key == selected, on_select, dark, phone)
+            tile = agent_tile(
+                row,
+                row.key == selected,
+                select_card,
+                dark,
+                phone,
+                title=title,
+                highlighted=row.key == flow.highlight,
+                on_name_double_tap=rename_of(row, title) if renamable and not phone else None,
+            )
+            if row.key in pins and isinstance(tile.title, ft.Control):
+                tile.title = ft.Row(
+                    tight=True,
+                    spacing=6,
+                    controls=[
+                        tile.title,
+                        ft.Icon(
+                            ft.Icons.PUSH_PIN,
+                            key=f"agent-pinned-{row.key}",
+                            size=14,
+                            color=tokens["muted"],
+                        ),
+                    ],
+                )
+        if renamable:
+            tile = AgentGestures(
+                row.key,
+                tile,
+                card_label(row, title, space_label(row, state), row.key in pins),
+                dark,
+                on_menu=menu_of(row),
+                on_rename=rename_of(row, title),
+                on_select=select_of(row),
+            )
+        kept[row.key] = (signature, tile)
         tiles.append(tile)
+    cards.current = kept
     if not tiles:
         tiles.append(empty_hint("agents-empty", "No agents match these filters."))
     return ft.Column(
@@ -295,6 +390,18 @@ def AgentsList(
                         on_click=lambda e: on_more() if on_more is not None else None,
                     ),
                 ],
+            ),
+            *flow.overlays(
+                rows=rows,
+                state=state if renamable else None,
+                transport=command_transport,
+                on_select=on_select,
+                on_refresh=on_refresh,
+                dark=dark,
+                phone=phone,
+                foreground=foreground,
+                pins=pins,
+                on_pin=on_pin if renamable else None,
             ),
         ],
     )

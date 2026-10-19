@@ -97,6 +97,7 @@ _CONSOLE_KEYS = frozenset(
         "light_surface",
         "scroll_thumb_bg",
         "shell_disabled",
+        "toast_action",
     }
 )
 _USAGE_KEYS = frozenset(

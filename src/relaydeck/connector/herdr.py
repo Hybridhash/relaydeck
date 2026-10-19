@@ -38,6 +38,7 @@ ALLOWED_METHODS = frozenset(
         "agent.read",
         "agent.prompt",
         "agent.start",
+        "agent.rename",
         "agent.send_keys",
         "pane.read",
         "pane.send_text",
@@ -238,6 +239,9 @@ class HerdrAdapter:
 
     async def agent_get(self, target: str) -> dict[str, Any]:
         return (await self.call("agent.get", {"target": target})).result
+
+    async def agent_rename(self, target: str, name: str | None) -> dict[str, Any]:
+        return (await self.call("agent.rename", {"target": target, "name": name})).result
 
     async def agent_read(
         self,

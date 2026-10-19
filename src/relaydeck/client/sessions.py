@@ -9,7 +9,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import parse_qsl, quote, urlencode
 
 from relaydeck.client.adapters.ports import ClipboardPort, CredentialStore
 from relaydeck.client.features.shell import ShellSession
@@ -34,8 +34,14 @@ def production_stream_factory(ws_base: str) -> Callable[..., TerminalSocket]:
     `resume` is the controller's `epoch=...&offset=...` when reopening the same lease."""
 
     def open_stream(lease_id: str, ticket: str, resume: str = "") -> TerminalSocket:
-        url = f"{ws_base}/v1/terminal/{quote(lease_id, safe='')}?ticket={quote(ticket, safe='')}"
-        return WebsocketTerminalSocket(f"{url}&{resume}" if resume else url)
+        params = [("ticket", ticket), ("output_reset", "v1")]
+        params.extend(
+            (key, value)
+            for key, value in parse_qsl(resume, keep_blank_values=True)
+            if key not in ("ticket", "output_reset")
+        )
+        url = f"{ws_base}/v1/terminal/{quote(lease_id, safe='')}?{urlencode(params)}"
+        return WebsocketTerminalSocket(url)
 
     return open_stream
 
@@ -79,7 +85,7 @@ class SessionFactory:
             # reader only with a position. A first open stays ticket-only (retained replay).
             if (
                 controller is not None
-                and controller.reopening
+                and (controller.reopening or controller._client.epoch)
                 and controller.lease_id == lease_id
                 and (resume := controller.resume_query())
             ):

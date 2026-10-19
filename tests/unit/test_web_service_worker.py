@@ -93,8 +93,11 @@ def test_apply_patches_bootstrap_adds_one_snippet_and_embeds_the_build(out: Path
     assert bootstrap.count("loadServiceWorker(e)") == 1  # Flutter's loader code is left as is
     page = (out / "index.html").read_text()
     assert page.count('id="rd-sw-register"') == 1
-    assert page.count('id="rd-sw-register"') == 1
+    assert page.count('id="rd-keyboard-focus"') == 1
     assert "RelayDeck update notice" in page  # the page script is inlined verbatim
+    assert "RelayDeck keyboard focus guard" in page
+    register, guard = page.index('id="rd-sw-register"'), page.index('id="rd-keyboard-focus"')
+    assert register < guard < page.index("</body>")
     assert page.count("register('/flutter_service_worker.js'") == 1
     assert "{ scope: '/', updateViaCache: 'none' }" in page
     assert "location.protocol === 'https:' || location.hostname === 'localhost'" in page
@@ -133,6 +136,7 @@ def test_apply_is_idempotent(out: Path) -> None:
     assert first == second
     assert (out / "index.html").read_text() == page_first
     assert (out / "index.html").read_text().count('id="rd-sw-register"') == 1
+    assert (out / "index.html").read_text().count('id="rd-keyboard-focus"') == 1
 
 
 def test_canvaskit_is_not_precached_but_is_in_the_digest(out: Path) -> None:
@@ -271,6 +275,23 @@ def test_page_update_notice_passes_under_node(out: Path) -> None:
             NODE,
             str(ROOT / "tests" / "ui" / "update_notice_page.cjs"),
             str(ROOT / "scripts" / "web" / "rd-sw-client.js"),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "ALL PASS" in result.stdout
+
+
+def test_page_keyboard_focus_guard_passes_under_node() -> None:
+    if not Path(NODE).exists():
+        pytest.skip("node is required for the page behaviour check")
+    result = subprocess.run(
+        [
+            NODE,
+            str(ROOT / "tests" / "ui" / "keyboard_focus_page.cjs"),
+            str(ROOT / "scripts" / "web" / "rd-keyboard-focus.js"),
         ],
         capture_output=True,
         text=True,

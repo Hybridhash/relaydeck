@@ -608,8 +608,3 @@ def revoke(state: AppState) -> AppState:
         revoked=True,
         stale=True,
     )
-
-
-def mark_offline(state: AppState) -> AppState:
-    conn = replace(state.connection, state=ConnectionState.HOST_OFFLINE)
-    return replace(state, connection=conn, stale=True)

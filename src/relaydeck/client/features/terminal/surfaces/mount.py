@@ -211,8 +211,7 @@ def mount_agent_screen(
     _use_foreground(session)
     use_keyboard_state_workflow(session)
 
-    # The tick is read so the render depends on it; every session
-    # mutation (sync click or background stream) rerenders through it.
+    # Read the tick to render each session mutation.
     _ = tick
     mobile_item, modifier_states, mobile_input = use_mobile_key_actions(
         session, active=(width_tier or ("compact" if phone else "expanded")) != "expanded"
@@ -284,6 +283,7 @@ def mount_agent_screen(
             session.bind_view(term, write=deliver_output)
 
     async def _take_over() -> str:
+        session.log_reopen("take_over")
         # Arm disclosure before confirmation, even when one press performs both.
         session.request_takeover()
         if confirm_takeover:

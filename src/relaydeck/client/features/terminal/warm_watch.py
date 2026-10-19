@@ -15,8 +15,8 @@ def fence_hidden_writer(session: Any) -> None:
     session.sessions.invalidate()
     store = getattr(session, "store", None)
     if store is not None:
-        store.reconnect()
-        store.unbind_writer()
+        store.reconnect("fence_hidden")
+        store.unbind_writer("fence_hidden")
 
 
 async def watch_only(

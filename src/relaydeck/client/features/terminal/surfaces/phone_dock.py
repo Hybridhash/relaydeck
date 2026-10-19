@@ -52,6 +52,14 @@ from relaydeck.client.features.terminal.surfaces.phone_composer import (
     _phone_composer,
 )
 
+# Memoised on value-equal inputs and stable callbacks: a render caused elsewhere on the screen
+# reuses the key bar's controls instead of rebuilding and diffing its hundred-odd controls.
+_KeyBar = ft.memo(MobileKeyBar)  # type: ignore[no-untyped-call]
+
+
+def _ignore_item(item: Any, hold: bool) -> None:
+    return None
+
 
 def dock_signature(**shape: Any) -> tuple[Any, ...]:
     """The dock's shape: the inputs that decide which dock rows exist and how tall they are."""
@@ -62,6 +70,8 @@ def _toggle_buttons(
     *,
     close_keyboard: Callable[..., Any],
     composing: Callable[[], Any],
+    dismiss_composer_keyboard: Callable[[], None],
+    composer_focused: bool,
     in_control: bool,
     keyboard_closing: bool,
     mobile_mode: str,
@@ -93,9 +103,49 @@ def _toggle_buttons(
         icon_size=16,
         padding=0,
         tooltip=None if tier == "compact" else "Compose message",
-        on_click=click(lambda: close_keyboard(composing)),
+        on_click=click(
+            dismiss_composer_keyboard
+            if mobile_mode == "compose" and composer_focused
+            else lambda: close_keyboard(composing)
+        ),
     )
     return keyboard_button, compose_button
+
+
+def _typing_slot(
+    *,
+    visible: bool,
+    agent_tabs: tuple[tuple[str, str, str], ...],
+    agent_status: str,
+    agent_title: str,
+    on_agent_tab: Callable[[str], Any] | None,
+    selected_agent: str,
+    tokens: dict[str, str],
+    dot_blink: bool,
+    typing_field: Any,
+) -> ft.Container:
+    return ft.Container(
+        key="agent-typing-slot",
+        expand=True,
+        height=36,
+        content=ft.Column(
+            tight=True,
+            horizontal_alignment=ft.CrossAxisAlignment.STRETCH,
+            controls=[
+                AgentTabRow(
+                    visible=visible,
+                    agent_tabs=agent_tabs,
+                    agent_status=agent_status,
+                    agent_title=agent_title,
+                    on_agent_tab=on_agent_tab,
+                    selected_agent=selected_agent,
+                    tokens=tokens,
+                    blink=dot_blink,
+                ),
+                typing_field,
+            ],
+        ),
+    )
 
 
 def build_phone_dock(
@@ -114,6 +164,9 @@ def build_phone_dock(
     close_keyboard: Callable[..., Any],
     comp_size: tuple[float, float],
     composer_focusable: bool,
+    composer_closing: bool,
+    composer_focused: bool,
+    dismiss_composer_keyboard: Callable[[], None],
     composing: Callable[[], Any],
     dark: bool,
     dot_blink: bool = False,
@@ -173,6 +226,8 @@ def build_phone_dock(
     keyboard_button, compose_button = _toggle_buttons(
         close_keyboard=close_keyboard,
         composing=composing,
+        dismiss_composer_keyboard=dismiss_composer_keyboard,
+        composer_focused=composer_focused,
         in_control=in_control,
         keyboard_closing=keyboard_closing,
         mobile_mode=mobile_mode,
@@ -181,9 +236,9 @@ def build_phone_dock(
         tokens=tokens,
     )
     bottom.append(
-        MobileKeyBar(  # type: ignore[call-arg]
+        _KeyBar(
             key="agent-mobile-keybar",
-            on_item=on_mobile_item or (lambda item, hold: None),
+            on_item=on_mobile_item or _ignore_item,
             modifier_states=modifier_states or {},
             enabled=keys_enabled and in_control and not terminal.selection.open,
             on_paste=on_paste if in_control else None,
@@ -221,27 +276,16 @@ def build_phone_dock(
         spacing=4,
         visible=True,
         controls=[
-            ft.Container(
-                key="agent-typing-slot",
-                expand=True,
-                height=36,
-                content=ft.Column(
-                    tight=True,
-                    horizontal_alignment=ft.CrossAxisAlignment.STRETCH,
-                    controls=[
-                        AgentTabRow(
-                            visible=mobile_mode != "direct" or not in_control,
-                            agent_tabs=agent_tabs,
-                            agent_status=agent_status,
-                            agent_title=agent_title,
-                            on_agent_tab=on_agent_tab,
-                            selected_agent=selected_agent,
-                            tokens=tokens,
-                            blink=dot_blink,
-                        ),
-                        typing_field,
-                    ],
-                ),
+            _typing_slot(
+                visible=mobile_mode != "direct" or not in_control,
+                agent_tabs=agent_tabs,
+                agent_status=agent_status,
+                agent_title=agent_title,
+                on_agent_tab=on_agent_tab,
+                selected_agent=selected_agent,
+                tokens=tokens,
+                dot_blink=dot_blink,
+                typing_field=typing_field,
             ),
             ft.Semantics(label="Compose message", button=True, content=compose_button),
             attach_button(
@@ -286,11 +330,16 @@ def build_phone_dock(
         dark=dark,
         blocked=agent_status.lower() == "blocked",
         visible=compose,
-        focusable=compose and composer_focusable and not terminal.selection.open,
+        focusable=compose
+        and composer_focusable
+        and not terminal.selection.open
+        and not composer_closing,
         compact=tier == "compact",
         chips=picture_chips(pictures, on_remove_picture) if pictures else None,
         lines=phone_lines if split else None,
         on_focus_change=on_composer_focus if slot_mode else None,
+        keyboard=("hide" if composer_focused else "show") if slot_mode else "",
+        on_hide_keyboard=dismiss_composer_keyboard,
     )
     phone_dock_content = ft.Column(
         tight=True, spacing=0, controls=[composer, paste_notice, typing_row]

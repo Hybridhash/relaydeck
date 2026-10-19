@@ -21,7 +21,7 @@ Subcommands (all take ``--platform android|ios``):
              if server/dev/devtools code, tests, ``.env`` files or keys are in
              it; write ``payload-manifest.json`` (sizes, sha256).
 
-Decisions (see ``patches/native-runtime-pins/README.md``):
+Decisions (see ``patches/README.md``):
 
 * The stage lives outside the repository and outside ``~/Desktop``: the
   antivirus "Safe Files" protection blocks build tools writing there.

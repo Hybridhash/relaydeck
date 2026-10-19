@@ -31,7 +31,7 @@ herdr.ALLOWED_METHODS and present in herdr-0.9.1-schema.json; params
 match the frozen $defs):
   agent.prompt -> agent.prompt(target=agent_id, text)
       This is the `prompt_text` seam, connector side.
-  agent.start  -> tab.create(workspace_id) then
+  agent.start  -> tab.create(workspace_id, label=name) then
                   agent.start(name, kind, pane_id=<root_pane>, args=argv).
       agent.start REQUIRES pane_id upstream, which only exists after a
       tab (Schema: AgentStartParams.required=[name,kind,pane_id];
@@ -39,6 +39,8 @@ match the frozen $defs):
       journaled via note_progress between the steps so reconcile reuses
       them instead of duplicating creation.
   shell.create -> tab.create(workspace_id, label?).
+  agent.rename -> tab.rename(tab_id, label=display name) then, when the label has a usable
+      slug, agent.rename(target=agent_id, name=slug).
   session.close -> pane.close(pane_id=terminal_id). Upstream has no
       agent.close (verified against live_methods.txt); closing the pane
       ends whatever it hosts, matching attach.py's explicit-close rule.
@@ -71,6 +73,7 @@ from typing import Any, Protocol
 
 from relaydeck.connector.herdr import HerdrError, HerdrProtocolError
 from relaydeck.contracts.canonical import canonical_json
+from relaydeck.contracts.launch import agent_slug, display_name_clean
 from relaydeck.journal import CommandJournal, JournalConflict, digest_for
 
 DISPATCH_KIND = "command.dispatch"
@@ -78,7 +81,7 @@ ACK_KIND = "command.ack"
 RESULT_KIND = "command.result"
 OUTPUT_KIND = "terminal.output"
 
-GATEWAY_KINDS = ("agent.prompt", "agent.start", "shell.create", "session.close")
+GATEWAY_KINDS = ("agent.prompt", "agent.start", "agent.rename", "shell.create", "session.close")
 RESULT_STATUSES = ("succeeded", "failed", "rejected")
 AGENT_PROMPT_BUDGET_S = 15.0
 
@@ -87,6 +90,8 @@ class DispatchAdapter(Protocol):
     """HerdrAdapter surface used by dispatch (scripted fakes satisfy it)."""
 
     async def agent_prompt(self, target: str, text: str) -> dict[str, Any]: ...
+    async def agent_list(self) -> list[dict[str, Any]]: ...
+    async def agent_rename(self, target: str, name: str | None) -> dict[str, Any]: ...
     async def tab_create(self, workspace_id: str, *, label: str | None = ...) -> dict[str, Any]: ...
     async def workspace_create(
         self, *, cwd: str | None = ..., label: str | None = ...
@@ -165,7 +170,8 @@ class ConnectorDispatch:
         if type(generation) is not int or generation < 0:
             raise ValueError("invalid revision assertion")
         try:
-            self._journal.submit(
+            await self._journal.run(
+                self._journal.submit,
                 command_id=command_id,
                 principal=_narrow(message.get("principal")),
                 host_id=self._host_id,
@@ -186,25 +192,31 @@ class ConnectorDispatch:
                 "result_digest": "",
                 "error_code": "command_conflict",
             }
-        current = self._journal.record(command_id)
+        current = await self._journal.run(self._journal.record, command_id)
         assert current is not None
         if current["status"] != "accepted":
             # Redelivered dispatch for a settled intent: recorded outcome,
             # zero new Herdr calls (never dispatches twice).
             return self._result_doc(current)
         if kind not in GATEWAY_KINDS:
-            self._journal.mark_result(
-                command_id, "rejected", error_code="unsupported_kind", now=now
+            await self._journal.run(
+                self._journal.mark_result,
+                command_id,
+                "rejected",
+                error_code="unsupported_kind",
+                now=now,
             )
-            current = self._journal.record(command_id)
+            current = await self._journal.run(self._journal.record, command_id)
             assert current is not None
             return self._result_doc(current)
         # Write-ahead: dispatched BEFORE the first Herdr byte, so a crash
         # here reconciles to unknown, never to a blind retry. A refused
         # marker (redelivery race already dispatched it, or TTL lapsed
         # mid-dispatch) returns the recorded outcome: never execute twice.
-        if not self._journal.mark_dispatched(command_id, now=now):
-            current = self._journal.record(command_id)
+        if not await self._journal.run(
+            lambda: self._journal.mark_dispatched(command_id, now=self._now())
+        ):
+            current = await self._journal.run(self._journal.record, command_id)
             assert current is not None
             return self._result_doc(current)
         try:
@@ -212,13 +224,14 @@ class ConnectorDispatch:
                 raise HerdrError("stale_epoch", "host changed before command dispatch")
             outcome = await self._execute(command_id, kind, target, payload)
         except HerdrProtocolError as exc:
-            self._journal.mark_unknown(command_id, now=self._now())
+            await self._journal.run(self._journal.mark_unknown, command_id, now=self._now())
             return self._unknown_doc(command_id, exc.code)
         except HerdrError as exc:
-            pending = self._journal.record(command_id)
+            pending = await self._journal.run(self._journal.record, command_id)
             partial = pending.get("progress", {}) if pending is not None else {}
             result = {"type": "partial_creation", **partial} if partial else None
-            self._journal.mark_result(
+            await self._journal.run(
+                self._journal.mark_result,
                 command_id,
                 "failed",
                 error_code=exc.code,
@@ -226,17 +239,22 @@ class ConnectorDispatch:
                 result=result,
                 result_digest=result_digest_for(result) if result else "",
             )
-            current = self._journal.record(command_id)
+            current = await self._journal.run(self._journal.record, command_id)
             assert current is not None
             return self._result_doc(current)
         except (TimeoutError, OSError) as exc:
-            self._journal.mark_unknown(command_id, now=self._now())
+            await self._journal.run(self._journal.mark_unknown, command_id, now=self._now())
             return self._unknown_doc(command_id, type(exc).__name__)
         digest = result_digest_for(outcome)
-        self._journal.mark_result(
-            command_id, "succeeded", result_digest=digest, result=outcome, now=self._now()
+        await self._journal.run(
+            self._journal.mark_result,
+            command_id,
+            "succeeded",
+            result_digest=digest,
+            result=outcome,
+            now=self._now(),
         )
-        current = self._journal.record(command_id)
+        current = await self._journal.run(self._journal.record, command_id)
         assert current is not None
         return self._result_doc(current)
 
@@ -248,7 +266,7 @@ class ConnectorDispatch:
         payload: dict[str, Any],
     ) -> dict[str, Any]:
         if kind == "agent.prompt":
-            current = self._journal.record(command_id)
+            current = await self._journal.run(self._journal.record, command_id)
             expected = current["generation"] if current else 0
             if expected:
                 probe = getattr(self._adapter, "agent_revision", None)
@@ -260,6 +278,46 @@ class ConnectorDispatch:
                 _narrow(target.get("agent_id")), str(payload.get("text", ""))
             )
             return {"type": str(out.get("type", "agent_prompted"))}
+        if kind == "agent.rename":
+            agent_id = _narrow(target.get("agent_id"))
+            self.herdr_calls += 1
+            agents = await self._adapter.agent_list()
+            if not all(isinstance(row, dict) for row in agents):
+                raise HerdrProtocolError("bad_agent_result", "invalid agent list")
+            matches = [row for row in agents if row.get("terminal_id") == agent_id]
+            if not matches:
+                raise HerdrError("agent_not_found", "agent is no longer listed")
+            if len(matches) != 1:
+                raise HerdrProtocolError("bad_agent_result", "ambiguous agent identity")
+            agent = matches[0]
+            rename_tab = agent.get("tab_id")
+            if not isinstance(rename_tab, str) or not 1 <= len(rename_tab) <= 128:
+                raise HerdrProtocolError("bad_agent_result", "agent tab unavailable")
+            tab_label = display_name_clean(str(payload["name"]))
+            self.herdr_calls += 1
+            await self._adapter.tab_rename(rename_tab, tab_label)
+            await self._journal.run(
+                self._journal.note_progress, command_id, {"tab_id": rename_tab}, now=self._now()
+            )
+            slug = agent_slug(tab_label)
+            if slug:  # a label with no usable letters renames the tab only
+                self.herdr_calls += 1
+                try:
+                    await self._adapter.agent_rename(agent_id, slug)
+                except HerdrError as exc:
+                    if exc.code != "agent_name_taken" or isinstance(exc, HerdrProtocolError):
+                        raise
+                    # Another agent already owns the slug. The tab carries the label, so clear
+                    # this agent's name and let the display fall back to the tab label.
+                    await self._journal.run(
+                        self._journal.note_progress,
+                        command_id,
+                        {"tab_id": rename_tab, "agent_id": agent_id},
+                        now=self._now(),
+                    )
+                    self.herdr_calls += 1
+                    await self._adapter.agent_rename(agent_id, None)
+            return {"type": "ok"}
         created_workspace = ""
         new_workspace = target == {"workspace_mode": "new"}
         if new_workspace and kind not in ("shell.create", "agent.start"):
@@ -289,7 +347,8 @@ class ConnectorDispatch:
                 raise HerdrProtocolError(
                     "bad_workspace_result", "workspace creation outcome unavailable"
                 )
-            self._journal.note_progress(
+            await self._journal.run(
+                self._journal.note_progress,
                 command_id,
                 {"workspace_id": created_workspace, "tab_id": tab_id, "pane_id": pane_id},
                 now=self._now(),
@@ -318,14 +377,20 @@ class ConnectorDispatch:
         if kind == "agent.start":
             if not new_workspace:
                 self.herdr_calls += 1
-                created = await self._adapter.tab_create(_narrow(target.get("workspace_id")))
+                created = await self._adapter.tab_create(
+                    _narrow(target.get("workspace_id")), label=str(payload.get("name", ""))
+                )
+            else:
+                self.herdr_calls += 1
+                await self._adapter.tab_rename(tab_id, str(payload.get("name", "")))
             tab = created.get("tab", {})
             pane = created.get("root_pane", {})
             tab_id = _narrow(tab.get("tab_id") if isinstance(tab, dict) else "")
             pane_id = _narrow(pane.get("pane_id") if isinstance(pane, dict) else "")
             # Preserve partial identities for explicit reconciliation;
             # a crash settles unknown and never repeats creation automatically.
-            self._journal.note_progress(
+            await self._journal.run(
+                self._journal.note_progress,
                 command_id,
                 {
                     "workspace_id": created_workspace or _narrow(target.get("workspace_id")),
@@ -390,7 +455,7 @@ class ConnectorDispatch:
                 if exc.code != "agent_pane_busy":
                     raise
                 remaining = deadline - monotonic()
-                current = self._journal.record(command_id)
+                current = await self._journal.run(self._journal.record, command_id)
                 expires = current["expires_ms"] if current is not None else 0
                 if expires:
                     remaining = min(remaining, (expires - self._now()) / 1000)
@@ -401,7 +466,7 @@ class ConnectorDispatch:
                 # replacement. A cancelled intent is never resumed on redelivery.
                 if monotonic() >= deadline or (expires and self._now() >= expires):
                     raise
-                current = self._journal.record(command_id)
+                current = await self._journal.run(self._journal.record, command_id)
                 if current is None or current["status"] != "dispatched":
                     raise HerdrProtocolError(
                         "command_conflict", "creation intent changed"

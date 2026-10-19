@@ -147,6 +147,8 @@ def build_open_terminal(
                     await retained.discard(entry)
                     return
                 session = entry.session
+                if kind != "agent":  # the agent session logs its own open
+                    session.log_reopen("open")
                 expect = getattr(session, "expect_control", None)
                 if kind == "agent" and prefs_ref.current.auto_takeover and callable(expect):
                     expect()

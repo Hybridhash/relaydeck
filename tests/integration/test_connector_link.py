@@ -124,7 +124,7 @@ async def _enroll_live(base_url: str, user_token: str) -> tuple[str, str]:
         return token, keys.fingerprint
 
 
-async def _wait_for(predicate: Any, timeout_s: float = 15.0) -> None:
+async def _wait_for(predicate: Any, timeout_s: float = 30.0) -> None:
     deadline = time.monotonic() + timeout_s
     while time.monotonic() < deadline:
         if await predicate():

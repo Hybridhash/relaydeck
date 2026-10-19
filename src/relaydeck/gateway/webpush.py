@@ -263,12 +263,6 @@ def load_or_create_topic_key(state_dir: Path) -> bytes:
     return _read_topic(path)
 
 
-def rotate_topic_key(state_dir: Path) -> bytes:
-    path = webpush_dir(state_dir) / "topic.key"
-    _write_private(path, b64u(secrets.token_bytes(32)).encode("ascii"), replace=True)
-    return _read_topic(path)
-
-
 # -- RFC 8291 aes128gcm ----------------------------------------------------------------------------
 
 

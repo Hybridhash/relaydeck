@@ -69,7 +69,7 @@ SECURE_ONLY_KEYS = frozenset(
 
 #: Documented force-stop limits (platform behavior). Source: Android background-start restrictions
 #: https://developer.android.com/develop/background-work/services/fgs/restrictions-bg-start
-#: Device proof is blocked (see scripts/check_device_scenarios.py --suite lifecycle).
+#: Device proof is blocked: it needs real hardware.
 FORCE_STOP_LIMITS = (
     "After a user force-stop the app is in the stopped state and NOTHING "
     "works until the user manually relaunches it: no Dart/Python execution, "

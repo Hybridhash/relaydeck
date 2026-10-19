@@ -157,19 +157,6 @@ def MatchedRow(
     )
 
 
-def section_header(
-    title: str,
-    *,
-    tokens: dict[str, str],
-    key: str | None = None,
-    count: str | None = None,
-) -> ft.Row:
-    controls: list[ft.Control] = [ui(title, color=tokens["text"], size=18, weight=800, key=key)]
-    if count is not None:
-        controls.append(badge(count, tokens=tokens, tone="neutral"))
-    return ft.Row(controls=controls, spacing=8, tight=True)
-
-
 def monogram(
     name: str, *, tokens: dict[str, str], dashed: bool = False, size: float = TILE
 ) -> ft.Container:

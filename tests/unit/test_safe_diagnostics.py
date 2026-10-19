@@ -29,6 +29,49 @@ def _flatten(caplog: pytest.LogCaptureFixture) -> str:
     return "\n".join(parts)
 
 
+@pytest.mark.parametrize("reason", ["offset_evicted", "probe_timeout", MARKER])
+def test_ui_resume_incomplete_logs_fixed_reason_only(
+    reason: str, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from relaydeck_terminal.terminal import ResumeOutcome
+
+    from relaydeck.client.features.terminal.ui_resume import TerminalUIResumes
+    from tests.support.scripted_sessions import make_scripted_sessions
+    from tests.support.terminal.resume import _open_term
+
+    async def scenario() -> None:
+        caplog.set_level("INFO", logger="relaydeck.lease_lifecycle")
+        _app, term, _conn, _channel = await _open_term()
+        scripted = make_scripted_sessions()
+        session = scripted.factory.make_agent(
+            host_id="mac", host_epoch="h1", agent_id="a", target="a"
+        )
+        session.open()
+        await session.confirm_takeover()
+        session.bind_view(term, write=lambda *_: True)
+
+        async def incomplete(**kwargs: Any) -> ResumeOutcome:
+            return ResumeOutcome("incomplete", reason)
+
+        monkeypatch.setattr(term, "rebind_resumed", incomplete)
+        resumes = TerminalUIResumes()
+        try:
+            task = resumes.start(
+                session, transport=object(), current=lambda: True, closed=asyncio.Event()
+            )
+            assert task is not None
+            outcome = await task
+            assert outcome is not None and outcome.status == "incomplete"
+            expected = "other" if reason == MARKER else reason
+            assert f"ui_resume_incomplete why={expected}" in _flatten(caplog)
+            assert MARKER not in _flatten(caplog)
+        finally:
+            await resumes.close()
+            await session.dispose()
+
+    asyncio.run(scenario())
+
+
 def test_failure_category_is_allowlisted_builtin_or_other() -> None:
     assert failure_category(_Leaky()) == "ValueError"
     assert failure_category(ConnectionResetError(MARKER)) == "ConnectionError"

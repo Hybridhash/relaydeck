@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import faulthandler
 import json
 import signal
 import sys
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -16,6 +19,18 @@ from relaydeck.companion.runtime import CompanionRuntime
 from relaydeck.companion.setup import preflight
 from relaydeck.usage.hook_cli import add_usage_parser, run_configured_usage
 from relaydeck.version import __version__
+
+
+@contextmanager
+def thread_dumps() -> Iterator[None]:
+    """Operator-only stack dump to the existing foreground log; never includes locals."""
+    previous = signal.getsignal(signal.SIGUSR1)
+    faulthandler.register(signal.SIGUSR1, file=sys.stderr, all_threads=True)
+    try:
+        yield
+    finally:
+        faulthandler.unregister(signal.SIGUSR1)
+        signal.signal(signal.SIGUSR1, previous)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -173,7 +188,11 @@ def main(argv: list[str] | None = None) -> int:
                 raise ValueError("stop timeout must be greater than zero and at most 60 seconds")
             stopped = asyncio.run(request_stop(config.state_dir, timeout=args.timeout))
             print(
-                "companion stopped"
+                (
+                    "stop acknowledged; companion stopping"
+                    if status(config.state_dir)["state"] == "stopping"
+                    else "companion stopped"
+                )
                 if stopped
                 else "stop not acknowledged; inspect the foreground process; no PID was signalled"
             )
@@ -232,7 +251,8 @@ def main(argv: list[str] | None = None) -> int:
         if config.web_ui:
             _select_web_bundle()
         print(f"Foreground companion: {config.advertised_origin}; backend {config.local_endpoint}")
-        return asyncio.run(run())
+        with thread_dumps():
+            return asyncio.run(run())
     except (ValueError, OSError, RuntimeError, AlreadyRunning) as exc:
         print(f"companion: {exc}")
         return 2

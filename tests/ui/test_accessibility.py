@@ -44,6 +44,7 @@ from relaydeck.client.features.composer.components import (
 from relaydeck.client.features.composer.domain import (
     INPUT_MODE_COMPOSER,
     SUBMISSION_IDLE,
+    SUBMISSION_PROGRESS,
 )
 from relaydeck.client.features.create.components import NewTerminalSheet, StartAgentSheet
 from relaydeck.client.features.inventory.components import AppShell
@@ -608,7 +609,6 @@ def test_every_action_has_an_accessible_name() -> None:
 
 def test_focus_orders_match_declared_sequences() -> None:
     async def scenario() -> None:
-        from relaydeck.client.components.session_dock import SessionDock
         from relaydeck.client.features.create.shell_chooser import ShellChooser
 
         new_agent = await render_component(
@@ -628,15 +628,6 @@ def test_focus_orders_match_declared_sequences() -> None:
         filtered = await _render_shell(selected)
         await filtered.set_props_and_fire("console-search", {}, "click")
         cases: list[tuple[str, HostApp]] = [
-            (
-                "session-dock",
-                await render_component(
-                    SessionDock,
-                    value="agent:home-mac:term-1",
-                    options=(("agent:home-mac:term-1", "Synthetic agent"),),
-                    on_select=_noop,
-                ),
-            ),
             (
                 "shell-chooser",
                 await render_component(
@@ -937,6 +928,38 @@ def test_keyboard_only_approval_analogues() -> None:
         await shell.set_props_and_fire("shell-takeover", {}, "click")
         await shell.set_props_and_fire("shell-back", {}, "click")
         assert [name for name, _ in shell_calls] == ["takeover", "back"]
+
+    run(scenario())
+
+
+def test_phone_composer_send_keeps_focus_and_announces_status() -> None:
+    async def scenario() -> None:
+        calls: list[tuple[str, tuple[Any, ...]]] = []
+        app = await _render_agent_detail(
+            phone=True,
+            touch=True,
+            submission=SUBMISSION_PROGRESS,
+            on_send=_recorder(calls, "send"),
+            on_composer_focus=_recorder(calls, "focus"),
+            on_typing_exit=_recorder(calls, "exit"),
+        )
+        await app.set_props_and_fire("agent-compose-toggle", {}, "click")
+        await app.set_props_and_fire("composer-draft", {}, "focus")
+        field = app.find("composer-draft")
+        await app.session.dispatch_event(field.suffix_icon.controls[0]._i, "click", "")
+        await app.settle()
+        after_send = app.find("composer-draft")
+        assert after_send._i == field._i
+        assert after_send.can_request_focus and not after_send.disabled
+        assert after_send.on_submit is None
+        assert calls == [("focus", (True,)), ("send", ())]
+        assert any(
+            isinstance(control, ft.Semantics)
+            and control.live_region
+            and getattr(control.content, "key", None) == "composer-notice"
+            and control.content.value == "Agent is working on your message."
+            for control in iter_controls([app.page.views[0].controls])
+        )
 
     run(scenario())
 

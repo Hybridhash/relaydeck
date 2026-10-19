@@ -77,23 +77,31 @@ class PairingStore:
     def __init__(self, path: Path) -> None:
         self.path = path.absolute()
         self.boot: str | None = None
-        self._paths()
+        with self._locked():
+            pass
 
-    def _paths(self) -> None:
+    def _paths(self, *, check_state: bool = True) -> None:
         # Reject ancestor symlinks too, before mkdir/open can follow them.
         for parent in reversed(self.path.parents):
             if parent.is_symlink():
                 raise ValueError("Pairing state must not traverse symlinks")
         private_dir(self.path.parent)
-        for path in (self.path, self.path.with_suffix(".lock")):
+        paths = (
+            (self.path, self.path.with_suffix(".lock"))
+            if check_state
+            else (self.path.with_suffix(".lock"),)
+        )
+        for path in paths:
             if path.exists() or path.is_symlink():
                 check_private(path)
                 if path.lstat().st_nlink != 1:
                     raise ValueError("Pairing state must not have multiple links")
 
     @contextmanager
-    def _transaction(self, *, reset: bool = False) -> Iterator[dict[str, Any]]:
-        self._paths()
+    def _locked(self) -> Iterator[None]:
+        # State metadata can describe the unlinked old inode during os.replace.
+        # Validate it only under the same flock as the writer, including at init.
+        self._paths(check_state=False)
         fd = os.open(self.path.with_suffix(".lock"), os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
         try:
             info = os.fstat(fd)
@@ -106,6 +114,13 @@ class PairingStore:
                 raise ValueError("Pairing lock must be owner-private")
             fcntl.flock(fd, fcntl.LOCK_EX)
             self._paths()
+            yield
+        finally:
+            os.close(fd)
+
+    @contextmanager
+    def _transaction(self, *, reset: bool = False) -> Iterator[dict[str, Any]]:
+        with self._locked():
             if reset:
                 data: dict[str, Any] = {}
             else:
@@ -123,8 +138,6 @@ class PairingStore:
                 yield data
             finally:
                 write_json(self.path, data)
-        finally:
-            os.close(fd)
 
     @staticmethod
     def _validate_state(data: Any) -> None:

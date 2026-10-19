@@ -98,3 +98,4 @@ class ShellContext:
     usage_host_id: str = ""
     on_open_usage: Callable[[], Any] | None = None
     foreground: bool = True
+    command_transport: Any = None

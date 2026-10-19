@@ -35,7 +35,7 @@ from relaydeck.client.features.shell.ops import (
     owner_display_from_details,
 )
 from relaydeck.client.features.sync.transport import TerminalSocket, TransportError
-from relaydeck.client.features.terminal.controller import TerminalController
+from relaydeck.client.features.terminal.controller import WATCH_RETRY_DELAYS_S, TerminalController
 from relaydeck.client.features.terminal.diagnostics import diagnostics_logger
 from relaydeck.client.features.terminal.geometry import DEFAULT_GEOMETRY, reported_geometry
 from relaydeck.client.features.terminal.input_modes import (
@@ -65,7 +65,6 @@ AGENT_EXITED = "exited"
 AGENT_DISCONNECT_MESSAGE = "Disconnected. The agent keeps running on the Host."
 AGENT_PAUSE_MESSAGE = "Paused. The agent keeps running on the Host."
 AGENT_EXIT_MESSAGE = "Agent terminal exited."
-WATCH_RETRY_DELAYS_S = (1.0, 2.0, 4.0, 8.0, 16.0)
 WATCH_RECONNECT_MESSAGE = "Reconnecting…"
 
 TAKEOVER_UNDISCLOSED_MESSAGE = (
@@ -166,6 +165,7 @@ class AgentSession(TerminalSessionBase):
             initial_status=initial_status,
             observe_command=observe_command,
             expected_revision=expected_revision,
+            on_change=self._notify,
         )
         self._target = ""
         self._composer_epoch = 0
@@ -217,8 +217,7 @@ class AgentSession(TerminalSessionBase):
 
     @property
     def last_pause_persist(self) -> PausePersistReport | None:
-        """The last pause-time draft persist report (None when no draft
-        store is wired or `pause()` has not run since construction)."""
+        """The last pause-time draft persist report (None before any `pause()`)."""
         return self._last_pause_persist
 
     @property
@@ -278,20 +277,16 @@ class AgentSession(TerminalSessionBase):
         self._bump_composer_epoch()
 
     def _detach_store(self) -> None:
-        self._store.reconnect()
-        self._store.unbind_writer()
+        self._store.reconnect("detach")
+        self._store.unbind_writer("detach")
 
     def _on_attach_lost(self) -> None:
         self._bump_composer_epoch()
         self._detach_store()
 
     def _on_auth_revoked(self) -> None:
-        """Identity/host-authorization loss fences ALL composer writes: the
-        epoch bump kills saved closures and the auth flag fences newly
-        obtained ones (both route through `on_send`/`on_confirm_blocked`,
-        which check it too). The draft is preserved and stays editable; only
-        PTY ownership loss leaves the Composer valid. Re-armed by an
-        explicit `confirm_takeover` only."""
+        """Fence saved and future composer sends after authorization loss.
+        Keep drafts editable; only explicit takeover re-arms the writer."""
         self._auth_revoked = True
         terminal_transition(self).invalidate()
         self._bump_composer_epoch()
@@ -363,6 +358,7 @@ class AgentSession(TerminalSessionBase):
             or self._auth_revoked
             or controller.reattach_needed
             or controller.pending_resume is not None
+            or controller.live_edge_pending
             or (isinstance(doc, dict) and doc.get("kind") == "bye")
             or (failure is not None and failure.code in ("unauthenticated", "forbidden"))
         ):
@@ -552,13 +548,6 @@ class AgentSession(TerminalSessionBase):
         """IME completion gate (mirrors the `on_send` choke point)."""
         return self._sessions.submit_allowed()
 
-    def sync_keyboard_from_store(self) -> bool:
-        """Drive the tools-keys latch explicitly (also driven after every
-        send and every blocked confirm)."""
-        latched = self._sessions.modes.sync_from_store()
-        self._notify()
-        return latched
-
     # -- disclosure-gated attach -------------------------------------------
     def request_takeover(self) -> str:
         """Arm the ownership disclosure. Idempotent; performs no
@@ -571,13 +560,25 @@ class AgentSession(TerminalSessionBase):
 
     async def auto_take_control(self) -> str:
         """Take unheld control automatically; conflicts and unknown ownership stay explicit."""
+        if self._controller is not None and self._controller.live_edge_pending:
+            return await self.drive_recovery()
         return await terminal_transition(self).automatic(self)
 
     async def _auto_take_control(self, token: object) -> str:
+        self.log_reopen("auto_take")
         if self._disposed or self._paused or not self._foreground or self._phase == AGENT_EXITED:
             return self._phase
+        if self._controller is not None and self._controller.live_edge_pending:
+            return await self.drive_recovery()
+        if outcome := self.defer_gap_recovery(self.auto_take_control):
+            return outcome
         lease = self._lease
-        if lease is not None and lease.mode == "control" and self._controller is not None:
+        if (
+            lease is not None
+            and lease.mode == "control"
+            and self._controller is not None
+            and not self.gap_recovery.detail
+        ):
             return self._phase
         target = self._pending_target or self._target
         if not target:
@@ -627,10 +628,9 @@ class AgentSession(TerminalSessionBase):
     def open(self, *, cols: int = 80, rows: int = 24) -> str:
         """Agent open arms the takeover disclosure and performs NO attach:
         agent attach always takes upstream ownership, so even the first
-        attach needs the same explicit confirm as any takeover. The
-        target was bound at construction (the store prompts it); a
-        re-open keeps the bound target (confirm consumed the pending
-        one), mirroring `reconnect`."""
+        attach needs the same explicit confirm as any takeover. The target was bound at
+        construction; a re-open keeps it (confirm consumed the pending one), like `reconnect`."""
+        self.log_reopen("open")
         self._pending_geometry = (cols, rows)
         self._pending_target = self._pending_target or self._target
         self._target = self._pending_target
@@ -674,6 +674,8 @@ class AgentSession(TerminalSessionBase):
 
     async def confirm_takeover(self) -> str:
         """Confirm disclosure once; concurrent callers join the same flight."""
+        self.reset_gap_recovery()
+        self.log_reopen("take_over")
         return await terminal_transition(self).confirm(self)
 
     async def _confirm_takeover(
@@ -769,14 +771,12 @@ class AgentSession(TerminalSessionBase):
         # Controller replacement settles in-flight sends as unknown (no
         # replay) and drops any pending blocked review bound to the dead
         # writer; rebinding the live writer afterwards is done below.
-        self._store.reconnect()
+        self._store.reconnect("takeover")
         controller = self._spawn_controller(lease)
         controller.fence_ui_input(True)
         self._controller = controller
         self._term_state = TerminalViewState(lease_mode="control")
-        # A replacement PTY starts unnegotiated: forget any 2004 state
-        # from the previous stream; the engine's post-reset mode report
-        # re-establishes the truth.
+        # A replacement PTY must re-establish bracketed-paste mode from its own report.
         self._bracketed = False
         # Keep incremental redraws on the existing screen only when its native viewer
         # still owns that screen; replaced or unverified viewers need a fresh baseline.
@@ -958,26 +958,18 @@ class AgentSession(TerminalSessionBase):
         super()._mark_viewer_reopened(notice)
 
     async def recover_after_reload(self) -> str:
-        """Recover a replacement viewer under the verified identity and takeover preference."""
-        if self._disposed or self._paused or self._phase != AGENT_DISCONNECTED:
-            return self._phase
-        if not (self._target or self._pending_target):
-            return self._phase
-        await self.reconnect()
-        if self.auto_take_allowed and self._phase == AGENT_DISCONNECTED:
-            return await self.auto_take_control()
-        return self._phase
+        return await self._recover_after_reload()
 
     async def _reconnect_flow(self) -> str:
-        """Reconnect an agent detail: agent attach always takes ownership,
-        so reconnect re-arms the disclosure and performs NO attach itself
-        (`confirm_takeover` completes it). The base already refused when
-        exited and cancelled any watch recovery."""
+        """Re-arm ownership disclosure without attaching; confirm_takeover completes it.
+        The base already refused when exited and cancelled any watch recovery."""
         terminal_transition(self).invalidate()
         if not (self._target or self._pending_target):
             raise RuntimeError("reconnect with no target")
         await self.stop_lease_renewal()
-        self._on_attach_lost()
+        self._bump_composer_epoch()
+        self._store.reconnect("reconnect_flow")
+        self._store.unbind_writer("reconnect_flow")
         await self._close_controller()
         self._notice = ""
         self._pending_target = self._target or self._pending_target

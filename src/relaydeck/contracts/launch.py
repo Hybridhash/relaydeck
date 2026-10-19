@@ -7,6 +7,9 @@ import unicodedata
 from collections.abc import Collection
 from typing import Any, TypeGuard
 
+from relaydeck.contracts.graphemes import grapheme_count
+from relaydeck.contracts.graphemes import graphemes as graphemes  # re-exported
+
 RESULT_SCHEMA: dict[str, Any] = {
     "type": "object",
     "required": ["type"],
@@ -23,6 +26,58 @@ RESULT_SCHEMA: dict[str, Any] = {
 }
 
 AGENT_NAME = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
+AGENT_NAME_HELP = "lowercase letters, digits, - or _; start with a letter; up to 32"
+
+
+def agent_name_error(name: str) -> str:
+    return "" if AGENT_NAME.fullmatch(name) else f"Use {AGENT_NAME_HELP}."
+
+
+DISPLAY_NAME_MAX = 32
+DISPLAY_NAME_HELP = "up to 32 characters"
+_ZWJ = "\u200d"
+
+
+def display_name_clean(text: str) -> str:
+    """Trim and collapse runs of whitespace to one space."""
+    return " ".join(text.split())
+
+
+def _is_control(char: str) -> bool:
+    category = unicodedata.category(char)
+    if category == "Cf":
+        return char != _ZWJ and not 0xE0020 <= ord(char) <= 0xE007F
+    return category in ("Cc", "Cs", "Zl", "Zp")
+
+
+def display_name_error(name: str) -> str:
+    """Free-form display name rule: 1-32 grapheme clusters, no control characters."""
+    if any(_is_control(char) for char in name):
+        return "Name can't contain control characters"
+    cleaned = display_name_clean(name)
+    if not cleaned:
+        return "Name can't be empty"
+    if grapheme_count(cleaned) > DISPLAY_NAME_MAX:
+        return f"Use {DISPLAY_NAME_HELP}"
+    return ""
+
+
+def agent_slug(label: str) -> str:
+    """Herdr agent name made from a display label; empty when nothing usable remains."""
+    folded = "".join(
+        char
+        for char in unicodedata.normalize("NFKD", label)
+        if not unicodedata.category(char).startswith("M")
+    ).lower()
+    mapped = "".join("-" if char in " ./" else char for char in folded)
+    kept = "".join(char for char in mapped if char in AGENT_NAME_CHARS)
+    start = next((i for i, char in enumerate(kept) if "a" <= char <= "z"), None)
+    if start is None:
+        return ""
+    return kept[start : start + 32].rstrip("-_")
+
+
+AGENT_NAME_CHARS = frozenset("abcdefghijklmnopqrstuvwxyz0123456789_-")
 
 
 def has_control(text: str) -> bool:

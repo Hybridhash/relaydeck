@@ -119,8 +119,8 @@ def test_tile_keys_callbacks_status_unread_unchanged() -> None:
         app = await render_component(agent_tile, row, True, seen.append, dark=False)
         tile = app.find("agent-h:tool-a")
         assert tile.selected is True
-        assert tile.trailing.controls[1].value == "Unread"
-        assert tile.trailing.controls[1].visible is True
+        unread = tile.trailing.controls[1]
+        assert unread.value == "Unread" and unread.key == "unread-h:tool-a" and unread.visible
         await app.set_props_and_fire("agent-h:tool-a", {}, "click")
         assert seen == ["h:tool-a"]
 

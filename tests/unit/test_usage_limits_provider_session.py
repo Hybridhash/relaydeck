@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 import time
@@ -77,16 +78,17 @@ def test_early_exit_maps_eof() -> None:
 
 
 def test_hang_times_out_and_kills_group() -> None:
+    marker = f"32.{os.getpid()}"  # Only this process's child matches, not a parallel run's.
     started = time.monotonic()
     with pytest.raises(TimeoutError):
         run_line_session(
-            ("/bin/sleep", "32"),
+            ("/bin/sleep", marker),
             (ExchangeStep(None, lambda line: True),),
             timeout_s=0.2,
         )
     assert time.monotonic() - started < 10
     time.sleep(0.2)
-    found = subprocess.run(["pgrep", "-f", "sleep 32"], capture_output=True, text=True)
+    found = subprocess.run(["pgrep", "-f", f"sleep {marker}"], capture_output=True, text=True)
     assert found.stdout == ""
 
 

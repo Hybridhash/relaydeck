@@ -74,6 +74,7 @@ LIGHT_INK = _CONSOLE["light_ink"]
 LIGHT_SURFACE = _CONSOLE["light_surface"]
 SCROLL_THUMB_BG = _CONSOLE["scroll_thumb_bg"]
 SHELL_DISABLED = _CONSOLE["shell_disabled"]
+TOAST_ACTION = _CONSOLE["toast_action"]
 
 STATUS_BLOCKED = "blocked"
 STATUS_WORKING = "working"

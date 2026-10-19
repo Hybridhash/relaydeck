@@ -6,6 +6,7 @@ eyeballed on web/Android once the Flutter SDK is provisioned. Not part of
 the shipped app. Run from this directory: `flet run --web` (Flutter SDK
 required for extensions).
 """
+
 from __future__ import annotations
 
 import pathlib
@@ -27,6 +28,7 @@ def _event_text(event: Any) -> str:
     control = getattr(event, "control", None)
     value = getattr(control, "value", "") if control is not None else ""
     return value if isinstance(value, str) else ""
+
 
 def _find_fixtures() -> pathlib.Path:
     """Locate tests/fixtures/vt without assuming a repo checkout layout.
@@ -109,9 +111,7 @@ def Viewer() -> Any:
                             options=[
                                 ft.DropdownOption(text=name, key=name)
                                 for name in sorted(
-                                    p.name
-                                    for p in FIXTURES.glob("*.bin")
-                                    if FIXTURES.exists()
+                                    p.name for p in FIXTURES.glob("*.bin") if FIXTURES.exists()
                                 )
                             ],
                             on_select=lambda e: set_fixture(_event_text(e)),

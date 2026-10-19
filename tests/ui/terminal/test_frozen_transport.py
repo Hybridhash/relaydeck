@@ -167,7 +167,7 @@ def test_probe_failure_replaces_only_native_control_and_recovers_authoritative_b
             assert session.lease is original_lease and session.controller is controller
             assert controller._client.resume_offset() == 0 and not controller._client.epoch
             # The reopen names its position: the gateway holds the lease for this reader only.
-            assert scripted.streams.resumes == ["", "epoch=&offset=0"]
+            assert scripted.streams.resumes == ["", "epoch=&offset=0&output_reset=v1"]
             assert len(scripted.ops.attaches) == len(scripted.ops.leases) == 1
             assert fresh._sent_bytes == 0 and fresh._native_instance == 456
             assert term._remount is None and not fresh.transport_verified

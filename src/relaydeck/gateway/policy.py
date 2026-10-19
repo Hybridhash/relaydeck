@@ -13,11 +13,17 @@ from relaydeck.contracts.catalog import AGENT_KIND
 
 # compat: remove in Q4-cleanup after remaining server/test importers migrate.
 from relaydeck.contracts.endpoints import is_trusted_endpoint as is_trusted_endpoint
-from relaydeck.contracts.launch import AGENT_NAME, has_control, valid_new_workspace
+from relaydeck.contracts.launch import (
+    agent_name_error,
+    display_name_error,
+    has_control,
+    valid_new_workspace,
+)
 
 COMMAND_CAPABILITY = {
     "agent.prompt": "agents.prompt",
     "agent.start": "agents.start",
+    "agent.rename": "agents.start",
     "shell.create": "shells.create",
     "session.close": "terminal.control",
 }
@@ -27,6 +33,7 @@ COMMAND_CAPABILITY = {
 TARGET_SHAPES = {
     "agent.prompt": (("agent_id",), ("agent_id",)),
     "agent.start": (("workspace_id",), ("workspace_id",)),
+    "agent.rename": (("agent_id",), ("agent_id",)),
     "shell.create": (("workspace_id",), ("workspace_id",)),
     "session.close": (("terminal_id",), ("terminal_id",)),
 }
@@ -87,6 +94,10 @@ def authorize_command(
             return "forbidden"
         if len(text) > MAX_PROMPT_CHARS:
             return "too_large"
+    elif kind == "agent.rename":
+        name = payload.get("name")
+        if set(payload) != {"name"} or not isinstance(name, str) or display_name_error(name):
+            return "forbidden"
     elif kind == "agent.start":
         required = {"kind", "name"} | ({"new_workspace"} if new_workspace else set())
         if not required <= set(payload) or set(payload) - required - {"argv"}:
@@ -96,7 +107,7 @@ def authorize_command(
         if not isinstance(agent_kind, str) or AGENT_KIND.fullmatch(agent_kind) is None:
             return "forbidden"
         name = payload.get("name", "")
-        if not isinstance(name, str) or AGENT_NAME.fullmatch(name) is None:
+        if not isinstance(name, str) or agent_name_error(name):
             return "forbidden"
         argv = payload.get("argv", [])
         if not isinstance(argv, list) or len(argv) > MAX_ARGV_ITEMS:

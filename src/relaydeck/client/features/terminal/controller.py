@@ -9,7 +9,8 @@ overflow back through `on_viewer_overflow`.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+import time
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field, replace
 from typing import Any
 
@@ -27,6 +28,13 @@ from relaydeck.client.features.terminal.models import (
     apply_reset,
 )
 from relaydeck.client.features.terminal.paste_policy import PasteError
+from relaydeck.client.features.terminal.session.recovery_state import (
+    GAP_STABLE_S,
+    GapRecovery,
+)
+from relaydeck.client.features.terminal.session.recovery_state import (
+    WATCH_RETRY_DELAYS_S as WATCH_RETRY_DELAYS_S,
+)
 from relaydeck.client.features.terminal.stream import (
     ACTION_REATTACH,
     ACTION_RESUME,
@@ -40,7 +48,6 @@ from relaydeck.client.features.terminal.stream import (
     StreamEvent,
     TerminalByteStream,
     decide_recovery,
-    decide_viewer_overflow,
 )
 from relaydeck.contracts.wire.terminal import OutputChunk
 from relaydeck.lease_diagnostics import LeaseTrace
@@ -58,10 +65,17 @@ class TerminalController:
     on_state: Callable[[TerminalViewState], None] = field(default=lambda state: None)
     on_input_failure: Callable[[int, int], None] = field(default=lambda generation, seq: None)
     diagnostics: LeaseTrace | None = field(default=None, kw_only=True)
+    on_history_reset: Callable[[], Awaitable[bool]] | None = field(default=None, kw_only=True)
     emulator: str = EMULATOR_FRESH
+    gap_recovery: GapRecovery = field(default_factory=GapRecovery, kw_only=True)
     state: TerminalViewState = field(init=False)
     pending_resume: ResumeRequest | None = field(init=False, default=None)
     reattach_needed: bool = field(init=False, default=False)
+    live_edge_pending: bool = field(init=False, default=False)
+    _overflow_attempts: int = field(init=False, default=0)
+    _overflow_stable_since: float | None = field(init=False, default=None)
+    _live_edge_opening: bool = field(init=False, default=False)
+    _history_notice: str | None = field(init=False, default=None)
     _writer_paused: bool = field(init=False, default=False)
     _writer_revoked: bool = field(init=False, default=False)
     _ui_input_fenced: bool = field(init=False, default=False)
@@ -82,9 +96,42 @@ class TerminalController:
             on_gap=self._handle_gap,
             on_reset=self._handle_reset,
             on_input_failure=lambda generation, seq: self.on_input_failure(generation, seq),
+            on_baseline=self._handle_baseline,
         )
 
     # -- lifecycle -------------------------------------------------------
+    @property
+    def gap_detail(self) -> str:
+        return self.gap_recovery.detail
+
+    def reset_gap_recovery(self) -> None:
+        self.gap_recovery.reset()
+        self._overflow_attempts = 0
+        self._overflow_stable_since = None
+
+    def cancel_gap_wait(self) -> None:
+        self.gap_recovery.cancel_wait()
+
+    def set_host_online(self, online: bool) -> None:
+        self.gap_recovery.set_host_online(online)
+
+    async def wait_gap_recovery(self, current: Callable[[], bool]) -> bool:
+        identity = (self.lease_id, self.generation)
+
+        def valid() -> bool:
+            return (
+                current()
+                and identity == (self.lease_id, self.generation)
+                and not self._viewer_lost
+                and not self._detached
+                and not self._writer_revoked
+                and not self._writer_paused
+            )
+
+        if not valid():
+            return False
+        return self.mode != "control" or await self.gap_recovery.wait(valid)
+
     async def start(self, ticket: str, epoch: str = "", offset: int = 0) -> None:
         if self._viewer_lost:
             raise TransportError("viewer_reopened", "Explicit reattach required", False)
@@ -92,7 +139,9 @@ class TerminalController:
         # A reopened stream re-establishes liveness from its own first bytes; otherwise the
         # pre-recovery status and notice stay pinned while new bytes flow.
         self._started = False
+        self._history_notice = None
         self._stream = TerminalByteStream(epoch, offset)
+        self._client.reset_to_live = self.live_edge_pending
         await self._client.open(self.lease_id, self.generation, ticket, epoch, offset)
 
     def offered_stream_position(self) -> tuple[str, int | None]:
@@ -108,7 +157,12 @@ class TerminalController:
         return (epoch, offered if isinstance(offered, int) else None)
 
     async def run(self) -> None:
-        await self._client.run()
+        socket = self._client._socket
+        try:
+            await self._client.run()
+        finally:
+            if self._client._socket is socket:
+                self._live_edge_opening = False
 
     async def close(self) -> None:
         await self._client.close()
@@ -163,6 +217,7 @@ class TerminalController:
         while paused, so every send path fails closed with `no_writer`
         and no byte is delivered. Idempotent."""
         self._writer_paused = True
+        self.gap_recovery.cancel_wait()
 
     def resume_writer(self) -> None:
         """Explicitly re-enable the writer after the resume flow finished.
@@ -183,6 +238,7 @@ class TerminalController:
         if not self._writer_revoked:
             self._revoke_reason = reason  # the first cause stays; later local fences add none
         self._writer_revoked = True
+        self.gap_recovery.cancel_wait()
 
     @property
     def writer_revoked(self) -> bool:
@@ -240,13 +296,25 @@ class TerminalController:
         # epoch is the wire epoch of this chunk.
         event = self._stream.push(OutputChunk(self._client.epoch, offset, data))
         if event.kind == EVENT_DATA:
+            if self.mode == "control":
+                self.gap_recovery.output()
             self.on_bytes(event.data)
+            if self.live_edge_pending or (self.ui_input_fenced and self._overflow_attempts >= 3):
+                return
+            now = time.monotonic()
+            if self._overflow_stable_since is None:
+                self._overflow_stable_since = now
+            elif now - self._overflow_stable_since >= GAP_STABLE_S:
+                self._overflow_attempts = 0
             if not self._started:
                 self._started = True
                 decision = decide_recovery(
                     event, self._stream, self.emulator, start_offset=event.offset
                 )
-                notice = NoticeModel(TONE_WARN, decision.notice) if decision.notice else None
+                notice_text = (
+                    self._history_notice if self._history_notice is not None else decision.notice
+                )
+                notice = NoticeModel(TONE_WARN, notice_text) if notice_text else None
                 self._set(apply_live(self.state, self._stream.epoch, offset, notice))
             self._set(apply_bytes(self.state, len(event.data)))
         elif event.kind == EVENT_GAP:
@@ -254,13 +322,46 @@ class TerminalController:
         else:
             self._apply_reset(event)
 
+    async def _handle_baseline(self, doc: dict[str, Any]) -> bool:
+        socket = self._client._socket
+        if self._viewer_lost or self._detached or self._writer_revoked or self._writer_paused:
+            return False
+        if doc["incomplete"]:
+            self.fence_ui_input(True)
+            if self.on_history_reset is None or not await self.on_history_reset():
+                return False
+        if (
+            self._viewer_lost
+            or self._detached
+            or self._writer_revoked
+            or self._writer_paused
+            or self._client._socket is not socket
+        ):
+            return False
+        self._stream = TerminalByteStream(doc["epoch"], doc["offset"])
+        self.emulator = EMULATOR_FRESH
+        self._history_notice = (
+            "History incomplete: earlier output unavailable." if doc["incomplete"] else ""
+        )
+        self.live_edge_pending = False
+        self._live_edge_opening = False
+        self.pending_resume = None
+        self.reattach_needed = False
+        self._started = False
+        if doc["incomplete"]:
+            self.fence_ui_input(False)
+        return True
+
     def _handle_control(self, doc: dict[str, Any]) -> None:
         # ack/bye flow through the stream client; nothing to project yet.
         _ = doc
 
     def _handle_gap(self, detail: str) -> None:
+        self._overflow_stable_since = None
         if self._viewer_lost or self._detached:
             return
+        if self.mode == "control":
+            self.gap_recovery.record(detail)
         offered = self._client.offered_offset
         if (
             not self._started
@@ -286,6 +387,10 @@ class TerminalController:
         self._apply_gap(StreamEvent(EVENT_GAP, self._stream.next_offset, b"", detail))
 
     def _handle_reset(self, reason: str) -> None:
+        self._overflow_stable_since = None
+        if reason == "overflow":
+            self.on_viewer_overflow()
+            return
         if self._viewer_lost or self._detached:
             return
         self._apply_reset(StreamEvent(EVENT_RESET, self._stream.next_offset, b"", reason))
@@ -311,9 +416,41 @@ class TerminalController:
             pass
 
     def on_viewer_overflow(self) -> None:
-        """The display queue lost bytes downstream: emulator state is
-        untrustworthy, so reset and reattach with an explicit notice."""
-        self._ingest_decision(decide_viewer_overflow(), "viewer overflow")
+        """Fence once, then request an authenticated same-lease live-edge reset."""
+        if self._viewer_lost or self._detached or self.live_edge_pending:
+            return
+        self._overflow_stable_since = None
+        self.fence_ui_input(True)
+        self.live_edge_pending = True  # Exhaustion must never fall through to lease reacquisition.
+        if self._overflow_attempts >= 3:
+            self.pending_resume = None
+            self.reattach_needed = False
+            self._set(
+                replace(
+                    apply_gap(self.state, "overflow"),
+                    notice=NoticeModel(
+                        TONE_WARN, "History incomplete: output recovery stopped; Retry explicitly"
+                    ),
+                )
+            )
+            return
+        self.pending_resume = ResumeRequest(self._client.epoch, self._client.next_offset)
+        self.reattach_needed = False
+        self._set(
+            replace(
+                apply_gap(self.state, "overflow"),
+                notice=NoticeModel(
+                    TONE_WARN, "History incomplete: resuming live; earlier output unavailable."
+                ),
+            )
+        )
+
+    def begin_live_edge_recovery(self) -> bool:
+        if not self.live_edge_pending or self._live_edge_opening or self._overflow_attempts >= 3:
+            return False
+        self._live_edge_opening = True
+        self._overflow_attempts += 1
+        return True
 
     # -- paste writer probe/sender ------------------------
     def paste_generation(self) -> int | None:

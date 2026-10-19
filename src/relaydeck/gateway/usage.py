@@ -24,7 +24,13 @@ from fastapi.responses import JSONResponse, Response
 from relaydeck.gateway.backend import BackendError
 from relaydeck.gateway.cursors import CursorError, decode_cursor
 from relaydeck.persistence_contracts import StorageUnavailable
-from relaydeck.usage.contracts import MAX_QUERY_DAYS, MAX_QUERY_ROWS, Coverage, UsageQuery
+from relaydeck.usage.contracts import (
+    MAX_QUERY_DAYS,
+    MAX_QUERY_ROWS,
+    Coverage,
+    UsageQuery,
+    UsageUnavailable,
+)
 from relaydeck.usage.hook_install import upgrade_outdated_hook
 from relaydeck.usage.hook_setup import HOOK_FILENAME, HookSetupCheck, default_hook_path
 from relaydeck.usage.limits_plane.contracts import RefreshDecision
@@ -43,7 +49,9 @@ CURSOR_TTL_MS = 300_000
 MAX_REPORT_BYTES = 8 * 1024 * 1024
 MAX_CACHE_BYTES = 32 * 1024 * 1024
 MAX_REPORTS = 16
-BUSY_WAIT_SECONDS = 10.0
+BUSY_WAIT_SECONDS = 1.0
+MAX_INFLIGHT = 16
+MAX_WAITERS = 32
 RETRY_AFTER_SECONDS = 2
 _CURSOR = re.compile(r"[A-Za-z0-9_-]{43}")
 
@@ -147,6 +155,7 @@ class _Snapshot:
     cursors: tuple[str, ...]
     generation: int = -1
     price_digest: str = ""
+    query_key: tuple[str, str, bool] = ("", "", False)
 
     @property
     def size(self) -> int:
@@ -176,11 +185,16 @@ class UsageService:
         self.request_limits_refresh = request_limits_refresh
         self.on_usage_open = on_usage_open
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="usage-query")
-        # One worker computes at a time. Identical requests share one computation (`_inflight`);
-        # different ones wait their turn for up to `wait_s` seconds, then get `usage_busy`.
+        self._validator = ThreadPoolExecutor(max_workers=1, thread_name_prefix="usage-validate")
+        # Cache validation never queues behind reports. Identical requests share `_inflight`;
+        # only misses wait for the report slot, bounded by `wait_s`.
         self._slot = asyncio.Lock()
+        self._validation_slot = asyncio.Lock()
+        self._waiters = 0
+        self._workers: set[asyncio.Future[Any]] = set()
         self._inflight: dict[tuple[Any, ...], asyncio.Task[_Snapshot]] = {}
         self.wait_s = BUSY_WAIT_SECONDS
+        self.request_wait_s = BUSY_WAIT_SECONDS
         self._closed = False
         self._reports: OrderedDict[str, _Snapshot] = OrderedDict()
         self._cursors: dict[str, tuple[str, int]] = {}
@@ -329,7 +343,7 @@ class UsageService:
             {"date": day, "label": label} for day, label in self.store.prices.snapshot_labels
         ]
         body["kinds"] = self._metadata(now)
-        activity = self.store.kind_activity(query.host_id)
+        activity = dict(body.pop("kind_activity"))
         for entry in body["kinds"]:
             entry["last_activity_ms"] = activity.get(entry["kind"])
         present = {row["kind"] for row in body["coverage"]}
@@ -352,10 +366,10 @@ class UsageService:
         query: UsageQuery,
         now: int,
         binding: tuple[str, ...],
-        generation: int = -1,
         price_digest: str = "",
     ) -> _Snapshot:
         body = self._report(query, now)
+        generation = body.pop("data_generation")  # The report's consistent read, not validation.
         rows = body["rows"]
         cursors = tuple(
             secrets.token_urlsafe(32) for _ in range((max(1, len(rows)) - 1) // MAX_QUERY_ROWS)
@@ -374,13 +388,22 @@ class UsageService:
                 raise RuntimeError
             pages.append(value)
         return _Snapshot(
-            binding, now + CURSOR_TTL_MS, tuple(pages), cursors, generation, price_digest
+            binding,
+            now + CURSOR_TTL_MS,
+            tuple(pages),
+            cursors,
+            generation=generation,
+            price_digest=price_digest,
+            query_key=(query.from_day, query.to_day, query.hour),
         )
 
     def _drop(self, key: str) -> None:
         snap = self._reports.pop(key)
         for cursor in snap.cursors:
             self._cursors.pop(cursor, None)
+        for binding, reusable in tuple(self._reuse.items()):
+            if reusable is snap:
+                del self._reuse[binding]  # Never hand off a page with evicted cursors.
 
     def _prune(self, now: int) -> None:
         for key, snap in tuple(self._reports.items()):
@@ -403,7 +426,7 @@ class UsageService:
             query.space_id or "",
             self.config.timezone,
         )
-        if self._closed or self.store is None:
+        if self._closed or self.store is None or not self.store.accepting_work:
             return failure("usage_unavailable", 503)
         if query.cursor is not None:
             pointer = self._cursors.get(query.cursor)
@@ -414,50 +437,60 @@ class UsageService:
             if snap.binding != binding:
                 return failure("invalid_cursor", 400)
             return Response(snap.pages[offset], media_type="application/json", headers=NO_STORE)
-        if self.store is not None:
-            gen_fn = getattr(self.store, "data_generation", None)
-            digest_fn = getattr(self.store, "price_digest", None)
-            if callable(gen_fn) and callable(digest_fn):
-                try:
-                    generation, digest = gen_fn(), digest_fn()
-                except Exception:
-                    generation, digest = -1, ""
-                digest = f"{digest}:{self._fingerprint(now)}" if generation >= 0 else ""
-                if generation >= 0:
-                    cached = self._reuse.get(binding)
-                    if (
-                        cached is not None
-                        and cached.generation == generation
-                        and cached.price_digest == digest
-                        and now < cached.expires
-                    ):
-                        return Response(
-                            cached.pages[0],
-                            media_type="application/json",
-                            headers=NO_STORE,
-                        )
-        flight = (binding, query.from_day, query.to_day)
+        flight = (binding, query.from_day, query.to_day, query.hour)
         task = self._inflight.get(flight)
-        if task is None:
+        cached = self._cached(query, binding)
+        if (
+            task is None
+            and len(self._inflight) < MAX_INFLIGHT
+            and (cached is not None or self._waiters < MAX_WAITERS)
+        ):
             task = asyncio.get_running_loop().create_task(self._produce(query, now, binding))
             self._inflight[flight] = task
             task.add_done_callback(functools.partial(self._finished, flight))
+        if cached is not None:
+            # Immutable, explicitly as-of data stays available during a single-flight
+            # refresh, including when refresh admission is temporarily saturated.
+            return Response(cached.pages[0], media_type="application/json", headers=NO_STORE)
+        if task is None or self._waiters >= MAX_WAITERS:
+            return self._busy_response()
+        self._waiters += 1
         try:
             # Waiters share the computation; one disconnecting cancels only its own wait.
-            snap = await asyncio.shield(task)
-        except _Busy:
-            return JSONResponse(
-                {"error": "usage_busy"},
-                status_code=503,
-                headers={**NO_STORE, "Retry-After": str(RETRY_AFTER_SECONDS)},
-            )
+            snap = await asyncio.wait_for(asyncio.shield(task), self.request_wait_s)
+        except (_Busy, TimeoutError):
+            return self._busy_response()
+        except UsageUnavailable as exc:
+            if exc.code == "busy":
+                return self._busy_response()
+            return failure("usage_unavailable", 503)
         except asyncio.CancelledError:
             if task.cancelled():
                 return failure("usage_unavailable", 503)
             raise
         except Exception:
             return failure("usage_unavailable", 503)
+        finally:
+            self._waiters -= 1
         return Response(snap.pages[0], media_type="application/json", headers=NO_STORE)
+
+    def _cached(self, query: UsageQuery, binding: tuple[str, ...]) -> _Snapshot | None:
+        snap = self._reuse.get(binding)
+        if (
+            snap is not None
+            and self.clock() < snap.expires
+            and snap.query_key == (query.from_day, query.to_day, query.hour)
+        ):
+            return snap
+        return None
+
+    @staticmethod
+    def _busy_response() -> JSONResponse:
+        return JSONResponse(
+            {"error": "usage_busy"},
+            status_code=503,
+            headers={**NO_STORE, "Retry-After": str(RETRY_AFTER_SECONDS)},
+        )
 
     @property
     def _busy(self) -> bool:
@@ -470,34 +503,87 @@ class UsageService:
         if not done.cancelled():
             _ = done.exception()  # retrieved: a failure is reported to the waiters
 
-    async def _produce(self, query: UsageQuery, now: int, binding: tuple[str, ...]) -> _Snapshot:
-        """One computation for every identical request. Waits its turn for the worker slot
-        (bounded), runs the report off the loop and caches the pages."""
-        try:
-            await asyncio.wait_for(self._slot.acquire(), self.wait_s)
-        except TimeoutError:
-            raise _Busy from None
-        loop = asyncio.get_running_loop()
+    def _validate(self, now: int, cached: _Snapshot | None) -> tuple[_Snapshot | None, int, str]:
+        # Even cache validation can wait for the collector's SQLite lock or read hook files.
         gen_fn = getattr(self.store, "data_generation", None)
         digest_fn = getattr(self.store, "price_digest", None)
         generation = gen_fn() if callable(gen_fn) else -1
         digest = digest_fn() if callable(digest_fn) else ""
         if generation >= 0:
             digest = f"{digest}:{self._fingerprint(now)}"
-        future = loop.run_in_executor(
-            self._executor, self._snapshot, query, now, binding, generation, digest
+        if (
+            cached is not None
+            and generation >= 0
+            and cached.generation == generation
+            and cached.price_digest == digest
+            and now < cached.expires
+        ):
+            return cached, generation, digest
+        return None, generation, digest
+
+    async def _compute(
+        self, query: UsageQuery, now: int, binding: tuple[str, ...], digest: str
+    ) -> _Snapshot:
+        """Only cache misses take the bounded report slot, until the worker truly finishes."""
+        try:
+            await asyncio.wait_for(self._slot.acquire(), self.wait_s)
+        except TimeoutError:
+            raise _Busy from None
+        return await self._work(
+            self._executor, self._slot, self._snapshot, query, now, binding, digest
         )
 
-        def release(done: asyncio.Future[_Snapshot]) -> None:
-            # The slot frees only when the worker really finished, even if every waiter left.
-            self._slot.release()
+    async def _work[T](
+        self,
+        executor: ThreadPoolExecutor,
+        slot: asyncio.Lock,
+        call: Callable[..., T],
+        *args: Any,
+    ) -> T:
+        if self._closed:
+            slot.release()
+            raise _Busy
+        try:
+            future = asyncio.get_running_loop().run_in_executor(executor, call, *args)
+        except BaseException:
+            slot.release()
+            raise
+        self._workers.add(future)
+
+        def release(done: asyncio.Future[Any]) -> None:
+            # Cancellation never frees a slot while its native call is still running.
+            slot.release()
+            self._workers.discard(done)
             if not done.cancelled():
                 _ = done.exception()
 
         future.add_done_callback(release)
-        snap = await asyncio.shield(future)
+        # Only HTTP waiters time out. Keep the producer alive to cache a slow
+        # report, retaining its slot until native work finishes or shutdown begins.
+        return await asyncio.shield(future)
+
+    async def _produce(self, query: UsageQuery, now: int, binding: tuple[str, ...]) -> _Snapshot:
+        """Coalesce validation and report work; cache hits bypass report admission entirely."""
+        try:
+            await asyncio.wait_for(self._validation_slot.acquire(), self.wait_s)
+        except TimeoutError:
+            raise _Busy from None
+        if self._closed:
+            self._validation_slot.release()
+            raise _Busy
+        snap, _, digest = await self._work(
+            self._validator,
+            self._validation_slot,
+            self._validate,
+            now,
+            self._cached(query, binding),
+        )
+        if snap is None:
+            snap = await self._compute(query, now, binding, digest)
         if self._closed or self.clock() >= snap.expires:
             raise RuntimeError
+        if self._reuse.get(binding) is snap:
+            return snap  # A validated cache hit keeps its existing report/cursor identity.
         while self._reports and (
             len(self._reports) >= MAX_REPORTS
             or sum(s.size for s in self._reports.values()) + snap.size > MAX_CACHE_BYTES
@@ -515,11 +601,19 @@ class UsageService:
 
     async def close(self) -> None:
         self._closed = True
-        for task in tuple(self._inflight.values()):
+        tasks = tuple(self._inflight.values())
+        for task in tasks:
             task.cancel()
-        await asyncio.to_thread(self._executor.shutdown, wait=True, cancel_futures=True)
+        await asyncio.gather(*tasks, return_exceptions=True)
+        # Never enqueue joins behind the shared pool (also used by journal/attach work).
+        # Runtime shutdown interrupts SQL; mutex waiters observe the shutdown flag.
+        if self._workers:
+            await asyncio.wait(self._workers, timeout=2.0)
+        self._validator.shutdown(wait=False, cancel_futures=True)
+        self._executor.shutdown(wait=False, cancel_futures=True)
         self._reports.clear()
         self._cursors.clear()
+        self._reuse.clear()
 
 
 def install(
@@ -608,9 +702,10 @@ def install(
         if service is None or service.host_id != host_id:
             return failure("usage_disabled", 404)
         if service.on_usage_open is not None:
-            # The scheduler throttles this itself; a failure here never fails the page.
+            # Production callback only sets a scheduler event: never do store/lock work
+            # per poll in the shared pool. Auto-refresh is owned by the scheduler thread.
             try:
-                await asyncio.to_thread(service.on_usage_open)
+                service.on_usage_open()
             except Exception:
                 LOG.warning("usage_auto_refresh_check_failed")
         try:

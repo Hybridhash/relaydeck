@@ -107,6 +107,13 @@ def zone_label(zone_name: str) -> str:
     return f"{last} time"
 
 
+def _as_of(page: UsagePage) -> str | None:
+    if page.as_of_ms is None:
+        return None
+    when = datetime.fromtimestamp(page.as_of_ms / 1000, ZoneInfo(page.timezone))
+    return f"as of {when:%d %b %H:%M:%S} {zone_label(page.timezone)}"
+
+
 def _reset(resets_at_ms: int, tz: str) -> str:
     """The reset moment alone, as `Sun 06:58`; callers add the word 'Resets' when needed."""
     when = datetime.fromtimestamp(resets_at_ms / 1000, ZoneInfo(tz))
@@ -1301,6 +1308,10 @@ def build(
         meta, meta_tone = f"{range_text} · updating…", TONE_NORMAL
     else:
         meta, meta_tone = f"{range_text} · updated {relative}", TONE_NORMAL
+    as_of = _as_of(page)
+    if as_of is not None:
+        suffix = " · offline" if state == STATE_OFFLINE else " · updating…" if updating else ""
+        meta = f"{range_text} · {as_of}{suffix}"
 
     filtered = s.filtered_rows(page, flt, today)
     cost_text = _cost(total)
@@ -1824,7 +1835,7 @@ def console_card(page: UsagePage | None, *, state: str, now_ms: int) -> ConsoleC
         capacity=False,
         headline=headline,
         pick=pick,
-        age=f"snapshot {_relative(now_ms, page.generated_ms, page.timezone)}",
+        age=_as_of(page) or f"snapshot {_relative(now_ms, page.generated_ms, page.timezone)}",
         stale_day=card.stale_day,
         partial=partial,
         picks=tuple(short),

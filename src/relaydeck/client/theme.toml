@@ -114,6 +114,7 @@ light_ink = "#201B36"
 light_surface = "#F8F6FC"
 scroll_thumb_bg = "#343434"
 shell_disabled = "#8E86B8"
+toast_action = "#4B33B0"
 
 [console.usage.dark]
 bg = "#13101F"

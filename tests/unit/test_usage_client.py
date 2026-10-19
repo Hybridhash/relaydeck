@@ -39,6 +39,27 @@ def test_a_valid_page_parses_and_the_setup_block_is_optional() -> None:
     assert kinds["kind-a"].setup == model.LimitsSetup("installed", 1791699900000)
 
 
+@pytest.mark.parametrize("value", [None, NOW_MS, True, -1, "recent"])
+def test_asof_timestamp_is_optional_and_strict(value) -> None:
+    doc = {**fixture("page-overall.json"), "as_of_ms": value}
+    if value is None or type(value) is int and value >= 0:
+        assert model.parse_usage_page(doc).as_of_ms == value
+    else:
+        with pytest.raises(model.UsageDocError):
+            model.parse_usage_page(doc)
+
+
+def test_cursor_pages_must_keep_the_same_asof() -> None:
+    async def fetch(query):
+        name = "page-second.json" if query.cursor else "page-first.json"
+        return {**fixture(name), "as_of_ms": NOW_MS + int(bool(query.cursor))}
+
+    with pytest.raises(api.UsageFetchError, match="inconsistent_pages"):
+        asyncio.run(
+            api.fetch_usage(fetch, api.UsageQuery("host-a", days=7), is_current=lambda: True)
+        )
+
+
 @pytest.mark.parametrize(
     "mutate",
     [

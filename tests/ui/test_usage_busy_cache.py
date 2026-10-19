@@ -43,7 +43,7 @@ def Harness(fetch: Any) -> Any:
 
 
 @ft.component
-def Both(fetch: Any) -> Any:
+def Both(fetch: Any, width: float = 390) -> Any:
     return ft.Column(
         controls=[
             UsageCard(
@@ -53,9 +53,16 @@ def Both(fetch: Any) -> Any:
                 active=True,
                 dark=False,
                 on_open=lambda: None,
+                wide=width >= 1000,
             ),
             UsagePanel(
-                fetch=fetch, identity="acct", host_id="host-a", active=True, dark=False, wide=False
+                fetch=fetch,
+                identity="acct",
+                host_id="host-a",
+                active=True,
+                dark=False,
+                wide=width >= 1000,
+                width=width,
             ),
         ]
     )
@@ -236,5 +243,27 @@ def test_the_console_strip_and_the_usage_page_fetching_together_both_show_data()
         assert _has(app, "summary-tokens")
         headline = app.find("console-headline").value
         assert "unavailable" not in headline.lower() and headline != "Loading…"
+
+    run(scenario())
+
+
+@pytest.mark.parametrize("width", [390, 1280])
+def test_completed_asof_time_is_visible_in_usage_and_console(width, monkeypatch) -> None:
+    async def scenario():
+        doc = _page()
+        doc["timezone"] = "UTC"
+        doc["as_of_ms"] = 1_791_676_800_000  # 11 Oct 2026 00:00:00 UTC
+        monkeypatch.setattr(
+            "relaydeck.client.features.usage.panel._now_ms", lambda: doc["as_of_ms"] + 60_000
+        )
+
+        async def fetch(query):
+            return {**doc, "host_id": query.host_id}
+
+        app = await render_component(Both, fetch=fetch, width=width)
+        await _until(app, lambda: _has(app, "console-as-of") and _has(app, "usage-meta"))
+        expected = "as of 11 Oct 00:00:00 UTC"
+        assert app.find("console-as-of").value == expected
+        assert expected in app.find("usage-meta").value
 
     run(scenario())

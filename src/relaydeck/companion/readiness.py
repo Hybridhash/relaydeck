@@ -106,7 +106,7 @@ def _prerequisites(report: prereqs.Report | None) -> Item:
         if state != OK:
             reasons.append(f"{result.check}: {result.state.replace('_', ' ')}")
             steps.append(
-                result.guidance or "install or start it, then check again (see the runbook)"
+                result.guidance or "install or start it, then check again (see the README, Install)"
             )
     if not results:
         return _item(1, WARN, "not checked", "run relaydeck setup --check again")
@@ -192,7 +192,7 @@ def _secrets_item(config: CompanionConfig | None) -> Item:
         3,
         _worst(states),
         "; ".join(reasons),
-        "create owner-only secret files of at least 32 random bytes (see the companion runbook)",
+        "create owner-only secret files of at least 32 random bytes (README, Install step 3)",
     )
 
 
@@ -205,7 +205,7 @@ def _enrollment_item(config: CompanionConfig | None) -> Item:
             4,
             FAIL,
             "this Mac's connector is not enrolled",
-            "enroll it with a public-key invitation (docs/runbooks/connector.md)",
+            "enroll it with a public-key invitation (README, Install step 3)",
         )
     try:
         check_private(path)
@@ -215,7 +215,7 @@ def _enrollment_item(config: CompanionConfig | None) -> Item:
             4,
             FAIL,
             "the connector credentials are not readable as owner-only JSON",
-            "re-enroll the connector (docs/runbooks/connector.md)",
+            "re-enroll the connector (README, Install step 3)",
         )
     if not isinstance(doc, dict) or not all(
         isinstance(doc.get(key), str) and doc.get(key)
@@ -225,7 +225,7 @@ def _enrollment_item(config: CompanionConfig | None) -> Item:
             4,
             FAIL,
             "the connector credentials are incomplete",
-            "re-enroll the connector (docs/runbooks/connector.md)",
+            "re-enroll the connector (README, Install step 3)",
         )
     if doc["host_id"] != config.host_id:
         return _item(
@@ -290,7 +290,8 @@ def _serve_item(report: prereqs.Report | None) -> Item:
         )
     state = WARN if result.state == prereqs.STATE_UNKNOWN else FAIL
     step = (
-        result.guidance or "make the Serve mapping match this companion (see the companion runbook)"
+        result.guidance
+        or "make the Serve mapping match this companion (see the README, Install step 3)"
     )
     return _item(7, state, result.state.replace("_", " "), step)
 

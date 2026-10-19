@@ -18,7 +18,6 @@ import hashlib
 import os
 import secrets
 import stat
-import tempfile
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
@@ -355,23 +354,6 @@ def replace_if_match(path: Path, expected_text: str, new_text: str, *, backup_na
     finally:
         os.close(lock_fd)
         os.close(dir_fd)
-
-
-def atomic_replace(path: Path, text: str) -> None:
-    """Writes `text` to a private temporary file in the same folder, then replaces `path` in one
-    step."""
-    handle, temp_name = tempfile.mkstemp(dir=path.parent, prefix=".companion-", suffix=".tmp")
-    try:
-        with os.fdopen(handle, "w", encoding="utf-8") as stream:
-            stream.write(text)
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.chmod(temp_name, 0o600)
-        os.replace(temp_name, path)
-    except BaseException:
-        if os.path.exists(temp_name):
-            os.unlink(temp_name)
-        raise
 
 
 def sha256_of(text: str) -> str:

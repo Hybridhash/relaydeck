@@ -32,6 +32,7 @@ class _FakeController:
         self.mode = "control"
         self.writer_revoked = False
         self.reattach_needed = False
+        self.live_edge_pending = False
         self.pending_resume = None
         self.writer_eligible = True
         self.state = SimpleNamespace(epoch="epoch-1", status="live", notice=None)

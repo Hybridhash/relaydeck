@@ -283,7 +283,10 @@ def test_dropped_watch_resumes_retained_cursor_without_attach_input_or_resize(
                 lambda: session.controller is not old_controller and session.phase == "live"
             )
             assert session.controller.emulator == EMULATOR_PRESERVED
-            assert session.controller._client.resume_query().endswith("offset=3")
+            from urllib.parse import parse_qs
+
+            query = parse_qs(session.controller._client.resume_query())
+            assert query["offset"] == ["3"] and query["output_reset"] == ["v1"]
             assert session.current_term is term and session.store.draft == "unsent draft"
             assert session.lease.mode == "view" and session.takeover_disclosure is None
             assert agent_session.WATCH_RECONNECT_MESSAGE in notices

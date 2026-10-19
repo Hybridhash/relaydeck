@@ -48,6 +48,16 @@ _REASONS = frozenset(
         "forbidden",
         "not_found",
         "host_offline",
+        "rate_limited",
+        "resume_failed",
+        "protocol_error",
+        "probe_timeout",
+        "reset_mismatch",
+        "unknown_native",
+        "instance_changed",
+        "offset_future",
+        "offset_regressed",
+        "offset_evicted",
         "upstream_timeout",
         "too_large",
         "unsupported_capability",
@@ -111,6 +121,14 @@ def _number(value: int) -> int:
     return value if type(value) is int and 0 <= value <= 2**63 - 1 else 0
 
 
+def safe_reason(value: str) -> str:
+    return value if isinstance(value, str) and value in _REASONS else "other"
+
+
+def log_ui_resume_incomplete(reason: str) -> None:
+    LOG.info("ui_resume_incomplete why=%s", safe_reason(reason))
+
+
 @dataclass(frozen=True)
 class LeaseTrace:
     session: str
@@ -164,7 +182,7 @@ class LeaseTrace:
             if isinstance(self.mode, str) and self.mode in ("control", "view")
             else "unknown",
             _number(self.generation),
-            reason if isinstance(reason, str) and reason in _REASONS else "other",
+            safe_reason(reason),
             source if isinstance(source, str) and source in _SOURCES else "other",
             _number(attempt),
             _number(viewer),

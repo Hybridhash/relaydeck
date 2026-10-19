@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 import flet as ft
 
+from relaydeck.client.components.design_system import tokens as console_tokens
 from relaydeck.client.components.design_system.terminal_window import (
     PillButton,
 )
@@ -20,15 +22,138 @@ from relaydeck.client.features.composer.domain import (
     SUBMISSION_UNKNOWN,
 )
 from relaydeck.client.features.composer.draft_field import keep_native_value
+from relaydeck.client.features.composer.shortcut import use_send_shortcut
+from relaydeck.client.features.terminal.diagnostics import diagnostics_logger
 from relaydeck.client.features.terminal.events import (
     click,
+    spawn,
     value_change,
 )
 from relaydeck.client.features.terminal.paste_policy import PasteReview
+from relaydeck.client.hooks.typing_focus import use_composer_focus_log
 from relaydeck.client.theme import palette
 
 if TYPE_CHECKING:
     from relaydeck.client.features.composer.domain import StagedMarker
+
+
+def use_composer_keyboard(
+    *, enabled: bool, binding: Any, on_focus_change: Callable[[bool], Any] | None
+) -> tuple[bool, bool, Callable[[bool], Any], Callable[[], None], Callable[[], None]]:
+    focused, set_focused = ft.use_state(False)
+    closing, set_closing = ft.use_state(False)
+    current = ft.use_ref((binding, enabled))
+    focused_now = ft.use_ref(focused)
+    pending: Any = ft.use_ref(None)
+    log_focus, note_send = use_composer_focus_log(on_focus_change)
+    expected = (binding, enabled)
+    current.current = expected
+    focused_now.current = focused
+
+    def cancel_close() -> None:
+        if pending.current is not None:
+            pending.current.cancel()
+            pending.current = None
+
+    def reset() -> None:
+        set_closing(False)
+        focused_now.current = False
+        set_focused(False)
+
+    ft.use_effect(reset, dependencies=[expected], cleanup=cancel_close)
+
+    def focus_changed(value: bool) -> Any:
+        if current.current != expected or (value and (not enabled or pending.current is not None)):
+            return None
+        focused_now.current = value
+        set_focused(value)
+        return log_focus(value)
+
+    def dismiss() -> None:
+        if (
+            current.current != expected
+            or not enabled
+            or not focused_now.current
+            or pending.current is not None
+        ):
+            return
+        set_closing(True)
+        focus_changed(False)
+
+        async def finish() -> None:
+            await asyncio.sleep(0.05)
+            if current.current == expected:
+                pending.current = None
+                set_closing(False)
+
+        pending.current = spawn(finish(), label="Close composer focus")
+
+    return focused, closing, focus_changed, dismiss, note_send
+
+
+def _keep_focus(_event: Any) -> None:
+    diagnostics_logger().info("composer_tap_outside action=keep_focus")
+
+
+def _suffix(send: Any, toggle: Any | None) -> Any:
+    return send if toggle is None else ft.Row(tight=True, spacing=4, controls=[send, toggle])
+
+
+def _keyboard_toggle(
+    state: str, compact: bool, on_hide: Callable[[], Any], on_show: Callable[[], Any]
+) -> Any | None:
+    """Hide keyboard while the field is focused, Show keyboard otherwise.
+
+    The toggle sits inside the field's decoration. Showing the keyboard must happen inside the
+    user's tap on iOS, so the Show icon ignores pointers and the tap reaches the text field
+    natively; a server-side focus request would arrive after the gesture has ended.
+    """
+    if state not in ("hide", "show"):
+        return None
+    disc = ft.Colors.with_opacity(0.35, console_tokens.SCROLL_THUMB_BG)
+    if state == "hide":
+        return ft.Semantics(
+            key="composer-hide-keyboard-semantics",
+            label="Hide keyboard",
+            button=True,
+            content=ft.IconButton(
+                ft.Icons.KEYBOARD_HIDE,
+                key="composer-hide-keyboard",
+                width=44,
+                height=44,
+                icon_size=20,
+                padding=0,
+                style=ft.ButtonStyle(
+                    bgcolor=disc, color=console_tokens.ON_PRIMARY, shape=ft.CircleBorder()
+                ),
+                tooltip=None if compact else "Hide keyboard",
+                on_click=click(on_hide),
+            ),
+        )
+    return ft.Semantics(
+        key="composer-show-keyboard-semantics",
+        label="Show keyboard",
+        button=True,
+        on_tap=lambda _e: on_show(),
+        content=ft.Container(
+            key="composer-show-keyboard",
+            width=44,
+            height=44,
+            border_radius=22,
+            bgcolor=disc,
+            alignment=ft.Alignment.CENTER,
+            ignore_interactions=True,
+            content=ft.Column(
+                tight=True,
+                spacing=0,
+                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                controls=[
+                    ft.Icon(ft.Icons.KEYBOARD_ARROW_UP, size=14, color=console_tokens.ON_PRIMARY),
+                    ft.Icon(ft.Icons.KEYBOARD, size=20, color=console_tokens.ON_PRIMARY),
+                ],
+            ),
+        ),
+    )
 
 
 @ft.component
@@ -45,6 +170,8 @@ def _PhoneComposerField(
     key: str = "phone-composer-editor",
     lines: int | None = None,
     on_focus_change: Callable[[bool], Any] | None = None,
+    keyboard: str = "",
+    on_hide_keyboard: Callable[[], Any] | None = None,
 ) -> Any:
     """Keep native editing intact until the authoritative draft changes.
 
@@ -56,18 +183,34 @@ def _PhoneComposerField(
     model_ref = ft.use_ref(draft)
     callbacks: Any = ft.use_ref((draft, focusable, on_draft_change, on_send, on_focus_change))
     callbacks.current = (draft, focusable, on_draft_change, on_send, on_focus_change)
+    hide_ref: Any = ft.use_ref(None)
+    hide_ref.current = on_hide_keyboard
     watch_focus = on_focus_change is not None
 
     def focus_changed(focused: bool) -> Any:
+        shortcut.focus(focused)
         notify = callbacks.current[4]
         return notify(focused) if notify is not None else None
 
     def changed(text: str) -> Any:
         current, active, change, _send, _focus = callbacks.current
+        if shortcut.swallows(text):
+            return None
         return change(text) if active and text != current else None
 
     def send() -> Any:
         return callbacks.current[3]()
+
+    shortcut, _hint = use_send_shortcut(draft=draft, can_send=send_enabled, send=send)
+
+    def hide() -> Any:
+        return hide_ref.current() if hide_ref.current is not None else None
+
+    def show() -> None:
+        # Screen-reader activation only. A touch lands on the field itself (see _keyboard_toggle).
+        field = field_ref.current
+        if field is not None:
+            spawn(field.focus(), label="Show composer keyboard")
 
     def editor() -> Any:
         # Hidden/parked fields reject late changes. Reopening restores the
@@ -94,27 +237,41 @@ def _PhoneComposerField(
             content_padding=8,
             size_constraints=ft.BoxConstraints(min_height=36),
             suffix_icon_size_constraints=ft.BoxConstraints(min_width=36, min_height=36),
-            suffix_icon=ft.IconButton(
-                ft.Icons.ARROW_UPWARD,
-                key=composer_ui.SEND_KEY,
-                width=28,
-                height=28,
-                icon_size=16,
-                padding=0,
-                bgcolor=tokens["accent"],
-                icon_color=tokens["on_accent"],
-                tooltip="Insert into terminal" if blocked else "Send message",
-                disabled=not send_enabled,
-                on_click=click(send),
+            suffix_icon=_suffix(
+                ft.IconButton(
+                    ft.Icons.ARROW_UPWARD,
+                    key=composer_ui.SEND_KEY,
+                    width=28,
+                    height=28,
+                    icon_size=16,
+                    padding=0,
+                    bgcolor=tokens["accent"],
+                    icon_color=tokens["on_accent"],
+                    tooltip="Insert into terminal" if blocked else "Send message",
+                    disabled=not send_enabled,
+                    on_click=click(send),
+                ),
+                _keyboard_toggle(keyboard, compact, hide, show),
             ),
             on_change=value_change(changed),
-            on_focus=(lambda _e: focus_changed(True)) if watch_focus else None,
-            on_blur=(lambda _e: focus_changed(False)) if watch_focus else None,
+            on_focus=lambda _e: focus_changed(True),
+            on_blur=lambda _e: focus_changed(False),
+            on_tap_outside=_keep_focus,
         )
 
     field = ft.use_memo(
         editor,
-        dependencies=[draft, dark, blocked, compact, focusable, send_enabled, lines, watch_focus],
+        dependencies=[
+            draft,
+            dark,
+            blocked,
+            compact,
+            focusable,
+            send_enabled,
+            lines,
+            watch_focus,
+            keyboard,
+        ],
     )
     field_ref.current = field
     model_ref.current = draft
@@ -125,9 +282,11 @@ STATUS_ROW_KEY = "phone-composer-status"
 STATUS_ROW_HEIGHT = 16.0
 
 
-def _status_text(text: str, key: str) -> ft.Text:
-    return ft.Text(
-        text, key=key, size=12, max_lines=1, overflow=ft.TextOverflow.ELLIPSIS, expand=True
+def _status_text(text: str, key: str) -> ft.Semantics:
+    return ft.Semantics(
+        live_region=True,
+        expand=True,
+        content=ft.Text(text, key=key, size=12, max_lines=1, overflow=ft.TextOverflow.ELLIPSIS),
     )
 
 
@@ -156,6 +315,8 @@ def _phone_composer(
     chips: Any = None,
     lines: int | None = None,
     on_focus_change: Callable[[bool], Any] | None = None,
+    keyboard: str = "",
+    on_hide_keyboard: Callable[[], None] | None = None,
 ) -> Any:
     """Grow from one to four visible lines, preserving delivery safeguards.
 
@@ -177,6 +338,8 @@ def _phone_composer(
             on_send=on_send,
             lines=lines,
             on_focus_change=on_focus_change,
+            keyboard=keyboard if visible else "",
+            on_hide_keyboard=on_hide_keyboard,
         )
     )
     if attachment is not None:

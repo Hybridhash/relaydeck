@@ -94,6 +94,7 @@ def _merge(pages: list[UsagePage]) -> UsagePage:
         if (
             page.host_id != first.host_id
             or page.generated_ms != first.generated_ms
+            or page.as_of_ms != first.as_of_ms
             or page.timezone != first.timezone
         ):
             raise UsageFetchError("inconsistent_pages")

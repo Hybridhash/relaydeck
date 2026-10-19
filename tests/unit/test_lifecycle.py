@@ -3,7 +3,7 @@
 Pause-invalidates-writer, ordered resume, process-death recovery, lease
 release/expiry, minimal route restoration, and network-switch
 resynchronization — all proven headless. Real-hardware scenarios stay
-blocked (see scripts/check_device_scenarios.py --suite lifecycle).
+blocked (they need real hardware).
 """
 
 from __future__ import annotations

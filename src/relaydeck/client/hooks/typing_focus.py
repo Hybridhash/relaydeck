@@ -8,6 +8,7 @@ returns the names the rest of `Root` still uses.
 from __future__ import annotations
 
 import asyncio
+import time
 from collections.abc import Callable
 from typing import Any
 
@@ -88,7 +89,27 @@ def use_typing_focus(
     )
 
 
-TYPING_EXIT_REASONS = ("send", "done", "route", "portrait", "lost")
+def use_composer_focus_log(
+    on_focus_change: Callable[[bool], Any] | None,
+) -> tuple[Callable[[bool], Any], Callable[[], None]]:
+    last_send: Any = ft.use_ref(None)
+
+    def note_send() -> None:
+        last_send.current = time.monotonic()
+
+    def focus_changed(focused: bool) -> Any:
+        since_send = (
+            -1
+            if last_send.current is None
+            else max(0, round((time.monotonic() - last_send.current) * 1000))
+        )
+        diagnostics_logger().info("composer_focus focused=%s since_send_ms=%s", focused, since_send)
+        return on_focus_change(focused) if on_focus_change is not None else None
+
+    return focus_changed, note_send
+
+
+TYPING_EXIT_REASONS = ("done", "route", "portrait", "lost")
 
 
 def use_typing_exit(
@@ -102,7 +123,7 @@ def use_typing_exit(
 ) -> Callable[[str], None]:
     """Exit typing mode with a logged reason.
 
-    Returns `exit(reason)` for the Send and Done controls. Also exits by effect on
+    Returns `exit(reason)` for explicit controls. Also exits by effect on
     route/agent change and, on touch devices, on rotation to portrait."""
     last_route: Any = ft.use_ref(route)
     typing_now: Any = ft.use_ref(typing_focus)

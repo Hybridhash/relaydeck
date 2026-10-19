@@ -357,9 +357,7 @@ def test_text_scale_structure_grows_and_keeps_names() -> None:
         pills = [c for c in iter_controls(roots) if isinstance(c, ft.Container) and c.height == 22]
         assert pills == []
         tile = app.find("count-blocked")
-        assert tile.height is None
-        pad = tile.padding
-        assert pad.top + pad.bottom == 30  # 50px lines + 2x15px = 80px at 100%
+        assert tile.height == 52  # the compact strip is a fixed height
         texts = [c for c in iter_controls(roots) if isinstance(c, ft.Text)]
         subtitles = [t for t in texts if t.max_lines == 2]
         assert subtitles, "card subtitle must wrap to 2 lines before ellipsizing"
@@ -441,7 +439,7 @@ def test_variable_actions_keep_structural_48px_floor() -> None:
     column = content.content
     total = content.padding.top + content.padding.bottom
     total += column.spacing * (len(column.controls) - 1)
-    title_row, subtitle_row, meta_row = column.controls
+    title_row, subtitle_row = column.controls
     pill_text = title_row.controls[1].content
     total += max(_line_height(title_row.controls[0]), _line_height(pill_text))
     badge = subtitle_row.controls[0]
@@ -449,7 +447,6 @@ def test_variable_actions_keep_structural_48px_floor() -> None:
     subtitle_texts = subtitle_row.controls[1:]
     assert len(subtitle_texts) <= 1
     total += max([badge.height] + [_line_height(t) for t in subtitle_texts])
-    total += max(_line_height(t) for t in meta_row.controls)
     assert total >= MIN_TOUCH
     for bar in (
         ConsoleBottomBar("console", lambda d: None),

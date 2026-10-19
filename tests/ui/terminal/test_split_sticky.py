@@ -1,6 +1,6 @@
 """Typing mode on touch devices outlives the draft's focus.
 
-Blur, terminal and scroll taps keep the split; Send, Done, route change, rotation to
+Send, blur, terminal and scroll taps keep the split; Done, route change, rotation to
 portrait and losing control end it. Desktop never enters the split. The field stays the
 same control throughout (no remount).
 """
@@ -63,7 +63,7 @@ def test_terminal_taps_keep_the_split_while_composing() -> None:
     run(scenario())
 
 
-def test_send_and_done_leave_typing_mode() -> None:
+def test_done_leaves_typing_mode() -> None:
     async def scenario() -> None:
         app, _c, _s = await _typing(_landscape())
         await app.set_props_and_fire("agent-typing-done", {}, "click")
@@ -76,14 +76,14 @@ def test_send_and_done_leave_typing_mode() -> None:
     run(scenario())
 
 
-def test_send_leaves_typing_mode() -> None:
+def test_send_keeps_typing_mode() -> None:
     async def scenario() -> None:
         app, _c, _s = await _typing(_landscape())
         await app.set_props_and_fire(DRAFT, {}, "change", "hello")
         await app.settle()
         await app.set_props_and_fire("composer-send", {}, "click")
         await app.settle()
-        assert not _split(app)
+        assert _split(app)
 
     run(scenario())
 

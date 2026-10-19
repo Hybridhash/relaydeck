@@ -29,6 +29,7 @@ from relaydeck.client.features.terminal.ui_resume import TerminalUIResumes, term
 from relaydeck.client.pending_commands import MemoryCommandStore, PendingCommands
 from relaydeck.client.retained_sessions import RetainedSession, RetainedSessions
 from relaydeck.client.sessions import SessionFactory, production_stream_factory, ws_base_for
+from relaydeck.domain.models import AppState, Host
 
 OUTPUT_ACK_DEADLINE = 2.0
 
@@ -272,6 +273,7 @@ class AppResources:
     _ui_output: dict[int, tuple[Any, int, int, float, int]] = field(
         default_factory=dict, repr=False
     )
+    _gap_hosts: dict[str, Host] = field(default_factory=dict, init=False, repr=False)
 
     def __post_init__(self) -> None:
         self._last_activation = self._last_input = self._clock()
@@ -283,6 +285,25 @@ class AppResources:
             verify=lambda entry: self._reconcile_terminal(entry, force=True),
         )
         self.retained.recovery_note = self.recovery.note
+        if self.controller is not None:
+            self.controller.subscribe(self._gap_host_state)
+
+    def _gap_host_state(self, state: AppState) -> None:
+        previous, self._gap_hosts = self._gap_hosts, dict(state.inventory.hosts)
+        for entry in self.retained.entries():
+            session = entry.session
+            host, old = state.inventory.hosts.get(entry.host_id), previous.get(entry.host_id)
+            if host is None or not host.reachable:
+                session.set_host_online(False)
+            elif (
+                old is None
+                or not old.reachable
+                or (
+                    host.last_seen_ms > old.last_seen_ms
+                    and host.last_seen_ms > session.gap_recovery.gap_ms
+                )
+            ):
+                session.set_host_online(True)
 
     def set_page_visible(self, visible: bool) -> None:
         """Browser tab visibility: a hint, never authority. Identity is revalidated on reconnect."""
@@ -419,6 +440,10 @@ class AppResources:
                 or terminal_transition(session).control is not None
             ):
                 return False
+            if reason == "overflow":
+                return await self.retained.resume_output(
+                    entry, lambda: self._entry_current(entry, generation)
+                )
             held_controller, held_lease, lifecycle = (
                 session.controller,
                 session.lease,
@@ -552,6 +577,8 @@ class AppResources:
 
     async def close(self) -> None:
         self.closing = True
+        if self.controller is not None:
+            self.controller.unsubscribe(self._gap_host_state)
         self.recovery.close()
         self.retained.reconcile_ui = lambda entry: None
         self.retained.recovery_note = lambda entry: None

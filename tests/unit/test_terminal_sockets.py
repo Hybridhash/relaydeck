@@ -9,14 +9,18 @@ from __future__ import annotations
 
 import asyncio
 import json
+from dataclasses import replace
 from typing import Any
 
+import pytest
 from fastapi.routing import APIRoute, APIWebSocketRoute
+from starlette.websockets import WebSocket, WebSocketState
 
 from relaydeck.gateway import terminal_wire
 from relaydeck.gateway.app import GatewayState, create_app, revoke_account_and_close
-from relaydeck.gateway.backend import FakeBackend
+from relaydeck.gateway.backend import BackendError, FakeBackend
 from relaydeck.gateway.sockets import SocketRegistry
+from tests.support.asgi_socket import AsgiSocket
 from tests.support.terminal.sockets import CAPS, _grant, _state
 
 
@@ -50,6 +54,124 @@ class _StubSocket:
 
     async def close(self, code: int = 1000, reason: str = "") -> None:
         self.closes.append((code, reason))
+
+
+@pytest.mark.parametrize("source", ["budget", "backend"])
+@pytest.mark.parametrize("race", ["live", "closed", "send_failure"])
+def test_rate_limited_gap_stays_live_unless_close_wins(monkeypatch, source, race) -> None:
+    async def scenario() -> None:
+        state, backend, _ = _state()
+        attachment, _ = backend.create_attachment(
+            "home-mac", "term-1", "shell", "acct-1", "dev-1", takeover=True
+        )
+        lease = backend.acquire_control(attachment.attachment_id, "acct-1", "dev-1")
+        if source == "budget":
+            state.input_bytes.capacity = 0
+        else:
+
+            def refuse(*args):
+                raise BackendError("rate_limited", "synthetic refusal", True)
+
+            monkeypatch.setattr(backend, "write_input", refuse)
+        original_receive, original_send = WebSocket.receive, state.sockets.send_text
+        sends = []
+
+        async def receive(socket):
+            message = await original_receive(socket)
+            if race == "closed" and message.get("bytes"):
+                await state.sockets.close_lease(lease.lease_id, "stale_revision")
+            return message
+
+        async def send(socket, text):
+            sends.append(json.loads(text))
+            if race == "send_failure":
+                await state.sockets.close_lease(lease.lease_id, "stale_revision")
+            await original_send(socket, text)
+
+        monkeypatch.setattr(WebSocket, "receive", receive)
+        monkeypatch.setattr(state.sockets, "send_text", send)
+        ticket = state.tickets.issue(_grant(lease.lease_id), 1_000_000)
+        socket = await AsgiSocket(
+            create_app(state), f"/v1/terminal/{lease.lease_id}?ticket={ticket}"
+        ).open()
+        try:
+            await socket.send_bytes(terminal_wire.encode_text(lease.lease_id, 1, 1, b"x"))
+            if race == "live":
+                message = await socket.receive()
+                assert json.loads(message["text"]) == {"kind": "gap", "detail": "rate_limited"}
+                assert not socket.task.done()
+                assert backend.open_lease(lease.lease_id) is not None
+                await socket.send_text(json.dumps({"kind": "bye"}))
+            await asyncio.wait_for(socket.task, 1)
+            assert len(sends) == (0 if race == "closed" else 1)
+            assert not backend.input_logs.get(lease.lease_id)
+        finally:
+            await socket.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("race", ["closed", "send_failure", "gap"])
+def test_input_failure_racing_close_has_one_reason_and_no_asgi_error(
+    race: str, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def scenario() -> None:
+        caplog.set_level("INFO", logger="relaydeck.lease_lifecycle")
+        state, backend, _ = _state()
+        attachment, _ = backend.create_attachment(
+            "home-mac", "term-1", "shell", "acct-1", "dev-1", takeover=True
+        )
+        lease = backend.acquire_control(attachment.attachment_id, "acct-1", "dev-1")
+        state.hosts.enroll("home-mac", account="acct-1")
+        monkeypatch.setattr(state.sockets, "host_count", lambda *args: 1)
+        send_text = state.sockets.send_text
+
+        async def fail_input(*args: Any, **kwargs: Any) -> int:
+            if race == "closed":
+                await state.sockets.close_lease(lease.lease_id, "stale_revision")
+            return 0
+
+        async def race_send(socket: Any, data: str) -> None:
+            if race == "send_failure" and json.loads(data).get("kind") == "gap":
+                await socket.close(code=1008, reason="stale_revision")
+                assert socket.application_state is WebSocketState.DISCONNECTED
+            await send_text(socket, data)
+
+        monkeypatch.setattr(state.sockets, "notify_host", fail_input)
+        monkeypatch.setattr(state.sockets, "send_text", race_send)
+        ticket = state.tickets.issue(_grant(lease.lease_id), 1_000_000)
+        socket = await AsgiSocket(
+            create_app(state), f"/v1/terminal/{lease.lease_id}?ticket={ticket}"
+        ).open()
+        await socket.send_bytes(terminal_wire.encode_text(lease.lease_id, 1, 1, b"x"))
+        assert socket.task is not None
+        await asyncio.wait_for(socket.task, 2)
+        messages = []
+        while not socket.outbound.empty():
+            messages.append(socket.outbound.get_nowait())
+        gaps = [json.loads(m["text"]) for m in messages if m.get("text")]
+        assert bool(gaps) is (race == "gap")
+        if gaps:
+            assert gaps[0]["detail"] == "host_offline"
+        closes = [r.getMessage() for r in caplog.records if "event=socket_close" in r.getMessage()]
+        assert len(closes) == 1
+        assert f"reason={'stale_revision' if race == 'closed' else 'host_offline'}" in closes[0]
+        assert not any(r.exc_info for r in caplog.records)
+        retained = backend.open_lease(lease.lease_id)
+        assert retained is not None and retained.resume_pending
+        resumed_ticket = state.tickets.issue(
+            replace(_grant(lease.lease_id), generation=lease.generation, resume=True), 1_000_000
+        )
+        resumed = await AsgiSocket(
+            create_app(state),
+            f"/v1/terminal/{lease.lease_id}?ticket={resumed_ticket}&epoch={lease.epoch}&offset=0",
+        ).open()
+        await resumed.send_text(json.dumps({"kind": "bye"}))
+        assert resumed.task is not None
+        await asyncio.wait_for(resumed.task, 2)
+        assert backend.open_lease(lease.lease_id) is None
+
+    asyncio.run(scenario())
 
 
 def test_registry_close_scopes() -> None:

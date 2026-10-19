@@ -77,6 +77,7 @@ from relaydeck.devtools.dev_server import (  # noqa: F401  (re-exported for test
 from relaydeck.gateway.app import BodyCapMiddleware, GatewayState
 from relaydeck.gateway.backend import FakeBackend
 from relaydeck.gateway.identity import REFRESH_TTL_MS, Session, SessionStore
+from relaydeck.gateway.push_io import push_io
 from relaydeck.persistence_contracts import Record, StorageUnavailable, Table
 
 if TYPE_CHECKING:
@@ -1360,7 +1361,13 @@ async def teardown_web_sid(
             await gateway_state.sockets.close_device(
                 identity.account, identity.device_id, "unauthenticated"
             )
-            gateway_state.push.revoke_device(identity.account, identity.device_id, store.now_ms())
+            await push_io(
+                gateway_state.push,
+                "revoke_device",
+                identity.account,
+                identity.device_id,
+                store.now_ms(),
+            )
         await store.close_all(sid)
         for flet_id in flet_ids:
             if flet_id in keep_flet_ids:

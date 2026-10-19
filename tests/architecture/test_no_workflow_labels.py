@@ -12,7 +12,8 @@ import tomllib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-SKIP_PREFIXES = ("extensions/terminal/third_party/",)
+# Verbatim third-party data: vendored sources and the Unicode conformance corpus.
+SKIP_PREFIXES = ("extensions/terminal/third_party/", "tests/fixtures/unicode/")
 SKIP_NAMES = {"package-lock.json", "uv.lock", "pubspec.lock", "poetry.lock", "yarn.lock"}
 SKIP_SUFFIXES = {".lock", ".json"}
 SELF = Path(__file__).resolve().relative_to(ROOT).as_posix()

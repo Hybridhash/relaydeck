@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from contextlib import asynccontextmanager, suppress
 from types import SimpleNamespace
 from urllib.parse import urlencode
@@ -75,9 +76,11 @@ class _Factory:
 
 
 @asynccontextmanager
-async def _actor(kind):
+async def _actor(kind, *, now_ms=None):
     client, state, backend, clock = _client()
-    app, token = client.app, _token(state)
+    # Sessions also enforce a native monotonic deadline derived from the issued date.
+    clock.now = int(time.time() * 1000) if now_ms is None else now_ms
+    app, token = client.app, _token(state, now=clock.now)
     requests = []
 
     async def auth():

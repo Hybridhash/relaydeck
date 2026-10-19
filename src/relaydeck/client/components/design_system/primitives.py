@@ -186,12 +186,12 @@ def AgentPill(
     )
 
 
-def CountTile(status: str, count: int, key: str | None = None) -> Any:
-    """Count tile: 32px number over a 12.5px uppercase label.
+COUNT_TILE_HEIGHT = 52
+_COUNT_STRIP_NUMBER = {**T.TYPE_COUNT_NUMBER, "size": 24, "height": 1.0}
 
-    80px tall at 100% scale (50px lines + 2x15px padding); no fixed
-    height, so the tile grows with text scale instead of clipping (A1).
-    """
+
+def CountTile(status: str, count: int, key: str | None = None) -> Any:
+    """Compact count tile: the number and an uppercase label side by side, 52px tall."""
     label = T.STATUS_LABELS.get(status, T.STATUS_LABELS[T.STATUS_UNKNOWN]).upper()
     if status == T.STATUS_BLOCKED:
         bg: str | None = T.BLOCKED
@@ -207,17 +207,19 @@ def CountTile(status: str, count: int, key: str | None = None) -> Any:
         label_ink = T.TEXT_SECONDARY
     return ft.Container(
         key=key or f"count-{status}",
-        padding=ft.Padding.symmetric(horizontal=14, vertical=15),
+        height=COUNT_TILE_HEIGHT,
+        padding=ft.Padding.symmetric(horizontal=14),
         border_radius=ft.BorderRadius.all(T.RADIUS_TILE),
         bgcolor=bg,
         border=border,
         alignment=ft.Alignment.CENTER_LEFT,
-        content=ft.Column(
-            spacing=0,
-            alignment=ft.MainAxisAlignment.CENTER,
+        content=ft.Row(
+            spacing=8,
+            tight=True,
+            vertical_alignment=ft.CrossAxisAlignment.CENTER,
             controls=[
                 ft.Text(
-                    str(count), style=text_style(FAMILY_INTERFACE, T.TYPE_COUNT_NUMBER, number_ink)
+                    str(count), style=text_style(FAMILY_INTERFACE, _COUNT_STRIP_NUMBER, number_ink)
                 ),
                 ft.Text(
                     label, style=text_style(FAMILY_INTERFACE, T.TYPE_COUNT_LABEL, label_ink, 0.05)

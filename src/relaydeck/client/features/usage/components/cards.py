@@ -304,12 +304,12 @@ def console_card(
     on_open: Callable[[], Any],
     wide: bool = False,
 ) -> ft.Control:
-    """The Console's compact Today strip: full width, at most two lines.
+    """The Console's compact Today strip, plus an explicit as-of time when supplied.
 
     Line 1 is the headline ("Today $149.02 · 1.07B tokens") with a Partial badge when some tokens
-    are unpriced. Line 2 is the tools' most pressing limits (`console_line2`). The
-    snapshot age goes to the tooltip and the accessibility label. Unavailable and capacity say so;
-    they never read as no usage."""
+    are unpriced. Line 2 is the tools' most pressing limits (`console_line2`). The snapshot
+    age, when no as-of time is supplied, goes to the tooltip and accessibility label.
+    Unavailable and capacity say so; they never read as no usage."""
     first: list[ft.Control] = [
         ui(
             card_model.headline,
@@ -344,6 +344,16 @@ def console_card(
             )
         )
     label = "Open Usage. " + (card_model.headline + ". " if card_model.headline else "")
+    if card_model.age.startswith("as of "):
+        lines.append(
+            ui(
+                card_model.age,
+                color=tokens["text_muted"],
+                size=12,
+                max_lines=None,
+                key="console-as-of",
+            )
+        )
     if second:
         label += second + ". "
     if card_model.age:

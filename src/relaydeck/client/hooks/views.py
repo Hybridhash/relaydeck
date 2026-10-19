@@ -280,6 +280,7 @@ def build_inventory_shell(
         on_inventory_filters=set_inventory_filters,
         on_inventory_more=more_inventory if pager is not None else None,
         on_inventory_refresh=refresh_inventory if pager is not None else None,
+        command_transport=transport,
         on_open_terminal=open_terminal,
         on_start_agent=lambda: (
             set_sheet("start-agent"),

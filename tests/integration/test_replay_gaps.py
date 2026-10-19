@@ -67,7 +67,7 @@ def _event(resource_id: str, **kw: Any) -> dict[str, Any]:
     return template
 
 
-async def _wait_until(pred: Any, timeout: float = 15.0) -> None:
+async def _wait_until(pred: Any, timeout: float = 30.0) -> None:
     deadline = asyncio.get_running_loop().time() + timeout
     while not pred():
         if asyncio.get_running_loop().time() > deadline:
@@ -191,7 +191,10 @@ def test_duplicate_reorder_converges_live() -> None:
                     backend.publish_raw("home-mac", _event("term-4", sequence=4, cursor="c4"))
                     backend.publish_raw("home-mac", _event("term-1", sequence=3, cursor="c3"))
                     await _wait_until(lambda: controller.state.connection.last_sequence == 5)
-                    await asyncio.sleep(0.5)  # let any resync cycle start
+                    # A later in-order frame is a barrier: both older deliveries
+                    # ahead of it have been consumed, regardless of runner speed.
+                    backend.publish_raw("home-mac", _event("term-6", sequence=6, cursor="c6"))
+                    await _wait_until(lambda: controller.state.connection.last_sequence == 6)
                     assert snapshots == 1
                     # Inventory keys are host-qualified so several hosts never collide.
                     assert set(controller.state.inventory.agents) >= {

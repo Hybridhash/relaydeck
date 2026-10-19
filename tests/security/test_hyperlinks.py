@@ -13,6 +13,7 @@ attach) is a fixed herdr argv with the terminal id as one element.
 from __future__ import annotations
 
 import asyncio
+import re
 from pathlib import Path
 
 from relaydeck.client.features.terminal.projection import TerminalProjection
@@ -81,12 +82,12 @@ def test_no_url_or_command_sink_reachable_from_output() -> None:
         "os.popen",
         "os.exec",
         "os.spawn",
-        "eval(",
-        "exec(",
         "__import__",
-        "compile(",
     ):
         assert sink not in hay, f"output-reachable sink? {sink}"
+    # Builtins only: a method of the same name (re.compile, cursor.execute) is not a sink.
+    for builtin in ("eval", "exec", "compile"):
+        assert not re.search(rf"(?<![\w.]){builtin}\(", hay), f"output-reachable sink? {builtin}("
 
 
 def test_auth_opener_fires_only_for_self_built_authorize_url() -> None:

@@ -6,6 +6,7 @@ Each reads `ShellContext` and returns the pane it used to assign inline."""
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Any
 
 import flet as ft
@@ -48,6 +49,8 @@ from relaydeck.client.features.inventory.selectors import (
     agent_names,
     agent_rows,
     host_rows,
+    pinned_first,
+    pruned_pins,
     shell_rows,
 )
 from relaydeck.client.features.settings.components import SettingsPage
@@ -113,6 +116,41 @@ def build_sizing(
     return sizing
 
 
+def _console_rows(ctx: ShellContext) -> tuple[Any, ...]:
+    """Console rows for the active filters, pinned agents first."""
+    project = ctx.project
+    paged = ctx.paged_agents
+    if paged is not None:
+        rows = tuple(
+            row
+            for row in paged
+            if (not ctx.filter_host or row.host_id == ctx.filter_host)
+            and (not project or (row.host_id == project.host_id and row.workspace_id == project.id))
+        )
+    else:
+        rows = agent_rows(
+            ctx.state,
+            ctx.query,
+            ctx.filter_host,
+            project.id if project else "",
+            ctx.filter_status,
+            project_host=project.host_id if project else "",
+        )
+    prefs = ctx.prefs
+    return pinned_first(rows, frozenset(prefs.pinned_agents) if prefs is not None else ())
+
+
+def _pins(ctx: ShellContext) -> tuple[frozenset[str], Any]:
+    prefs = ctx.prefs or TerminalPrefs()
+
+    def toggle(key: str) -> None:
+        if ctx.on_prefs is not None:
+            pinned = pruned_pins(ctx.state, prefs.pinned_agents, toggled=key)
+            ctx.on_prefs(replace(prefs, pinned_agents=pinned))
+
+    return frozenset(prefs.pinned_agents), toggle
+
+
 def build_agents_pane(ctx: ShellContext, *, detail: Any) -> Any:
     """Console destination: header, counts, filters and the agents list."""
     context_header = ctx.context_header
@@ -129,20 +167,16 @@ def build_agents_pane(ctx: ShellContext, *, detail: Any) -> Any:
     is_wide = ctx.is_wide
     mode = ctx.mode
     on_back = ctx.on_back
-    on_inventory_more = ctx.on_inventory_more
-    on_inventory_refresh = ctx.on_inventory_refresh
     on_open_shell = ctx.on_open_shell
     on_open_terminal = ctx.on_open_terminal
     on_select_agent = ctx.on_select_agent
     on_start_agent = ctx.on_start_agent
-    paged_agents = ctx.paged_agents
     pane_width = ctx.pane_width
     pick_host = ctx.pick_host
     pick_space = ctx.pick_space
     project = ctx.project
     projects = ctx.projects
     query = ctx.query
-    scroll_positions = ctx.scroll_positions
     selection = ctx.selection
     set_collapsed = ctx.set_collapsed
     set_filter_status = ctx.set_filter_status
@@ -153,23 +187,8 @@ def build_agents_pane(ctx: ShellContext, *, detail: Any) -> Any:
     state = ctx.state
     tokens = ctx.tokens
     width = ctx.width
-    console_rows = (
-        tuple(
-            row
-            for row in paged_agents
-            if (not filter_host or row.host_id == filter_host)
-            and (not project or (row.host_id == project.host_id and row.workspace_id == project.id))
-        )
-        if paged_agents is not None
-        else agent_rows(
-            state,
-            query,
-            filter_host,
-            project.id if project else "",
-            filter_status,
-            project_host=project.host_id if project else "",
-        )
-    )
+    console_rows = _console_rows(ctx)
+    pins, toggle_pin = _pins(ctx)
     agent = state.inventory.agents.get(selection)
     if detail is None:
         detail = SessionDetail(
@@ -208,7 +227,7 @@ def build_agents_pane(ctx: ShellContext, *, detail: Any) -> Any:
                             lambda: set_filters_open(not filters_open),
                             on_start_agent,
                             (lambda: set_collapsed(True)) if is_wide else None,
-                            on_refresh=on_inventory_refresh,
+                            on_refresh=ctx.on_inventory_refresh,
                             count=(
                                 f"{len(console_rows)} of {inventory_total} agents"
                                 if inventory_total is not None
@@ -341,21 +360,26 @@ def build_agents_pane(ctx: ShellContext, *, detail: Any) -> Any:
                 ft.Container(
                     expand=True,
                     content=AgentsList(  # type: ignore[call-arg]
-                        scroll_positions=scroll_positions,
+                        scroll_positions=ctx.scroll_positions,
                         key="agents-list",
                         rows=console_rows,
                         selected=selection,
                         on_select=on_select_agent,
                         on_start_agent=on_start_agent,
+                        command_transport=ctx.command_transport,
+                        state=state,
+                        foreground=ctx.foreground,
                         dark=dark,
                         phone=not is_wide,
                         total=inventory_total,
                         busy=inventory_busy,
                         more=inventory_more,
                         error=inventory_error,
-                        on_more=on_inventory_more,
-                        on_refresh=on_inventory_refresh,
+                        on_more=ctx.on_inventory_more,
+                        on_refresh=ctx.on_inventory_refresh,
                         show_header=not dark,
+                        pins=pins,
+                        on_pin=toggle_pin,
                     ),
                 ),
             ],

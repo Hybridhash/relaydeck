@@ -9,6 +9,7 @@ dying, and dead sockets release their queues.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 
@@ -22,6 +23,7 @@ from relaydeck.gateway.ring import (
     StreamFanout,
 )
 from tests.security.helpers import attach, auth, lease, make_client, mint_token, ticket
+from tests.support.asgi_socket import AsgiSocket
 
 
 def test_ring_bounded_at_2m() -> None:
@@ -116,16 +118,51 @@ def test_input_flood_rate_limited_socket_survives() -> None:
     att = attach(client, token)
     ls = lease(client, token, att["attachment_id"])
     tick = ticket(client, token, ls["lease_id"])
-    with client.websocket_connect(f"/v1/terminal/{ls['lease_id']}?ticket={tick}") as ws:
-        for seq in range(1, 151):
-            ws.send_bytes(
-                terminal_wire.encode_text(ls["lease_id"], int(ls["generation"]), seq, b"i" * 1024)
+
+    async def scenario() -> None:
+        ws = await AsgiSocket(client.app, f"/v1/terminal/{ls['lease_id']}?ticket={tick}").open()
+        try:
+            for seq in range(1, 151):
+                await ws.send_bytes(
+                    terminal_wire.encode_text(
+                        ls["lease_id"], int(ls["generation"]), seq, b"i" * 1024
+                    )
+                )
+            # receive() has a deadline and exposes closes: no unbounded TestClient
+            # wait if the handler returns without sending a close frame.
+            async with asyncio.timeout(3):
+                for _ in range(50):
+                    message = await ws.receive()
+                    assert message["type"] == "websocket.send", message
+                    assert json.loads(message["text"]) == {
+                        "kind": "gap",
+                        "detail": "rate_limited",
+                    }
+            assert not ws.task.done()
+            assert len(backend.input_logs[ls["lease_id"]]) == 100
+            assert backend.open_lease(ls["lease_id"]) is not None
+
+            # Output still flows on the same socket, without reacquiring control.
+            backend.publish_output(att["attachment_id"], ls["epoch"], b"still live")
+            await ws.send_text(json.dumps({"kind": "ack"}))
+            output = await ws.receive()
+            assert terminal_wire.decode_output(output["bytes"]).data == b"still live"
+
+            # A later allowed input uses a fresh sequence; dropped frames never replay.
+            state.now_ms = lambda: 1_001_000
+            await ws.send_bytes(
+                terminal_wire.encode_text(ls["lease_id"], int(ls["generation"]), 151, b"after")
             )
-        gaps = 0
-        for _ in range(50):
-            doc = json.loads(ws.receive_text())
-            assert doc == {"kind": "gap", "detail": "rate_limited"}
-            gaps += 1
-        assert gaps == 50
-        ws.send_text(json.dumps({"kind": "bye"}))
-    assert len(backend.input_logs[ls["lease_id"]]) == 100
+            async with asyncio.timeout(1):
+                while len(backend.input_logs[ls["lease_id"]]) < 101:
+                    await asyncio.sleep(0)
+            assert [row[1] for row in backend.input_logs[ls["lease_id"]]] == [
+                *range(1, 101),
+                151,
+            ]
+            await ws.send_text(json.dumps({"kind": "bye"}))
+            await asyncio.wait_for(ws.task, 1)
+        finally:
+            await ws.close()
+
+    asyncio.run(scenario())

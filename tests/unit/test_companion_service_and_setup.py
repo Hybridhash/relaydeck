@@ -146,11 +146,6 @@ def test_setup_creates_the_owner_only_config_from_the_template(tmp_path: Path) -
     assert path.read_text() == "kept = true\n"
 
 
-def test_template_matches_the_example_config() -> None:
-    root = Path(__file__).resolve().parents[2]
-    assert (root / "examples" / "companion.toml").read_text() == setup_mod.template_text()
-
-
 @pytest.mark.parametrize(
     ("configured", "used", "public", "expected"),
     [

@@ -6,7 +6,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 
-from relaydeck.contracts.launch import AGENT_NAME, has_control, valid_new_workspace
+from relaydeck.contracts.launch import agent_name_error, has_control, valid_new_workspace
 
 # Defaults are for standalone validation; Root passes the selected host catalog.
 MAX_NAME = 32
@@ -157,8 +157,8 @@ def validate_agent(
 ) -> dict[str, str]:
     errors: dict[str, str] = {}
     _check_destination(errors, draft, host_ids, workspace_ids_by_host)
-    if draft.name.strip() and not AGENT_NAME.fullmatch(draft.name.strip()):
-        errors["name"] = "Use 1–32 lowercase letters, digits, - or _, starting with a letter."
+    if draft.name and (error := agent_name_error(draft.name)):
+        errors["name"] = error
     if draft.kind not in kinds:
         errors["kind"] = "Choose an agent kind."
     _, argv_error = parse_argv(draft.argv_text)

@@ -15,6 +15,16 @@ from tests.support.terminal.lease_gateway import _attach, _client, _headers, _le
 from tests.support.terminal.reader_handoff import _actor, _wait
 
 
+def _refuse_input_until_restore(backend):
+    original = backend.write_input
+
+    def unavailable(*_args):
+        raise BackendError("host_offline", "synthetic unavailable host", True)
+
+    backend.write_input = unavailable
+    return original
+
+
 @pytest.mark.parametrize("kind", ["agent", "shell"])
 @pytest.mark.parametrize("cause", ["gap", "reset", "overflow"])
 def test_real_session_recovers_reader_without_control_acquisition_resize_or_input_replay(
@@ -29,8 +39,8 @@ def test_real_session_recovers_reader_without_control_acquisition_resize_or_inpu
                 ctx.backend.open_lease(lease.lease_id).expires_ms,
             )
             if cause == "gap":
-                # Real ASGI rate-limit gap: attempted input is withheld, not replayed.
-                ctx.state.input_bytes = SimpleNamespace(check=lambda *_args, **_kwargs: False)
+                # A fatal input refusal drives recovery; rate limiting stays live.
+                _refuse_input_until_restore(ctx.backend)
                 await controller._client.send_input(b"withheld")
             else:
                 fanout = ctx.backend.fanout_for(lease.attachment_id)
@@ -44,6 +54,8 @@ def test_real_session_recovers_reader_without_control_acquisition_resize_or_inpu
             await asyncio.wait_for(ctx.readers[0], 2)
             if cause != "gap":
                 await _wait(lambda: ctx.backend.open_lease(lease.lease_id).resume_pending)
+            else:
+                controller.set_host_online(True)
             before = list(ctx.requests)
             outcome = await actor.drive_recovery()
             assert outcome in ("resumed", "reattached")
@@ -79,10 +91,11 @@ def test_real_session_recovers_reader_without_control_acquisition_resize_or_inpu
 def test_failed_reopen_restores_recovery_flags_and_expires_without_reacquiring_control(kind):
     async def scenario():
         async with _actor(kind) as ctx:
-            ctx.state.input_bytes = SimpleNamespace(check=lambda *_args, **_kwargs: False)
+            _refuse_input_until_restore(ctx.backend)
             await ctx.actor.controller._client.send_input(b"withheld")
             await asyncio.wait_for(ctx.readers[0], 2)
             controller = ctx.actor.controller
+            controller.set_host_online(True)
             pending = controller.pending_resume
             assert pending is not None
             ctx.factory.fail_next = True
@@ -103,13 +116,13 @@ def test_resumed_reader_preserves_input_sequence_without_replaying_failed_input(
             controller = ctx.actor.controller
             await controller._client.send_input(b"before")
             await _wait(lambda: len(ctx.backend.input_logs.get(ctx.lease.lease_id, [])) == 1)
-            limiter = ctx.state.input_bytes
-            ctx.state.input_bytes = SimpleNamespace(check=lambda *_args, **_kwargs: False)
+            original_write = _refuse_input_until_restore(ctx.backend)
             await controller._client.send_input(b"withheld")
             await asyncio.wait_for(ctx.readers[0], 2)
+            controller.set_host_online(True)
             await ctx.actor.drive_recovery()
             assert [item[3] for item in ctx.backend.input_logs[ctx.lease.lease_id]] == [b"before"]
-            ctx.state.input_bytes = limiter
+            ctx.backend.write_input = original_write
             await controller._client.send_input(b"after")
             await _wait(lambda: len(ctx.backend.input_logs[ctx.lease.lease_id]) == 2)
             assert [(item[1], item[3]) for item in ctx.backend.input_logs[ctx.lease.lease_id]] == [
@@ -117,6 +130,42 @@ def test_resumed_reader_preserves_input_sequence_without_replaying_failed_input(
                 (3, b"after"),
             ]
             assert ctx.backend.resize_log == []
+
+    run(scenario())
+
+
+@pytest.mark.parametrize("kind", ["agent", "shell"])
+def test_rate_limited_gap_keeps_real_session_reader_lease_and_draft(kind):
+    async def scenario():
+        async with _actor(kind) as ctx:
+            actor, controller, lease = ctx.actor, ctx.actor.controller, ctx.lease
+            requests = list(ctx.requests)
+            limiter = ctx.state.input_bytes
+            ctx.state.input_bytes = SimpleNamespace(check=lambda *_args, **_kwargs: False)
+            await controller._client.send_input(b"dropped")
+            await _wait(
+                lambda: actor._snoop.last_control is not None
+                and actor._snoop.last_control.get("detail") == "rate_limited"
+            )
+            assert not ctx.readers[0].done()
+            assert controller.pending_resume is None and not controller.reattach_needed
+            assert not controller.writer_revoked and not controller.ui_input_fenced
+            assert controller.gap_detail == "" and controller.gap_recovery.attempt == 0
+            ctx.backend.publish_output(lease.attachment_id, lease.epoch, b"after\r\n")
+            await _wait(lambda: bytes(actor.output_log) == b"initial\r\nafter\r\n")
+            ctx.state.input_bytes = limiter
+            await controller._client.send_input(b"permitted")
+            await _wait(lambda: len(ctx.backend.input_logs.get(lease.lease_id, [])) == 1)
+            assert [(item[1], item[3]) for item in ctx.backend.input_logs[lease.lease_id]] == [
+                (2, b"permitted")
+            ]
+            assert actor.controller is controller and actor.lease is lease
+            live = ctx.backend.open_lease(lease.lease_id)
+            assert live is not None and live.generation == controller.generation
+            assert not live.resume_pending
+            assert ctx.requests == requests and ctx.backend.resize_log == []
+            if kind == "agent":
+                assert actor.store.draft == "retained draft"
 
     run(scenario())
 

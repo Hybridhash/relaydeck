@@ -292,9 +292,14 @@ def use_open_hold(
             return None
         # Supersede a settled size still waiting behind an in-flight write.
         queued.current = None
-        pending.current = (captured, (cols, rows))
+        previous, pending.current = pending.current, (captured, (cols, rows))
         if holding.current:
-            arm(quiet_delay())
+            # The native side reports a resize only when its grid changed; an unchanged grid is a
+            # re-send (input enable, verification, reset), not layout activity, and never
+            # postpones the quiet window. The latest grid is still published at release.
+            repeated = previous is not None and previous == (captured, (cols, rows))
+            if not repeated or timer.current is None:
+                arm(quiet_delay())
         else:
             arm_cap(RESIZE_MAX_WAIT_S)
             arm(RESIZE_SETTLE_S)

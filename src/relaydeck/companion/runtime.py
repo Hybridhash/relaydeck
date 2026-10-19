@@ -106,6 +106,11 @@ def _uvicorn_logging_config() -> dict[str, Any]:
         "handlers": ["default"],
         "propagate": False,
     }
+    config["loggers"]["relaydeck.gateway.loop_watch"] = {
+        "level": "WARNING",
+        "handlers": ["default"],
+        "propagate": False,
+    }
     return config
 
 
@@ -567,7 +572,7 @@ class CompanionRuntime:
             limits_status=(scheduler.status if scheduler is not None else None),
             limits_refresh_status=(scheduler.refresh_status if scheduler is not None else None),
             request_limits_refresh=request_refresh if scheduler is not None else None,
-            on_usage_open=scheduler.request_auto_on_open if scheduler is not None else None,
+            on_usage_open=scheduler.notify_usage_open if scheduler is not None else None,
         )
         self.gateway.usage.check_setup()
 
@@ -792,7 +797,7 @@ class CompanionRuntime:
                     proxy_headers=False,
                     timeout_graceful_shutdown=5,
                 ),
-                self._remove_route,
+                self._request_shutdown,
             )
         self.server_task = asyncio.create_task(self._serve_owned(), name="companion-web")
         async with asyncio.timeout(10):
@@ -945,17 +950,27 @@ class CompanionRuntime:
             with suppress(Exception):
                 route.remove()
 
-    async def close(self) -> None:
+    def _request_shutdown(self) -> None:
+        """Shared stop/signal edge, before Uvicorn starts its graceful wait."""
         self._remove_route()
         if self.stop is not None:
             self.stop.set()
+        if self.usage_store is not None:
+            self.usage_store.begin_shutdown()
+
+    async def close(self) -> None:
+        self._request_shutdown()
+        # Stop accepting work before joining producers, so joins never queue behind
+        # usage requests in the default pool.
+        if self.server is not None:
+            self.server.should_exit = True
+        if self.gateway is not None and self.gateway.usage is not None:
+            await self.gateway.usage.close()
         await self._finish(self.webpush_task)
         if self.usage_collector is not None:
             await asyncio.to_thread(self.usage_collector.stop)
-            await asyncio.to_thread(self.usage_collector.join)
         if self.limits_scheduler is not None:
             await asyncio.to_thread(self.limits_scheduler.stop)
-            await asyncio.to_thread(self.limits_scheduler.join)
         await self._finish(self.persistence_task)
         try:
             await self._finish(self.link_task)
@@ -963,18 +978,17 @@ class CompanionRuntime:
                 async with asyncio.timeout(6):
                     await self.source.close()
         finally:
-            if self.server is not None:
-                self.server.should_exit = True
             try:
                 await self._finish(self.server_task)
             finally:
                 if self.gateway is not None:
-                    if self.gateway.usage is not None:
-                        await self.gateway.usage.close()
                     if self.usage_store is not None:
-                        await asyncio.to_thread(self.usage_store.close)
-                    self.gateway.backend.journal.close()
-                    self.gateway.push.close()
+                        try:
+                            await asyncio.to_thread(self.usage_store.close)
+                        except Exception:
+                            LOG.warning("companion_shutdown_pending resource=usage_store")
+                    await asyncio.to_thread(self.gateway.backend.journal.close)
+                    await asyncio.to_thread(self.gateway.push.close)
                 if self.webpush_provider is not None:
                     self.webpush_provider.close()
                 if self.webpush_store is not None:

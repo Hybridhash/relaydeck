@@ -42,6 +42,7 @@ CAPABILITIES = (
 COMMAND_KINDS = (
     "agent.prompt",
     "agent.start",
+    "agent.rename",
     "shell.create",
     "session.close",
 )
@@ -350,13 +351,23 @@ SCHEMAS: dict[str, dict[str, Any]] = {
         "$id": "relaydeck/gateway/v1/terminal-control",
         "type": "object",
         "required": ["kind"],
+        "oneOf": [
+            {
+                "properties": {"kind": {"enum": ["history_reset"]}},
+                "required": ["epoch", "offset", "incomplete"],
+            },
+            {"properties": {"kind": {"enum": ["ack", "gap", "reset", "bye"]}}},
+        ],
         "additionalProperties": False,
         "properties": {
             "kind": {
                 "type": "string",
-                "enum": ["ack", "gap", "reset", "bye"],
+                "enum": ["ack", "gap", "reset", "bye", "history_reset"],
             },
             "applied": {"type": "integer", "minimum": 0},
+            "epoch": {"type": "string", "minLength": 1, "maxLength": 128},
+            "offset": {"type": "integer", "minimum": 0},
+            "incomplete": {"type": "boolean"},
             "detail": {"type": "string", "maxLength": 256},
             "generation": {"type": "integer", "minimum": 1, "maximum": 0xFFFFFFFF},
             "input_seq": {"type": "integer", "minimum": 1, "maximum": 0xFFFFFFFF},

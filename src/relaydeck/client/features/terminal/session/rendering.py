@@ -292,5 +292,35 @@ class RendererBinding:
                 except Exception:  # noqa: BLE001 - renderer best effort
                     pass
 
+    async def reset_history(self, current: Callable[[], bool]) -> bool:
+        """Reset the captured native parser and verify its acknowledgement without PTY I/O."""
+        terms = tuple(self._terms.items())
+        for token, term in terms:
+            if term is None or not current() or self._terms.get(token) is not term:
+                return False
+            rebind = getattr(term, "rebind_resumed", None)
+            if not callable(rebind):
+                return False  # An unacknowledged native reset never enables input.
+            viewer = term.viewer_generation
+            term.set_input_enabled(False)
+            term.reset(reason="stream_reset")
+            resets = term._reset_count
+
+            def valid(
+                token: int = token, term: Any = term, viewer: int = viewer, resets: int = resets
+            ) -> bool:
+                return (
+                    term is not None
+                    and current()
+                    and term.viewer_generation == viewer
+                    and term._reset_count == resets
+                    and self._terms.get(token) is term
+                )
+
+            outcome = await rebind(timeout=1.5, current=valid)
+            if not valid() or outcome.status != "resumed":
+                return False
+        return current()
+
     async def drain_close_tasks(self) -> None:
         await asyncio.gather(*self._close_tasks, return_exceptions=True)

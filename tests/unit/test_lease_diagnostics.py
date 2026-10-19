@@ -12,6 +12,50 @@ from relaydeck.client.features.terminal.renewal import LeaseRenewalDriver
 from relaydeck.companion.runtime import _uvicorn_logging_config
 from relaydeck.lease_diagnostics import LeaseTrace
 
+
+@pytest.mark.parametrize(
+    "detail",
+    [
+        "host_offline",
+        "stale_revision",
+        "rate_limited",
+        "stale_epoch",
+        "attach_dead",
+        "ticket=PRIVATE_GRANT",
+    ],
+)
+def test_received_gap_close_logs_only_allowlisted_detail(
+    detail: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    import json
+
+    from relaydeck.client.features.sync.controller import TerminalStreamClient
+    from tests.support.scripted_sessions import ScriptedTerminalSocket
+
+    async def scenario() -> None:
+        caplog.set_level("INFO", logger="relaydeck.lease_lifecycle")
+        socket = ScriptedTerminalSocket()
+        client = TerminalStreamClient(
+            lambda _: socket, lambda *_: None, lambda _: None, lambda _: None
+        )
+        await client.open("lease-1", 1, "synthetic")
+        socket.queue(("text", json.dumps({"kind": "gap", "detail": detail})))
+        if detail == "rate_limited":
+            # This input-only refusal is non-fatal; only a later bye ends the reader.
+            socket.queue(("text", json.dumps({"kind": "bye"})))
+        await asyncio.wait_for(client.run(), 1)
+        expected = "other" if detail.startswith("ticket=") else detail
+        if detail == "rate_limited":
+            expected = "bye"
+            assert "reason=rate_limited" not in caplog.text
+        assert "event=socket_close" in caplog.text and f"reason={expected}" in caplog.text
+        assert "PRIVATE_GRANT" not in caplog.text
+        assert all(r.exc_info is None for r in caplog.records)
+        await client.close()
+
+    asyncio.run(scenario())
+
+
 MARKER = "Bearer secret; ticket=grant; Cookie=secret; /private/source.py; terminal contents"
 
 

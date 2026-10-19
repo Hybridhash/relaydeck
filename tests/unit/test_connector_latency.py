@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import itertools
 import json
 import os
 import pty
@@ -17,7 +18,12 @@ import pytest
 
 from relaydeck.connector.attach import AttachSession
 from relaydeck.connector.herdr import HerdrAdapter
-from relaydeck.connector.link import ConnectorLink, LinkConfig
+from relaydeck.connector.link import (
+    OUTPUT_COALESCE_MAX_S,
+    OUTPUT_COALESCE_S,
+    ConnectorLink,
+    LinkConfig,
+)
 from relaydeck.connector.source import (
     MAX_RELAY_BYTES,
     TUNNEL_MAX_OUTPUT,
@@ -55,11 +61,44 @@ def _write_repaint(fd: int, data: bytes) -> None:
                 selector.select(max(0, deadline - time.monotonic()))
 
 
+def _batches_close_only_at_quiet_or_cap(
+    reads: list[tuple[float, int]], flushed: list[float], sizes: list[int]
+) -> None:
+    """A repaint ships as one batch unless its pieces fell silent for the quiet gap or kept
+    arriving past the cap. Reads are stamped before they wake the forwarder and flushes after
+    its timer, so both margins are strictly on the product's side; the slack covers the loop's
+    timer resolution only. The scheduler's pace never decides a batch boundary."""
+    ends = list(itertools.accumulate(size for _, size in reads))
+    end = 0
+    for flush, size in zip(flushed[:-1], sizes[:-1], strict=True):
+        start, end = end, end + size
+        window = [at for (at, _), total in zip(reads, ends, strict=True) if start < total <= end]
+        assert window, (reads, sizes)
+        quiet = flush - window[-1]
+        held = flush - window[0]
+        assert quiet >= OUTPUT_COALESCE_S - 0.001 or held >= OUTPUT_COALESCE_MAX_S - 0.001, (
+            quiet,
+            held,
+        )
+
+
 @pytest.mark.parametrize("slow_metadata", [False, True])
 @pytest.mark.parametrize("repeat", range(3))
 def test_real_pty_repaint_forwarded_without_idle_staircase(
-    tmp_path: Path, slow_metadata: bool, repeat: int
+    tmp_path: Path, slow_metadata: bool, repeat: int, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    collector_sleeps: list[float] = []
+    real_sleep = asyncio.sleep
+
+    async def sleep(delay: float, result: Any = None) -> Any:
+        task = asyncio.current_task()
+        owner = getattr(task.get_coro(), "__qualname__", "") if task is not None else ""
+        if owner.endswith("_collect_pty"):
+            collector_sleeps.append(delay)
+        return await real_sleep(delay, result)
+
+    monkeypatch.setattr(asyncio, "sleep", sleep)
+
     async def scenario() -> None:
         master, slave = pty.openpty()
         tty.setraw(slave)
@@ -80,8 +119,20 @@ def test_real_pty_repaint_forwarded_without_idle_staircase(
         assert len(repaint) == 10240
         frames: list[bytes] = []
         timings: list[float] = []
+        flushed: list[float] = []
+        reads: list[tuple[float, int]] = []
         done = asyncio.Event()
         start = time.monotonic()
+        pump = source.pump_live
+
+        def pump_live() -> int:
+            stamp = time.monotonic()
+            collected = pump()
+            if collected:
+                reads.append((stamp, collected))
+            return collected
+
+        source.pump_live = pump_live  # type: ignore[method-assign]
 
         class Transport(_ScriptedTransport):
             async def send_text(self, text: str) -> None:
@@ -90,7 +141,8 @@ def test_real_pty_repaint_forwarded_without_idle_staircase(
                 if doc["kind"] == "terminal.output":
                     assert (doc["terminal_id"], doc["epoch"]) == ("t1", "e1")
                     frames.append(base64.b64decode(doc["data_b64"]))
-                    timings.append((time.monotonic() - start) * 1000)
+                    flushed.append(time.monotonic())
+                    timings.append((flushed[-1] - start) * 1000)
                     if sum(map(len, frames)) >= len(repaint):
                         done.set()
                         stop.set()
@@ -155,8 +207,12 @@ def test_real_pty_repaint_forwarded_without_idle_staircase(
                 )
             )
             assert b"".join(frames) == repaint
-            assert timings[-1] < 100
-            assert len(frames) <= 2
+            # Wall time is the scheduler's; a starved runner forwards late without being wrong.
+            # The staircase is caught structurally: the collector yields, never sleeps on a
+            # timer, and a batch boundary needs a quiet gap or the cap.
+            assert timings[-1] < 1000
+            assert set(collector_sleeps) == {0}
+            _batches_close_only_at_quiet_or_cap(reads, flushed, list(map(len, frames)))
             if slow_metadata:
                 kinds = [json.loads(text)["kind"] for text in transport.sent]
                 assert (

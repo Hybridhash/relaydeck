@@ -176,6 +176,11 @@ def test_connector_disconnect_gives_gap_and_never_replays_input(tmp_path: Path) 
             frame = terminal_wire.encode_text(lease.lease_id, lease.generation, 1, b"do not replay")
             await viewer.send_bytes(frame)
             assert (await _next_kind(viewer, "gap"))["detail"] == "host_offline"
+            # A gap retires this reader. Later frames on it cannot repair the
+            # connection or reach a returned connector; recovery needs a new reader.
+            assert viewer.task is not None
+            await asyncio.wait_for(viewer.task, 2)
+            recorded = list(backend.input_logs.get(lease.lease_id, []))
             tunnel = await AsgiSocket(app, "/v1/connectors", token=host_token).open()
             try:
                 assert (await _next_kind(tunnel, "hello"))["epochs"]
@@ -183,8 +188,14 @@ def test_connector_disconnect_gives_gap_and_never_replays_input(tmp_path: Path) 
                 await viewer.send_bytes(
                     terminal_wire.encode_resize(lease.lease_id, lease.generation, 2, 90, 30)
                 )
-                doc = await _next_kind(tunnel, "terminal.resize")
-                assert doc["input_seq"] == 2  # no old text in an outbox or reconnect
+                await tunnel.send_text(json.dumps({"kind": "ping"}))
+                while True:
+                    doc = json.loads((await tunnel.receive())["text"])
+                    assert doc["kind"] not in ("terminal.input", "terminal.resize")
+                    if doc["kind"] == "pong":
+                        break
+                assert backend.input_logs.get(lease.lease_id, []) == recorded
+                assert backend.resize_log == []
                 assert backend.drain_outbox("home-mac") == []
             finally:
                 await tunnel.close()
@@ -250,7 +261,10 @@ def test_large_snapshot_link_round_trip_and_upstream_continuity_rotation(tmp_pat
         stop = asyncio.Event()
         task = asyncio.create_task(link.run(stop))
         try:
-            await _wait(lambda: len(backend.snapshots["home-mac"]["workspaces"]) == 600)
+            await _wait(
+                lambda: len(backend.snapshots["home-mac"]["workspaces"]) == 600
+                and link._pushed_chunks > 1
+            )
             assert link._pushed_chunks > 1
             assert all(len(text.encode()) <= 64 * 1024 for text in tunnel.sent)
             previous = source.created[0]
@@ -517,6 +531,8 @@ def test_host_rotation_fences_old_tunnel_and_foreign_dispatch(tmp_path: Path) ->
             assert (await _next_kind(fresh, "hello"))["epochs"] == []
             await fresh.send_text(json.dumps({"kind": "ping"}))
             assert (await _next_kind(fresh, "pong"))["kind"] == "pong"
+            # Keepalive intake is independent of the journal/outbox lane.
+            await _wait(lambda: not backend._outbox.get("home-mac"))
             status = backend.command_status("old-owner-command")
             assert status is not None and status["status"] == "accepted"
             assert backend.drain_outbox("home-mac") == []

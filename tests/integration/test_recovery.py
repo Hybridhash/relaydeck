@@ -69,7 +69,7 @@ def _submit(
 
 
 def _backup_live(path: Path, dest: Path) -> None:
-    """Checkpoint-then-copy backup of a live sqlite store (runbook 10).
+    """Checkpoint-then-copy backup of a live sqlite store.
 
     The owner closes cleanly (close() runs wal_checkpoint(TRUNCATE)),
     so the single main file is the whole backup; sidecars are copied
@@ -177,7 +177,7 @@ def test_revocation_log_reapplied_after_stale_restore(tmp_path: Path) -> None:
     shutil.copy2(tmp_path / "push.stale.db", tmp_path / "push.db")
     revived = PushStore(tmp_path / "push.db")
     try:
-        # The stale backup really does resurrect: the runbook says so.
+        # The stale backup really does resurrect, so a restore must replay the revocation log.
         assert revived.device_active("acct-1", "droid-1") is True
         for account, device_id, at in revocation_log:
             assert revived.revoke_device(account, device_id, at) is True

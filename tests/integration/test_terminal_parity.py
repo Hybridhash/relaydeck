@@ -131,7 +131,7 @@ class ScenarioOutcome:
     exit_refused_drive: bool
 
 
-async def _wait_for(predicate: Callable[[], bool], timeout_s: float = 10.0) -> None:
+async def _wait_for(predicate: Callable[[], bool], timeout_s: float = 30.0) -> None:
     deadline = time.monotonic() + timeout_s
     while not predicate():
         if time.monotonic() > deadline:

@@ -13,6 +13,7 @@ from relaydeck_terminal.terminal import ResumeOutcome
 
 from relaydeck.client import open_timing
 from relaydeck.client.features.terminal.renewal import lease_deadline_monotonic
+from relaydeck.lease_diagnostics import log_ui_resume_incomplete
 
 if TYPE_CHECKING:
     from relaydeck.client.features.terminal.agent_session import AgentSession
@@ -168,6 +169,7 @@ class _Attempt:
     unsubscribe: Callable[[], None] | None = None
     stopped: bool = False
     lease_failed: bool = False
+    recover: Callable[[str], Awaitable[bool]] | None = None
 
 
 class TerminalUIResumes:
@@ -259,7 +261,9 @@ class TerminalUIResumes:
 
     def _schedule_reload(self, attempt: _Attempt) -> None:
         """Resume a replaced native viewer through identity-verified recovery."""
-        recover = getattr(attempt.session, "recover_after_reload", None)
+        recover = getattr(attempt.session, "recover_after_reload", None) or getattr(
+            attempt.session, "_recover_after_reload", None
+        )
         if not callable(recover) or self._closed:
             return
 
@@ -269,16 +273,35 @@ class TerminalUIResumes:
             except Exception:
                 return
             if (
-                authorized
+                not self._closed
+                and authorized
                 and not attempt.session.disposed
+                and attempt.session.foreground
+                and not attempt.session.paused
                 and terminal_transition(attempt.session).control is None
                 and attempt.session.lease is attempt.lease
             ):
-                await recover()
+                if attempt.controller.live_edge_pending and attempt.recover is not None:
+                    if (
+                        attempt.session.controller is attempt.controller
+                        and attempt.session.attachment is attempt.attachment
+                        and attempt.session.interaction_generation == attempt.lifecycle
+                        and attempt.session.current_term is attempt.term
+                        and self._lease_live(attempt)
+                    ):
+                        await attempt.recover("overflow")
+                else:
+                    await recover()
 
         task = asyncio.create_task(reload())
         self._tasks.add(task)
-        task.add_done_callback(self._tasks.discard)
+
+        def finished(done: asyncio.Task[None]) -> None:
+            self._tasks.discard(done)
+            if not done.cancelled() and done.exception() is not None:
+                _diag.warning("ui_output_recovery_failed")
+
+        task.add_done_callback(finished)
 
     def _cancel(self, attempt: _Attempt) -> None:
         if (
@@ -356,6 +379,8 @@ class TerminalUIResumes:
             or term._channel_id is None
         ):
             return None
+        if controller.live_edge_pending and controller._live_edge_opening:
+            return None  # Its replacement reader must consume the baseline before another probe.
         for key, seen in tuple(self._seen.items()):
             if key not in self._active and (
                 seen.session.disposed or seen.session.current_term is not seen.term
@@ -409,6 +434,7 @@ class TerminalUIResumes:
         )
         self._serial += 1
         attempt.ordinal = self._serial
+        attempt.recover = recover
         # Bind before scheduling so early cancellation cannot strand output on a dead channel.
         try:
             term.rebind_transport()
@@ -474,7 +500,11 @@ class TerminalUIResumes:
                     return None
                 if not self._lease_live(attempt):
                     session.require_ui_recovery()
+                    log_ui_resume_incomplete("lease_expired")
                     return ResumeOutcome("incomplete", "lease_expired")
+                if controller.live_edge_pending and recover is not None:
+                    self._schedule_reload(attempt)
+                    return None
                 open_timing.mark_current("probe_sent", session=session)
                 probe = asyncio.create_task(term.rebind_resumed(timeout=timeout, current=verified))
                 shutdown = asyncio.create_task(closed.wait())
@@ -495,6 +525,7 @@ class TerminalUIResumes:
                     if not self._lease_live(attempt):
                         term.set_input_enabled(False)
                         session.require_ui_recovery()
+                        log_ui_resume_incomplete("lease_expired")
                         return ResumeOutcome("incomplete", "lease_expired")
                     if outcome.reason == "ok_after_overflow":
                         controller.fence_ui_input(True)
@@ -527,7 +558,14 @@ class TerminalUIResumes:
                             *term._last_view_size,
                         )
                 elif outcome.status == "incomplete":
-                    if outcome.reason != "superseded" or attempt.lease_failed:
+                    log_ui_resume_incomplete(outcome.reason)
+                    if (
+                        outcome.reason != "superseded"
+                        and not attempt.lease_failed
+                        and (controller.live_edge_pending or getattr(term, "_overflowed", False))
+                    ):
+                        controller.on_viewer_overflow()
+                    elif outcome.reason != "superseded" or attempt.lease_failed:
                         controller.fence_ui_input(True)
                         term.set_input_enabled(False)
                         if recover is None or attempt.lease_failed:
@@ -551,6 +589,7 @@ class TerminalUIResumes:
                     controller.fence_ui_input(True)
                     term.set_input_enabled(False)
                     session.require_ui_recovery()
+                log_ui_resume_incomplete("resume_failed")
                 return ResumeOutcome("incomplete", "resume_failed")
             finally:
                 for child in (probe, shutdown):

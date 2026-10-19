@@ -49,6 +49,7 @@ from relaydeck.connector.attach import (
     plan_agent_attach,
     plan_shell_attach,
 )
+from relaydeck.connector.attach_lifecycle import AttachLifecycle
 from relaydeck.connector.herdr import (
     EXPECTED_PROTOCOL,
     HerdrAdapter,
@@ -677,6 +678,7 @@ class HerdrSource:
         self._clock = clock
         self._boot_tag = boot_tag if boot_tag is not None else secrets.token_hex(4)
         self._binary = binary
+        self._attach_io: AttachLifecycle | None = None
         self._pool = pool if pool is not None else AttachmentPool()
         # Observers are read-only taps, not control-retention slots. Never
         # evict a healthy tap just because another mapped observer arrives.
@@ -1436,7 +1438,30 @@ class HerdrSource:
         return await self._adapter.workspace_create(cwd=cwd, label=label)
 
     async def tab_rename(self, tab_id: str, label: str) -> dict[str, Any]:
-        return await self._adapter.tab_rename(tab_id, label)
+        try:
+            return await self._adapter.tab_rename(tab_id, label)
+        finally:
+            self._snapshot_dirty = True
+
+    async def agent_list(self) -> list[dict[str, Any]]:
+        return await self._adapter.agent_list()
+
+    async def agent_rename(self, target: str, name: str | None) -> dict[str, Any]:
+        try:
+            agents = await self._adapter.agent_list()
+            matches = [
+                row for row in agents if isinstance(row, dict) and row.get("terminal_id") == target
+            ]
+            if not matches:
+                raise HerdrError("agent_not_found", "agent is no longer listed")
+            if len(matches) != 1:
+                raise HerdrProtocolError("bad_agent_result", "ambiguous agent identity")
+            pane = matches[0].get("pane_id")
+            if not isinstance(pane, str) or not 1 <= len(pane) <= 128:
+                raise HerdrProtocolError("bad_agent_result", "agent pane unavailable")
+            return await self._adapter.agent_rename(pane, name)
+        finally:
+            self._snapshot_dirty = True
 
     async def agent_start(
         self,
@@ -1767,6 +1792,22 @@ class HerdrSource:
     def _epoch_for(self, terminal_id: str) -> str:
         return self._epochs.get(terminal_id, "")
 
+    def enable_async_attachments(self) -> None:
+        if self._attach_io is None:
+            self._attach_io = AttachLifecycle(self._wake_output_readers)
+            for session, _, _ in self._attached.values():
+                session.lifecycle = self._attach_io
+
+    async def wait_attachments(self, terminal_id: str, epoch: str) -> None:
+        """Wait only for this route's pending spawn, never unrelated process reaping."""
+        kind = self._epoch_kinds.get(terminal_id)
+        held = self._attached.get(f"{kind}:{terminal_id}")
+        if held is not None and self._epoch_for(terminal_id) == epoch:
+            session = held[0]
+            ready = getattr(session, "_spawn_done", None)
+            if getattr(session, "spawn_pending", False) and ready is not None:
+                await ready.wait()
+
     def note_epochs(self, routes: Mapping[str, Mapping[str, str]]) -> dict[str, str]:
         """Apply the gateway epoch table and auto-attach newly mapped
         terminals (shell kind without takeover, agent kind with the
@@ -2016,7 +2057,11 @@ class HerdrSource:
             return None
         kind = self._epoch_kinds.get(terminal_id)
         held = self._attached.get(f"{kind}:{terminal_id}")
-        return held[0] if held is not None and held[0].running else None
+        return (
+            held[0]
+            if held is not None and held[0].running and not getattr(held[0], "spawn_pending", False)
+            else None
+        )
 
     def pump_live(self) -> int:
         """Pump attached PTY bytes through the gateway epoch table."""
@@ -2077,7 +2122,7 @@ class HerdrSource:
         timeout = max(0, min(deadlines) - self._observe_now_ms()) / 1000 if deadlines else None
         try:
             for session, terminal_id, _ in self._attached.values():
-                if not self._epoch_for(terminal_id):
+                if getattr(session, "spawn_pending", False) or not self._epoch_for(terminal_id):
                     continue
                 fd = session.fileno()
                 loop.add_reader(fd, notify)
@@ -2151,6 +2196,7 @@ class HerdrSource:
                     "40",
                 ],
                 capture_stderr=True,
+                lifecycle=self._attach_io,
             )
             session.spawn()
             return session
@@ -2177,6 +2223,7 @@ class HerdrSource:
             session = AttachSession(
                 plan_shell_attach(self._binary, herdr_terminal, cols=cols, rows=rows),
                 capture_stderr=True,
+                lifecycle=self._attach_io,
             )
             session.spawn()
             return session
@@ -2209,6 +2256,7 @@ class HerdrSource:
             session = AttachSession(
                 plan_agent_attach(self._binary, herdr_target, takeover=True, cols=cols, rows=rows),
                 capture_stderr=True,
+                lifecycle=self._attach_io,
             )
             session.spawn()
             return session
@@ -2231,6 +2279,8 @@ class HerdrSource:
         A dead session never stalls the pump silently. Returns bytes collected."""
         collected = 0
         for key, (session, terminal_id, _) in list(self._attached.items()):
+            if getattr(session, "spawn_pending", False):
+                continue
             if isinstance(session, AttachSession):
                 session.collect_diagnostics()
             epoch = epoch_for(terminal_id)
@@ -2325,6 +2375,9 @@ class HerdrSource:
         self._pool.close_all()
         self._observer_pool.close_all()
         self._attached.clear()
+        if self._attach_io is not None:
+            await self._attach_io.close()
+            self._attach_io = None
         for timer in self._resize_timers.values():
             timer.cancel()
         self._resize_timers.clear()

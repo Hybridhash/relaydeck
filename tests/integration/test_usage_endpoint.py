@@ -105,6 +105,7 @@ def test_wire_metadata_and_privacy_through_http_bridge(endpoint, tmp_path):
         "schema_version",
         "host_id",
         "generated_ms",
+        "as_of_ms",
         "timezone",
         "price_table_date",
         "next_cursor",
@@ -398,7 +399,7 @@ def test_days_pagination_keeps_original_snapshot_across_midnight(endpoint):
 
 
 def test_space_filter_workspace_only_live_labels_and_fallback(endpoint):
-    client, state, store, _, token, _ = endpoint
+    client, state, store, service, token, _ = endpoint
     populate(store, 1)
     write(store, (UsageEvent("unlinked", "other", NOW, "model-b", Counters(3), Basis.PER_CALL),))
     snapshot = state.backend.snapshots["home-mac"]
@@ -421,7 +422,7 @@ def test_space_filter_workspace_only_live_labels_and_fallback(endpoint):
     assert sum(r["counters"]["input_uncached"] for r in selected["rows"]) == 10
     state.backend.event_logs.clear()
     snapshot["workspaces"] = []
-    fallback = get(client, token, {**PARAMS, "space_id": "space-a"}).json()
+    fallback = _refreshed(state, service, token, {**PARAMS, "space_id": "space-a"}).json()
     assert fallback["workspaces"] == [
         {"workspace_id": "space-a", "label": "space-a", "last_used_day": "2026-10-11"}
     ]
@@ -452,7 +453,7 @@ def test_web_companion_route_forwarding_preserves_session_guard(endpoint):
 def test_setup_evidence_is_frozen_and_independent_of_missing_quota(endpoint, tmp_path):
     from relaydeck.usage.hook_setup import HookSetupCheck
 
-    client, _, _, service, token, clock = endpoint
+    client, state, _, service, token, clock = endpoint
     timer = [0.0]
     service._checks["kind-a", "jsonl-message-usage-v1"] = HookSetupCheck(
         tmp_path.resolve() / "settings",
@@ -468,7 +469,26 @@ def test_setup_evidence_is_frozen_and_independent_of_missing_quota(endpoint, tmp
     timer[0] = 59
     assert get(client, token).json()["kinds"][0]["limits_setup"]["checked_ms"] == NOW
     timer[0] = 60
-    assert get(client, token).json()["kinds"][0]["limits_setup"]["checked_ms"] == NOW + 1000
+    assert (
+        _refreshed(state, service, token).json()["kinds"][0]["limits_setup"]["checked_ms"]
+        == NOW + 1000
+    )
+
+
+def _refreshed(state, service, token, params=PARAMS):
+    """Observe the real cached HTTP handoff, then its completed background refresh."""
+
+    async def scenario():
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=create_app(state)), base_url="http://gw"
+        ) as http:
+            assert (await http.get(URL, params=params, headers=auth(token))).status_code == 200
+            await asyncio.gather(*tuple(service._inflight.values()))
+            response = await http.get(URL, params=params, headers=auth(token))
+            await asyncio.gather(*tuple(service._inflight.values()))
+            return response
+
+    return asyncio.run(scenario())
 
 
 def test_cancelled_request_keeps_query_admission_until_worker_finishes(endpoint, monkeypatch):
@@ -521,6 +541,44 @@ def _slow_report(service, monkeypatch, started, release):
 
     monkeypatch.setattr(service, "_report", delayed)
     return calls
+
+
+def test_cached_range_returns_while_another_report_holds_the_worker(endpoint, monkeypatch):
+    _, state, store, service, token, _ = endpoint
+    populate(store)
+    started, release = threading.Event(), threading.Event()
+
+    async def check():
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=create_app(state)), base_url="http://gw"
+        ) as http:
+            warm = await http.get(URL, params=PARAMS, headers=auth(token))
+            assert warm.status_code == 200 and warm.json()["next_cursor"]
+            cached = next(iter(service._reuse.values()))
+            calls = _slow_report(service, monkeypatch, started, release)
+            service.wait_s = 0.02
+            other = {"from": "2026-10-05", "to": "2026-10-11"}
+            slow = asyncio.create_task(http.get(URL, params=other, headers=auth(token)))
+            try:
+                async with asyncio.timeout(1):
+                    while not started.is_set():
+                        await asyncio.sleep(0.001)
+                one, two = await asyncio.wait_for(
+                    asyncio.gather(
+                        http.get(URL, params=PARAMS, headers=auth(token)),
+                        http.get(URL, params=PARAMS, headers=auth(token)),
+                    ),
+                    0.5,
+                )
+                assert one.status_code == two.status_code == 200
+                assert one.content == two.content == warm.content
+                assert service._reuse[cached.binding] is cached
+                assert len(calls) == 1 and service._busy and not slow.done()
+            finally:
+                release.set()
+                assert (await slow).status_code == 200
+
+    asyncio.run(check())
 
 
 def test_two_concurrent_identical_requests_both_succeed_with_one_computation(endpoint, monkeypatch):

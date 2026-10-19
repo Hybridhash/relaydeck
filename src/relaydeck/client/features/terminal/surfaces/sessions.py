@@ -5,6 +5,7 @@ snooping socket, the recovery driver, `DetailSessions`, gated composer send.
 from __future__ import annotations
 
 import json
+import time
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any
 
@@ -26,6 +27,11 @@ from relaydeck.client.features.terminal.paste_review import (
     STALE_MESSAGE,
     PasteReviewSession,
     bind_review_session,
+)
+from relaydeck.client.features.terminal.session.recovery_state import (
+    DRIVE_DEFERRED,
+    DRIVE_EXHAUSTED,
+    DRIVE_REACQUIRE,
 )
 from relaydeck.client.features.terminal.stream import EMULATOR_FRESH
 
@@ -132,8 +138,15 @@ async def drive_recovery(
     target: tuple[str, int] | None = None
     action = DRIVE_IDLE
     if fresh_viewer:
-        target = ("", 0)  # authoritative retained baseline, not the old viewer's cursor
+        target = ("", 0)  # a new renderer needs the capped authoritative baseline
         action = DRIVE_REATTACHED
+    elif controller.live_edge_pending:
+        if controller._live_edge_opening:
+            return DRIVE_DEFERRED
+        if controller._overflow_attempts >= 3:
+            return DRIVE_EXHAUSTED
+        target = (controller._client.epoch, controller._client.next_offset)
+        action = DRIVE_RESUMED
     elif pending is not None and not (
         pending.epoch == "" and pending.offset == 0 and offered is not None
     ):
@@ -147,7 +160,49 @@ async def drive_recovery(
         action = DRIVE_REATTACHED
     if target is None:
         return DRIVE_IDLE
-    ticket = await ticket_fn(controller.lease_id)
+    if (
+        not fresh_viewer
+        and not controller.live_edge_pending
+        and not await controller.wait_gap_recovery(current)
+    ):
+        if controller.gap_recovery.exhausted:
+            return DRIVE_EXHAUSTED
+        return DRIVE_DEFERRED if current() else DRIVE_REFUSED_EXITED
+    if (
+        not fresh_viewer
+        and not controller.live_edge_pending
+        and controller.mode == "control"
+        and controller.gap_recovery.detail
+        and (
+            controller.gap_recovery.delay > 2
+            or time.monotonic() - controller.gap_recovery.gap_at >= 5
+        )
+    ):
+        return DRIVE_REACQUIRE
+    if not current():
+        return DRIVE_REFUSED_EXITED
+    if (
+        not fresh_viewer
+        and controller.live_edge_pending
+        and not controller.begin_live_edge_recovery()
+    ):
+        return DRIVE_EXHAUSTED
+    try:
+        ticket = await ticket_fn(controller.lease_id)
+    except BaseException as exc:
+        # The shell package imports session.base, which imports these surfaces.
+        # Resolve its error type only after surface initialization has completed.
+        from relaydeck.client.features.shell.ops import ShellOpError
+
+        controller._live_edge_opening = False
+        if (
+            controller.live_edge_pending
+            and isinstance(exc, ShellOpError)
+            and exc.code == "lease_expired"
+        ):
+            controller.invalidate_writer("lease_expired")
+            return DRIVE_REFUSED_EXITED
+        raise
     if not current():
         return DRIVE_REFUSED_EXITED
     await controller.close()
@@ -155,6 +210,9 @@ async def drive_recovery(
         return DRIVE_REFUSED_EXITED
     pending = controller.pending_resume
     reattach = controller.reattach_needed
+    live_edge_pending = controller.live_edge_pending
+    if fresh_viewer:
+        controller.live_edge_pending = False
     controller.pending_resume = None
     controller.reattach_needed = False
     try:
@@ -163,6 +221,8 @@ async def drive_recovery(
         # The reopen failed (transport down): restore both flags so the
         # recovery stays actionable for an explicit retry instead of
         # silently dropping to idle with a dead stream.
+        controller._live_edge_opening = False
+        controller.live_edge_pending = live_edge_pending
         controller.pending_resume = pending
         controller.reattach_needed = reattach
         raise

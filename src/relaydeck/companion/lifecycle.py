@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from relaydeck.companion.private import check_private, private_dir, read_private, write_json
+from relaydeck.offload import settled
 
 HEARTBEAT_S = 0.25
 STALE_S = 3.0
@@ -120,10 +121,24 @@ async def request_stop(directory: Path, *, timeout: float = 12.0) -> bool:
     deadline = asyncio.get_running_loop().time() + timeout
     while asyncio.get_running_loop().time() < deadline:
         observed = status(directory)
-        if observed["state"] == "stopped" or observed.get("instance") not in (None, instance):
+        if observed["state"] in ("stopping", "stopped") or observed.get("instance") not in (
+            None,
+            instance,
+        ):
             return True
         await asyncio.sleep(0.1)
     return False  # Never fall back to killing a process or listener.
+
+
+async def _close_owned(resources: Resources, lease: StateLease) -> None:
+    """Keep cleanup and its heartbeat owned until every started close has settled."""
+    closing = asyncio.create_task(resources.close())
+    try:
+        while not closing.done():
+            lease.publish("stopping")
+            await asyncio.wait({closing}, timeout=HEARTBEAT_S)
+    finally:
+        await settled(closing)
 
 
 async def supervise(
@@ -179,7 +194,12 @@ async def supervise(
             lease.publish("stopping")
             try:
                 if resources is not None:
-                    await resources.close()
+                    # Cancellation must not abandon cleanup or release the state lock.
+                    # The owned task also keeps the nonce/heartbeat live while settling.
+                    await settled(asyncio.create_task(_close_owned(resources, lease)))
+            except BaseException:
+                result = 1
+                raise
             finally:
                 lease.publish("stopped", exit_code=result)
         return result

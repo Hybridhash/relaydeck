@@ -454,7 +454,7 @@ def test_ack_and_frame_before_first_tick_keep_event_order(lines):
     assert timing.done
 
 
-def test_later_ack_needs_a_new_frame_even_if_first_paint_was_recorded(lines):
+def test_output_after_first_paint_keeps_a_ready_terminal_ready(lines):
     term, session = _native_pair()
     timing = OpenTiming("agent", _Clock())
     timing.observe(term)
@@ -463,13 +463,50 @@ def test_later_ack_needs_a_new_frame_even_if_first_paint_was_recorded(lines):
     _native_frame(term)
     timing.poll(term, session)
     assert "painted" in timing._marks
+    # A busy terminal keeps acknowledging; no further frame report is owed before ready.
     _native_ack(term, 2)
+    _native_ack(term, 3)
     timing.mark("hold_released")
     timing.poll(term, session)
-    assert not timing.done
+    assert timing.done
+    assert _fields(lines[-1])["outcome"] == "ready"
+
+
+def test_a_quiet_renderer_without_a_frame_report_paints_after_a_settled_tick(lines):
+    clock = _Clock()
+    term, session = _native_pair()
+    timing = OpenTiming("agent", clock)
+    timing.observe(term)
+    timing.mark("hold_armed")
+    _native_ack(term)
+    timing.poll(term, session)
+    assert "first_ack" in timing._marks and "painted" not in timing._marks
+    clock.now += open_timing.PAINT_SETTLE_S
+    timing.mark("hold_released")
+    timing.poll(term, session)
+    fields = _fields(lines[-1])
+    assert fields["outcome"] == "ready" and fields["painted"] == fields["fully_ready"]
+
+
+def test_keyboard_resizes_after_readiness_never_time_out_a_working_terminal(lines):
+    clock = _Clock()
+    term, session = _native_pair()
+    timing = OpenTiming("agent", clock)
+    timing.observe(term)
+    timing.mark("hold_armed")
+    _native_ack(term)
     _native_frame(term)
     timing.poll(term, session)
-    assert timing.done
+    for count in range(2, 8):
+        clock.now += 0.3
+        _native_ack(term, count)
+        timing.count("resizes")
+        timing.count("size_reports")
+        timing.poll(term, session)
+    timing.mark("hold_released")
+    timing.poll(term, session)
+    fields = _fields(lines[-1])
+    assert fields["outcome"] == "ready" and fields["resizes"] == "6"
 
 
 def test_replaced_renderers_late_frame_is_ignored(lines):

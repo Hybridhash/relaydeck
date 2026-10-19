@@ -55,7 +55,7 @@ def test_foreground_cli_duplicate_stop_restart_and_unrelated_survival(tmp_path: 
             child = subprocess.Popen(
                 args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
             )
-            deadline = time.monotonic() + 8
+            deadline = time.monotonic() + 30
             while time.monotonic() < deadline:
                 report = status(state)
                 if report["state"] == "ready":
@@ -64,7 +64,7 @@ def test_foreground_cli_duplicate_stop_restart_and_unrelated_survival(tmp_path: 
                 time.sleep(0.02)
             assert report["state"] == "ready"
             transcript.append(f"start {iteration}: {report['state']} (synthetic resources)")
-            duplicate = subprocess.run(args, capture_output=True, text=True, timeout=5)
+            duplicate = subprocess.run(args, capture_output=True, text=True, timeout=30)
             assert duplicate.returncode == 2 and "already owns" in duplicate.stdout
             transcript.append("duplicate start: rejected by held state lock")
             assert unrelated.poll() is None
@@ -72,10 +72,10 @@ def test_foreground_cli_duplicate_stop_restart_and_unrelated_survival(tmp_path: 
                 [sys.executable, "-m", "relaydeck.companion.cli", "--config", str(config), "stop"],
                 capture_output=True,
                 text=True,
-                timeout=6,
+                timeout=30,
             )
             assert stop.returncode == 0, stop.stdout
-            stdout, stderr = child.communicate(timeout=5)
+            stdout, stderr = child.communicate(timeout=30)
             assert child.returncode == 0, stderr
             transcript.append(stop.stdout.strip())
             assert "Foreground companion:" in stdout

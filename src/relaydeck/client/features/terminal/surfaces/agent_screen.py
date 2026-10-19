@@ -75,6 +75,7 @@ from relaydeck.client.features.terminal.surfaces.direct_typing import (
 from relaydeck.client.features.terminal.surfaces.input_area import (
     build_expanded_input,
 )
+from relaydeck.client.features.terminal.surfaces.phone_composer import use_composer_keyboard
 from relaydeck.client.features.terminal.surfaces.phone_dock import (
     build_phone_dock,
 )
@@ -209,6 +210,25 @@ def AgentTerminalScreen(
     phone = tier != "expanded"
     mobile_mode, set_mobile_mode = ft.use_state("reading")
     previous_tier = ft.use_ref(tier)
+    # The key bar is memoised on its inputs; these wrappers keep one identity per screen while
+    # always dispatching to the handlers of the current render.
+    key_handlers: Any = ft.use_ref(None)
+
+    def stable_key_actions() -> tuple[Any, Any, Any]:
+        def item(entry: Any, hold: bool) -> Any:
+            handler = key_handlers.current[0]
+            return handler(entry, hold) if handler is not None else None
+
+        def paste() -> Any:
+            handler = key_handlers.current[1]
+            return handler() if handler is not None else None
+
+        def select() -> Any:
+            return key_handlers.current[2]()
+
+        return item, paste, select
+
+    key_item, key_paste, key_select = ft.use_memo(stable_key_actions, dependencies=[])
 
     def keep_workflow_on_resize() -> None:
         if previous_tier.current == "expanded" and tier != "expanded":
@@ -216,6 +236,22 @@ def AgentTerminalScreen(
         previous_tier.current = tier
 
     ft.use_effect(keep_workflow_on_resize, dependencies=[tier, workflow])
+
+    (
+        composer_focused,
+        composer_closing,
+        composer_focus_changed,
+        dismiss_composer_keyboard,
+        note_send,
+    ) = use_composer_keyboard(
+        enabled=phone
+        and mobile_mode == "compose"
+        and workflow == WORKFLOW_AGENT_COMPOSER
+        and composer_focusable
+        and not terminal.selection.open,
+        binding=direct_binding,
+        on_focus_change=on_composer_focus,
+    )
 
     tokens = palette(dark)
     (window_size, set_window_size, host_height, set_host_height, row_metric) = use_row_metric(
@@ -399,6 +435,7 @@ def AgentTerminalScreen(
     on_paste, paste_hint, clear_paste_hint = use_paste_fallback(
         on_paste, open_keyboard, direct_binding, can_open_keyboard
     )
+    key_handlers.current = (on_mobile_item, on_paste, on_open_selection)
     controls.append(
         build_terminal_host(
             attached_output=attached_output,
@@ -431,6 +468,7 @@ def AgentTerminalScreen(
             on_scroll=on_scroll,
             on_selection_change=on_selection_change,
             on_terminal=on_terminal,
+            on_tap=None,
             on_view_report=on_view_report,
             phone=phone,
             report_size=report_size,
@@ -511,14 +549,8 @@ def AgentTerminalScreen(
         return wrapped
 
     def send_then_leave() -> Any:
-        # Send leaves typing mode. With a typing-exit owner the exit
-        # is explicit and logged; otherwise the debounced focus owner handles it.
-        result = on_send()
-        if on_typing_exit is not None:
-            on_typing_exit("send")
-        elif split and on_composer_focus is not None:
-            on_composer_focus(False)
-        return result
+        note_send()
+        return on_send()
 
     def leave_when_control_is_lost() -> None:
         # Taking over, releasing or losing control ends typing mode.
@@ -545,6 +577,9 @@ def AgentTerminalScreen(
             close_keyboard=close_keyboard,
             comp_size=comp_size,
             composer_focusable=composer_focusable,
+            composer_closing=composer_closing,
+            composer_focused=composer_focused,
+            dismiss_composer_keyboard=dismiss_composer_keyboard,
             composing=composing,
             dark=dark,
             detail_width=detail_width,
@@ -566,14 +601,14 @@ def AgentTerminalScreen(
             on_attach_picture=on_attach_picture,
             on_cancel_blocked=on_cancel_blocked,
             on_clear_error=on_clear_error,
-            on_composer_focus=on_composer_focus,
+            on_composer_focus=composer_focus_changed,
             on_confirm_blocked=on_confirm_blocked,
             on_direct_input=on_direct_input,
             on_draft_change=on_draft_change,
             on_input=on_input,
-            on_mobile_item=on_mobile_item,
-            on_open_selection=on_open_selection,
-            on_paste=on_paste,
+            on_mobile_item=key_item if on_mobile_item is not None else None,
+            on_open_selection=key_select,
+            on_paste=key_paste if on_paste is not None else None,
             on_remove_picture=on_remove_picture,
             paste_hint=paste_hint,
             paste_review=paste_review,

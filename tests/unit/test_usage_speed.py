@@ -145,7 +145,7 @@ def test_generation_bumps_on_apply(tmp_path: Path) -> None:
         assert store.data_generation() > before
 
 
-def test_gateway_reuses_snapshot_until_generation_changes(tmp_path: Path) -> None:
+def test_gateway_serves_asof_until_generation_refresh_completes(tmp_path: Path) -> None:
     config = UsageConfig(
         "UTC",
         (UsageSourceConfig("kind-a", "jsonl-message-usage-v1", Path("/tmp"), "A"),),
@@ -167,16 +167,21 @@ def test_gateway_reuses_snapshot_until_generation_changes(tmp_path: Path) -> Non
         service._report = counting  # type: ignore[method-assign]
         query = UsageQuery("h1", "2026-10-11", "2026-10-11")
 
-        async def run() -> tuple[bytes, bytes, bytes]:
+        async def run() -> tuple[bytes, bytes, bytes, bytes]:
             first = await service.page(query, "owner", "device-a")
             second = await service.page(query, "owner", "device-a")
+            await asyncio.gather(*tuple(service._inflight.values()))
             write(store, (event("k2"),))
             third = await service.page(query, "owner", "device-a")
-            return bytes(first.body), bytes(second.body), bytes(third.body)
+            await asyncio.gather(*tuple(service._inflight.values()))
+            fourth = await service.page(query, "owner", "device-a")
+            await asyncio.gather(*tuple(service._inflight.values()))
+            await service.close()
+            return bytes(first.body), bytes(second.body), bytes(third.body), bytes(fourth.body)
 
-        first, second, third = asyncio.run(run())
-        assert first == second
-        assert third != first
+        first, second, third, fourth = asyncio.run(run())
+        assert first == second == third  # The cached as-of page stays usable while refreshing.
+        assert fourth != first
         assert calls == 2
 
 

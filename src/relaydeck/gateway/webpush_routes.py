@@ -22,6 +22,7 @@ from fastapi.responses import JSONResponse, Response
 
 from relaydeck.gateway import webpush
 from relaydeck.gateway.push import PREF_CATEGORY_TO_UI, PREF_UI_TO_CATEGORY
+from relaydeck.gateway.push_io import push_io
 from relaydeck.gateway.webpush_store import WebPushStore
 
 MAX_BODY_BYTES = 2048
@@ -110,14 +111,14 @@ def build_router(
             JSONResponse(
                 {
                     "publicKey": webpush.public_key_b64u(vapid_key),
-                    "enabled": settings.enabled and store.sending_enabled(),
+                    "enabled": settings.enabled and await push_io(store, "sending_enabled"),
                     # Whether THIS device has a subscription: the banner and Settings read it.
-                    "subscribed": store.subscription(who[0], who[1]) is not None,
+                    "subscribed": await push_io(store, "subscription", who[0], who[1]) is not None,
                     "csrf": csrf_token(topic_key, who[0], who[1]),
                     # THIS device's choice: a change brings back a bar the user closed.
                     "choice": sorted(
                         PREF_CATEGORY_TO_UI[name]
-                        for name in preferences.preferences(who[0], who[1])
+                        for name in await push_io(preferences, "preferences", who[0], who[1])
                     ),
                 }
             )
@@ -147,7 +148,9 @@ def build_router(
         if not registrations.allow(who[1], now) or not account_registrations.allow(who[0], now):
             return _error(429, "rate_limited")
         try:
-            store.put_subscription(
+            await push_io(
+                store,
+                "put_subscription",
                 who[0],
                 who[1],
                 str(doc["endpoint"]),
@@ -168,7 +171,7 @@ def build_router(
         refused = _mutation_refused(request, who)
         if refused is not None:
             return refused
-        store.delete_subscription(who[0], who[1])
+        await push_io(store, "delete_subscription", who[0], who[1])
         return _no_store(Response(status_code=204))
 
     @router.post("/v1/push/web/resolve")
@@ -191,7 +194,7 @@ def build_router(
         token = doc.get("route") if isinstance(doc, dict) else None
         if not isinstance(token, str):
             return _error(400, "invalid")
-        found = store.resolve_route(who[0], who[1], token, int(clock() * 1000))
+        found = await push_io(store, "resolve_route", who[0], who[1], token, int(clock() * 1000))
         if found is None:
             return _error(404, "not_found")
         return _no_store(JSONResponse(found))
@@ -201,7 +204,7 @@ def build_router(
         who = identity(request)
         if who is None:
             return _error(401, "unauthorized")
-        chosen = preferences.preferences(who[0], who[1])
+        chosen = await push_io(preferences, "preferences", who[0], who[1])
         return _no_store(
             JSONResponse({"categories": sorted(PREF_CATEGORY_TO_UI[name] for name in chosen)})
         )
@@ -233,7 +236,9 @@ def build_router(
             or not set(values) <= set(PREF_UI_TO_CATEGORY)
         ):
             return _error(400, "invalid")
-        preferences.set_preferences(
+        await push_io(
+            preferences,
+            "set_preferences",
             who[0],
             who[1],
             [PREF_UI_TO_CATEGORY[value] for value in values],

@@ -187,7 +187,6 @@ PHONE_ORDER = tuple(f"console-nav-{name}" for name in ("console", "terminals", "
 FOCUS_ORDER: dict[str, tuple[str, ...]] = {
     # Hosts is a Settings section: the rail, then the Settings controls, then the host rows.
     "inventory-hosts-layout": (*RAIL_ORDER, "settings-*", "host-*"),
-    "session-dock": ("terminal-session-switcher",),
     # Inventory shell (nav, banner alert, search, create, rows, detail).
     "inventory-agents": (
         *RAIL_ORDER,

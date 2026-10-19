@@ -91,6 +91,14 @@ from typing import TYPE_CHECKING, Any
 
 from relaydeck.client.features.composer.commands import agent_prompt_command
 from relaydeck.client.features.composer.pictures import Picture
+from relaydeck.client.features.composer.reconcile import (
+    DELIVERED,
+    FAILED,
+    RECONCILE_BUDGET_S,
+    RECONCILE_INTERVAL_S,
+    reconcile_command,
+)
+from relaydeck.client.features.terminal.diagnostics import diagnostics_logger
 from relaydeck.client.features.terminal.paste_policy import (
     PasteReview,
     character_count,
@@ -101,6 +109,7 @@ from relaydeck.client.features.terminal.paste_policy import (
     preview,
 )
 from relaydeck.domain.models import AgentStatus
+from relaydeck.lease_diagnostics import opaque
 
 if TYPE_CHECKING:
     from relaydeck.client.features.terminal.controller import TerminalController
@@ -186,6 +195,7 @@ class ComposerMessage:
     status_revision_at_send: int
     observed_working_after_send: bool = False
     tracks_agent_progress: bool = True
+    command_id: str = ""
     state: DeliveryState = field(default_factory=DeliveryState)
 
 
@@ -265,7 +275,14 @@ class ComposerStore:
         sender: Callable[[bytes], Awaitable[None]] | None = None,
         observe_command: Callable[[str, str], Awaitable[dict[str, Any]]] | None = None,
         expected_revision: int = 0,
+        on_change: Callable[[], None] | None = None,
+        reconcile_budget_s: float = RECONCILE_BUDGET_S,
+        reconcile_interval_s: float = RECONCILE_INTERVAL_S,
     ) -> None:
+        self._on_change = on_change
+        self._reconcile_budget = reconcile_budget_s
+        self._reconcile_interval = reconcile_interval_s
+        self._reconcile_tasks: set[asyncio.Task[None]] = set()
         self._target = target
         self._submit_command = submit_command
         self._prompt_text = prompt_text
@@ -496,9 +513,21 @@ class ComposerStore:
         self._probe = generation_probe
         self._sender = sender
 
-    def unbind_writer(self) -> None:
+    def _log_reset(self, site: str) -> None:
+        diagnostics_logger().info(
+            "composer_reset site=%s submission=%s term=%s",
+            site if site in {"detach", "fence_hidden", "takeover", "reconnect_flow"} else "other",
+            self._submission
+            if self._submission
+            in {"idle", "sending", "acked", "progress", "unknown", "failed", "blocked-inserted"}
+            else "other",
+            opaque("terminal", self._host_id, self._target),
+        )
+
+    def unbind_writer(self, site: str = "detach") -> None:
         """Drop the live writer (disconnect/teardown). A dead writer must
         fail the blocked path rather than retain a stale session."""
+        self._log_reset(site)
         self._probe = None
         self._sender = None
 
@@ -538,6 +567,7 @@ class ComposerStore:
     ) -> str:
         command_id = self._command_id_factory()
         self._last_command_id = command_id
+        message.command_id = command_id
         command = agent_prompt_command(
             command_id=command_id,
             host_id=self._host_id,
@@ -786,6 +816,8 @@ class ComposerStore:
     def clear_sensitive(self) -> None:
         """Fence receipts and in-flight closures before dropping account-owned text."""
         self._send_generation += 1
+        for task in tuple(self._reconcile_tasks):
+            task.cancel()
         self._blocked_binding = None
         self._blocked_frames.clear()
         self._messages.clear()
@@ -812,7 +844,7 @@ class ComposerStore:
             self._error = LOST_DELIVERY_MESSAGE
 
     # -- reconnect ----------------------------------------------------------------------
-    def reconnect(self) -> None:
+    def reconnect(self, site: str = "reconnect_flow") -> None:
         """Settle reconnect without replaying anything.
 
         An in-flight send becomes `unknown` (a late outcome is discarded by
@@ -820,6 +852,7 @@ class ComposerStore:
         review is dropped because its writer generation is stale. The draft
         is preserved byte-identical and no prompt or PTY byte is emitted.
         Rebinding the live writer afterwards is the owner's job."""
+        self._log_reset(site)
         self._send_generation += 1
         if self._pending_blocked is not None:
             pending = self._pending_blocked
@@ -835,9 +868,80 @@ class ComposerStore:
                     message.state = DeliveryState(
                         kind=DELIVERY_UNKNOWN, message=LOST_DELIVERY_MESSAGE
                     )
+                    self._start_reconcile(message, site)
                     break
             self._submission = SUBMISSION_UNKNOWN
             self._error = LOST_DELIVERY_MESSAGE
+
+    # -- reconciliation ---------------------------------------------------------------------
+    def _start_reconcile(self, message: ComposerMessage, site: str) -> None:
+        """Read the cut-off prompt's status by command id; never resend it."""
+        observe = self._observe_command
+        if observe is None or not message.command_id:
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        started = self._monotonic()
+
+        async def run() -> None:
+            outcome, refusal = await reconcile_command(
+                observe,
+                self._host_id,
+                message.command_id,
+                budget_s=self._reconcile_budget,
+                interval_s=self._reconcile_interval,
+                sleep=self._sleep,
+                monotonic=self._monotonic,
+            )
+            waited = int((self._monotonic() - started) * 1000)
+            self._settle_reconciled(message, outcome, refusal, site, waited)
+
+        task = loop.create_task(run(), name="relaydeck-send-reconcile")
+        self._reconcile_tasks.add(task)
+        task.add_done_callback(self._reconcile_tasks.discard)
+
+    def _settle_reconciled(
+        self,
+        message: ComposerMessage,
+        outcome: str,
+        refusal: Exception | None,
+        site: str,
+        waited_ms: int,
+    ) -> None:
+        """Settle exactly this message; a newer message or draft is never touched."""
+        diagnostics_logger().info(
+            "send_reconcile outcome=%s waited_ms=%s site=%s",
+            outcome,
+            waited_ms,
+            site if site in {"detach", "fence_hidden", "takeover", "reconnect_flow"} else "other",
+        )
+        if message not in self._messages or message.state.kind != DELIVERY_UNKNOWN:
+            return
+        latest = self._messages[-1] is message and self._submission == SUBMISSION_UNKNOWN
+        if outcome == DELIVERED:
+            if latest:
+                progress = self._progress_after_acknowledgment(message)
+                message.state = DeliveryState(kind=DELIVERY_DELIVERED, progress=progress)
+                busy = progress in (PROGRESS_WORKING, PROGRESS_DONE)
+                self._submission = SUBMISSION_PROGRESS if busy else SUBMISSION_ACKED
+                self._clear_sent(message.text)
+                self._error = None
+            else:
+                message.state = DeliveryState(
+                    kind=DELIVERY_DELIVERED, progress=PROGRESS_ACKNOWLEDGED
+                )
+        elif outcome == FAILED:
+            reason = f"{HERDR_REJECTED_PREFIX}: {_exc_message(refusal) if refusal else ''}"
+            message.state = DeliveryState(kind=DELIVERY_FAILED, message=reason)
+            if latest:
+                self._submission = SUBMISSION_FAILED
+                self._error = reason
+        else:
+            return
+        if self._on_change is not None:
+            self._on_change()
 
     # -- terminal outcomes ------------------------------------------------------------------
     def _mark_failed(self, message: ComposerMessage, text: str) -> str:

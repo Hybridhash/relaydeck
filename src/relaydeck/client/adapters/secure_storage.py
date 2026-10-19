@@ -8,8 +8,6 @@ capability failure, never fall back to plaintext preferences.
 
 from __future__ import annotations
 
-from typing import Any
-
 from flet_secure_storage.secure_storage import SecureStorage
 from flet_secure_storage.types import AndroidOptions
 
@@ -66,8 +64,3 @@ class FletSecureCredentialStore(CredentialStore):
         for stored in owned:
             if stored.startswith(KEY_PREFIX):
                 await self._service.remove(stored, android=self._android)
-
-
-def native_service_opts() -> dict[str, Any]:
-    """Default Android options hook (biometric enforcement stays opt-in)."""
-    return {"android": AndroidOptions()}

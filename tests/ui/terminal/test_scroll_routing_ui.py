@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import struct
 from dataclasses import replace
 from typing import Any
@@ -308,7 +309,9 @@ def test_native_buffer_change_invalidates_pending_selection_and_old_control_scro
             await opener
             assert not session.term_state.selection.open
             count = len(channel.sent)
-            await old_up._trigger_event("click", None)
+            # The old control may already be unmounted; either way its click sends nothing.
+            with contextlib.suppress(RuntimeError):
+                await old_up._trigger_event("click", None)
             assert len(channel.sent) == count and _inputs(socket) == []
         finally:
             if opener is not None and not opener.done():

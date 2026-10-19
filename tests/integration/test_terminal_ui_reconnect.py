@@ -16,6 +16,7 @@ import pytest
 from relaydeck_terminal import protocol
 from relaydeck_terminal.terminal import RelayDeckTerminal
 
+from relaydeck.client.features.sync.controller import SyncController
 from relaydeck.client.resources import AppResources
 from relaydeck.client.retained_sessions import RetainedSessions
 from relaydeck.client.serve import WebSessionStore, build_web_app, make_relaydeck_main
@@ -23,6 +24,7 @@ from relaydeck.gateway.app import GatewayState, create_app
 from relaydeck.gateway.backend import FakeBackend
 from tests.support.gateway.cookie_socket import CookieSocket, until
 from tests.support.scripted_sessions import make_scripted_sessions
+from tests.support.sync.scripted_sync import _ScriptedTransport
 
 
 @pytest.mark.parametrize("kind", ["agent", "shell"])
@@ -57,6 +59,9 @@ def test_verified_r1a_reuse_triggers_bound_native_probe_without_new_root_or_owne
 
         pool = RetainedSessions()
         entry = await pool.acquire("mac", kind, "mac:a", "e1", lambda: domain)
+        # Resources subscribe to host state, so use the real subscription lifecycle.
+        # No metadata network task runs.
+        metadata = SyncController(_ScriptedTransport())
 
         def run_app(page: Any, **kwargs: Any) -> AppResources:
             @ft.component
@@ -77,7 +82,7 @@ def test_verified_r1a_reuse_triggers_bound_native_probe_without_new_root_or_owne
                 "owns_client": False,
                 "retained": pool,
                 "bridge": None,
-                "controller": SimpleNamespace(resume_ui=lambda: None),
+                "controller": metadata,
                 "transport": None,
                 "commands": SimpleNamespace(close=noop),
             }
@@ -210,5 +215,6 @@ def test_verified_r1a_reuse_triggers_bound_native_probe_without_new_root_or_owne
                     await socket.close()
                 for resource in resources:
                     await resource.close()
+                assert metadata._listeners == []
 
     asyncio.run(scenario())

@@ -106,8 +106,8 @@ def test_device_space_persistence_restores_actual_root_rows_counts_and_dropdown(
             assert restored.find("inventory-project").value == "home-mac:w1"
             assert restored.find("agents-count").value == "2 agents"
             assert [card.key for card in restored.find("agents-tiles").controls] == [
-                "agent-home-mac:b1",
-                "agent-home-mac:w1",
+                "agent-swipe-home-mac:b1",
+                "agent-swipe-home-mac:w1",
             ]
             await restored.set_props_and_fire("host-chip-lab-mac", {}, "click")
             assert json.loads(store.data[PREFS_KEY])["space_key"] == ""

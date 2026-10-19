@@ -28,7 +28,10 @@ import sys
 import time
 from collections.abc import Callable, Collection
 from dataclasses import dataclass, field
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
+
+if TYPE_CHECKING:
+    from relaydeck.connector.attach_lifecycle import AttachLifecycle
 
 if sys.platform == "win32":  # pragma: no cover
     raise ImportError("relaydeck.connector.attach is POSIX-only")
@@ -146,6 +149,10 @@ class AttachSession:
     _stderr_seen: bool = False
     _stderr_eof: bool = False
     _stderr_category: str = "unavailable"
+    lifecycle: AttachLifecycle | None = field(default=None, repr=False)
+    spawn_pending: bool = False
+    _spawn_done: asyncio.Event | None = None
+    _lifecycle_revision: int = 0
 
     def diagnostic_fileno(self) -> int | None:
         if (
@@ -208,9 +215,12 @@ class AttachSession:
 
     @property
     def running(self) -> bool:
-        return self._proc is not None and self._proc.poll() is None
+        return self.spawn_pending or (self._proc is not None and self._proc.poll() is None)
 
     def spawn(self) -> None:
+        if self.lifecycle is not None:
+            self.lifecycle.spawn(self)
+            return
         if self._proc is not None:
             raise AttachError("already spawned")
         master, slave = pty.openpty()
@@ -308,12 +318,15 @@ class AttachSession:
         """One bounded, cancellable PTY write; partial failures are not replayed."""
         if self._fd is None or not self.running:
             raise AttachError("process not running")
+        fd, proc, revision = self._fd, self._proc, self._lifecycle_revision
         total = 0
         with_timeout = asyncio.timeout(5.0)
         async with with_timeout:
             while total < len(data):
+                if self._fd != fd or self._proc is not proc or self._lifecycle_revision != revision:
+                    raise AttachError("attachment replaced; input outcome uncertain")
                 try:
-                    written = os.write(self._fd, memoryview(data)[total:])
+                    written = os.write(fd, memoryview(data)[total:])
                 except BlockingIOError:
                     await asyncio.sleep(0.005)
                     continue
@@ -358,6 +371,8 @@ class AttachSession:
         return self.close(timeout=timeout)
 
     def close(self, timeout: float = 5.0) -> int | None:
+        if self.lifecycle is not None:
+            return self.lifecycle.close_session(self, timeout)
         proc, self._proc = self._proc, None
         fd, self._fd = self._fd, None
         try:

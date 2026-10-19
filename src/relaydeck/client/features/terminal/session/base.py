@@ -1,9 +1,7 @@
-"""Shared lifecycle ordering for agent and shell sessions.
+"""Shared identity, lifecycle and input generations for terminal sessions.
 
-Owns identity, observable state, input generations and composed capabilities.
-Lifecycle templates fence input before asynchronous teardown and invoke hooks
-for workflow-specific behavior. Composer routing is agent-only; shells never
-write a draft. Collaborators receive explicit callbacks, not the session."""
+Teardown fences input before awaiting; workflow hooks keep composer routing
+agent-only. Collaborators receive explicit callbacks, not the session."""
 
 from __future__ import annotations
 
@@ -21,7 +19,6 @@ from relaydeck.client.features.shell.ops import (
 )
 from relaydeck.client.features.sync.transport import TerminalSocket, TransportError
 from relaydeck.client.features.terminal.controller import TerminalController
-from relaydeck.client.features.terminal.diagnostics import diagnostics_logger
 from relaydeck.client.features.terminal.models import TerminalViewState
 from relaydeck.client.features.terminal.output_log import BoundedOutputLog
 from relaydeck.client.features.terminal.recovery_cause import (
@@ -34,12 +31,13 @@ from relaydeck.client.features.terminal.session.hooks import (
     lease_hooks,
     paste_hooks,
     renderer_hooks,
+    reset_history,
     selection_hooks,
 )
 from relaydeck.client.features.terminal.session.keys import KeyHooks, KeyInput
 from relaydeck.client.features.terminal.session.lease import LeaseHooks, LeaseRenewalOwner
 from relaydeck.client.features.terminal.session.paste import PasteFlow, PasteHooks
-from relaydeck.client.features.terminal.session.recovery_state import RecoveryState
+from relaydeck.client.features.terminal.session.recovery_state import DRIVE_REACQUIRE, RecoveryState
 from relaydeck.client.features.terminal.session.rendering import (
     RendererBinding,
     RendererHooks,
@@ -132,7 +130,6 @@ class TerminalSessionBase(RecoveryState, SessionFacade, ABC):
     async def _reconnect_flow(self) -> str:
         """The session-specific reconnect, after the shared exited/recovery gate."""
 
-    # -- optional hooks (agent fills them; defaults are no-ops) ----------------
     def _cancel_background_recovery(self) -> None:
         """Cancel automatic recovery work (agent: the view-watch retry)."""
         return None
@@ -167,14 +164,16 @@ class TerminalSessionBase(RecoveryState, SessionFacade, ABC):
         """Resume step after the reconnect settles (agent: restore the draft)."""
         return None
 
-    # -- controller / exit / recovery (identical for both sessions) --------------
     def _spawn_controller(self, lease: LeaseInfo) -> TerminalController:
+        self.gap_recovery.stable_since = None
+
         def factory(ticket: str) -> TerminalSocket:
             snoop = SnoopingTerminalSocket(self._socket_factory(ticket))
             self._snoop = snoop
             return snoop
 
         controller = TerminalController(
+            gap_recovery=self.gap_recovery,
             diagnostics=self._lease_trace(lease),
             socket_factory=factory,
             lease_id=lease.lease_id,
@@ -187,6 +186,7 @@ class TerminalSessionBase(RecoveryState, SessionFacade, ABC):
             if self._controller is controller and self._lease is lease
             else None,
             emulator=EMULATOR_FRESH,
+            on_history_reset=lambda: reset_history(self, controller),
         )
         return controller
 
@@ -214,44 +214,48 @@ class TerminalSessionBase(RecoveryState, SessionFacade, ABC):
             self._notice = controller.state.notice.text
         else:
             self._notice = self._DISCONNECT_MESSAGE
+        if self.gap_recovery.detail and self._recoverable_now():
+            self._note_resume_mode()
+            self._recovery_cause = RECOVERY_TRANSPORT
         self._phase = self._PHASE_DISCONNECTED
         self._notify()
         return self._phase
 
     async def drive_recovery(self) -> str:
-        """Act on `reattach_needed` / `pending_resume` (shared driver). In
-        `exited` or with no controller this refuses WITHOUT minting a
-        ticket (`DRIVE_REFUSED_EXITED`): there is no live stream to
-        drive, so the caller reconnects or takes over explicitly. A
-        `lease_expired` mint failure classifies to `disconnected`;
-        nothing is auto-resurrected."""
+        """Resume a valid reader, or reacquire under the session recovery budget."""
         if self._phase == self._PHASE_EXITED or self._controller is None:
             return DRIVE_REFUSED_EXITED
+        controller = self._controller
+        generation = self._interaction_generation
+
+        def current() -> bool:
+            return (
+                self._controller is controller
+                and self._foreground
+                and self._operation_current(generation)
+            )
+
         try:
             outcome = await drive_recovery(
-                self._controller,
+                controller,
                 self._ops.terminal_ticket,
                 exited=False,
+                current=current,
             )
         except ShellOpError as exc:
             if exc.code == "lease_expired":
-                self._notice = self._LEASE_ENDED_MESSAGE
-                self._phase = self._PHASE_DISCONNECTED
-                self._notify()
-                return self._phase
+                if not current():
+                    return DRIVE_REFUSED_EXITED
+                return await self._recover_gap_lease()
             raise
+        if outcome == DRIVE_REACQUIRE:
+            return await self._recover_gap_lease()
         self._notify()
         return outcome
 
     def _on_renewal_terminal(self, code: str) -> None:
-        """Terminal renewal failure: revoke the writer (same path as an
-        explicit revoke), say so loudly, and never renew again on this
-        lease. Auth loss needs sign-in, not reconnect; anything else
-        needs a fresh lease (takeover/reconnect) to restore input.
-
-        Identity/host-authorization loss (`unauthenticated`/`forbidden`)
-        additionally runs `_on_auth_revoked` (the agent fences ALL composer
-        writes there; the draft is preserved and stays editable)."""
+        """Fence the failed writer; restoring input requires a fresh authorized lease.
+        Auth or host loss additionally fences composer writes, preserving the draft."""
         self._cancel_background_recovery()
         if self._controller is not None:
             self._controller.invalidate_writer(code)
@@ -288,10 +292,9 @@ class TerminalSessionBase(RecoveryState, SessionFacade, ABC):
         return False
 
     async def run(self) -> str:
-        """Supervise the stream until the socket ends, then classify: a
-        `bye` with a `closed`/`exited` detail is terminal exit; any other
-        ending (reset doc, link drop, server close) is `disconnected`.
-        Hooks decide whether another stream is supervised afterwards."""
+        """Supervise the stream: `bye closed/exited` is terminal exit;
+        other endings (reset, link drop, server close) are disconnected.
+        Hooks decide whether to supervise another stream."""
         context = self._begin_run()
         while (controller := self._controller) is not None:
             snapshot = self._snapshot_run(controller)
@@ -308,11 +311,11 @@ class TerminalSessionBase(RecoveryState, SessionFacade, ABC):
                 self._notify()
             else:
                 self._classify_run_exit()
+            self._settle_gap_retry()
             if not await self._continue_after_run(controller, snapshot, failure, context):
                 return self._phase
         return self._phase
 
-    # -- lifecycle: templates ---------------------------------------------------
     async def disconnect(self, *, keep_recovery: bool = False) -> str:
         """Back/leave: drop the live writer, release the lease and stop the
         local stream. The attachment and its remote process survive;
@@ -437,6 +440,9 @@ class TerminalSessionBase(RecoveryState, SessionFacade, ABC):
         """Reconnect a disconnected session. Refuses when exited."""
         if not automatic:
             self._explicit_reconnects += 1  # a user tap renews the automatic retry budget
+            self.reset_gap_recovery()
+            self._recovery_cause = None
+        self.log_reopen("reconnect")
         self._cancel_background_recovery()
         if self._phase == self._PHASE_EXITED:
             return self._phase
@@ -485,6 +491,8 @@ class TerminalSessionBase(RecoveryState, SessionFacade, ABC):
         if self._foreground == active:
             return
         self._foreground = active
+        if self._controller is not None:
+            self._controller.cancel_gap_wait()
         self._bump_generation("foreground")
         self._cancel_background_recovery()
         self._bump_epoch()
@@ -495,6 +503,8 @@ class TerminalSessionBase(RecoveryState, SessionFacade, ABC):
             for term in self._renderer.terms():
                 term.set_input_enabled(False)
         self._notify()
+        if active:
+            self._resume_gap_retry()
 
     def _enter_exited(self, detail: str) -> None:
         self._recovery_cause = None
@@ -527,6 +537,7 @@ class TerminalSessionBase(RecoveryState, SessionFacade, ABC):
         return resized
 
     def _handle_bytes(self, data: bytes) -> None:
+        self._note_recovery_output()
         self.output_log += data
         # Bracketed-paste framing comes from the engine's MODE_REPORT; re-parsing output bytes in
         # Python diverges from the engine across RIS and split private-mode params.
@@ -569,7 +580,8 @@ class TerminalSessionBase(RecoveryState, SessionFacade, ABC):
     def _bump_generation(self, site: str) -> None:
         """Every interaction-generation increment is named."""
         self._interaction_generation += 1
-        diagnostics_logger().info("generation_bump site=%s", site)
+        self._cancel_gap_retry()
+        self._log_generation(site)
 
     def _mark_viewer_reopened(self, notice: str) -> None:
         self._note_resume_mode()

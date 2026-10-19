@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -153,13 +153,45 @@ class NotificationTransitions:
             self.pending.pop(key, None)
             self.attempts.pop(key, None)
 
+    async def flush_async(self, now: int, emit: Callable[[Status, str], Awaitable[None]]) -> None:
+        """Keep transition state on the loop; an older completion cannot settle a newer event."""
+        for key, entry in list(self.pending.items()):
+            due, status = entry
+            if due > now:
+                continue
+            if self.statuses.get(key) != status or not status.event_id:
+                if self.pending.get(key) == entry:
+                    self.pending.pop(key, None)
+                    self.attempts.pop(key, None)
+                continue
+            failed = False
+            try:
+                await emit(status, "attention" if status.status == "blocked" else "completion")
+            except Exception:  # noqa: BLE001 - fixed bounded retry, no payload diagnostics
+                failed = True
+            if self.pending.get(key) != entry or self.statuses.get(key) != status:
+                continue
+            if failed:
+                count = self.attempts.get(key, 0) + 1
+                self.error = "notification_outbox_unavailable"
+                self.attempts[key] = count
+                if count < MAX_ENQUEUE_ATTEMPTS:
+                    self.pending[key] = (now + 250 * count, status)
+                    continue
+                self.error = "notification_enqueue_exhausted"
+            self.pending.pop(key, None)
+            self.attempts.pop(key, None)
+
     async def run(
-        self, stop: asyncio.Event, clock: Callable[[], int], emit: Callable[[Status, str], Any]
+        self,
+        stop: asyncio.Event,
+        clock: Callable[[], int],
+        emit: Callable[[Status, str], Awaitable[None]],
     ) -> None:
         try:
             while not stop.is_set():
                 try:
-                    self.flush(clock(), emit)
+                    await self.flush_async(clock(), emit)
                 except Exception:  # noqa: BLE001 - isolate push storage from source synchronization
                     self.error = "notification_outbox_unavailable"
                 try:

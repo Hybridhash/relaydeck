@@ -14,7 +14,7 @@ import json
 import logging
 import secrets
 import time
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
@@ -41,6 +41,7 @@ from relaydeck.gateway.authorization import (
     IdentityProvider,
 )
 from relaydeck.gateway.backend import Backend, BackendError
+from relaydeck.gateway.command_io import command_io
 from relaydeck.gateway.cursors import AFTER_SEQUENCE_HEADER, CursorError, decode_cursor
 from relaydeck.gateway.hosts import HostStore, drain_revoke_requests
 from relaydeck.gateway.identity import (
@@ -52,6 +53,7 @@ from relaydeck.gateway.identity import (
     TicketStore,
 )
 from relaydeck.gateway.inventory import InventoryView
+from relaydeck.gateway.loop_watch import LoopWatch
 from relaydeck.gateway.metadata_streams import MetadataResponse, MetadataStreams
 from relaydeck.gateway.notification_transitions import NotificationTransitions, Status
 from relaydeck.gateway.pairing import PairingError, PairingStore
@@ -61,12 +63,23 @@ from relaydeck.gateway.policy import (
     input_limiter,
 )
 from relaydeck.gateway.push import ProviderPort
+from relaydeck.gateway.push_io import push_io
+from relaydeck.gateway.ring import FIRST_REPLAY_MAX_BYTES, VIEWER_QUEUE_MAX_BYTES
 from relaydeck.gateway.routes_enrollments import install_enrollments
 from relaydeck.gateway.sockets import SocketRegistry
+from relaydeck.gateway.tunnel_cleanup import TunnelCleanup
 from relaydeck.gateway.usage import UsageService
 from relaydeck.gateway.usage import install as install_usage
 from relaydeck.lease_diagnostics import LeaseTrace, opaque
+from relaydeck.offload import run_blocking, settled
 from relaydeck.persistence_contracts import StorageUnavailable
+from relaydeck.tunnel_queue import (
+    BoundedInbox,
+    TunnelCapacityError,
+    TunnelIntake,
+    TunnelWriter,
+    cancel_tasks,
+)
 
 
 def error_response(
@@ -277,6 +290,41 @@ class GatewayState:
                 device_ids=devices,
             )
 
+    async def emit_notification_async(self, status: Status, category: str) -> None:
+        record = self.hosts.record_for_host(status.host)
+        if (
+            record is None
+            or record.account != status.account
+            or not self.hosts.allowed(status.account, status.host)
+        ):
+            return
+        devices = self.sessions.notification_devices(
+            status.account, status.host, self.now_ms(), owned=True
+        )
+        if self.web_push_sink is not None and devices:
+            await run_blocking(
+                self.web_push_sink,
+                status.account,
+                devices,
+                status.event_id,
+                category,
+                status.host,
+                status.session,
+            )
+        if devices:
+            await push_io(
+                self.push,
+                "notify",
+                account=status.account,
+                account_hosts=frozenset({status.host}),
+                host_id=status.host,
+                session_id=status.session,
+                event_id=status.event_id,
+                category=category,
+                now=self.now_ms(),
+                device_ids=devices,
+            )
+
 
 def _utc_z(ms: int) -> str:
     return datetime.fromtimestamp(ms / 1000, UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -364,13 +412,21 @@ async def revoke_host_and_close(state: GatewayState, host_id: str) -> tuple[bool
         dead = state.backend.revoke_leases_host(host_id)
         for session in dead_sessions:
             state.metadata.revoke(account=session.account, device_id=session.device_id)
-            await state.sockets.close_device(session.account, session.device_id, "unauthenticated")
         state.inventory.drop_host(host_id)
         state.notifications.drop_host(host_id)
-        tunnels = await state.sockets.close_host(host_id, "unauthenticated")
-        leases = 0
-        for lease_id in dead:
-            leases += await state.sockets.close_lease(lease_id, "lease_expired")
+
+        async def finish_revocation() -> tuple[int, int]:
+            for session in dead_sessions:
+                await state.sockets.close_device(
+                    session.account, session.device_id, "unauthenticated"
+                )
+            tunnels = await state.sockets.close_host(host_id, "unauthenticated")
+            leases = 0
+            for lease_id in dead:
+                leases += await state.sockets.close_lease(lease_id, "lease_expired")
+            return tunnels, leases
+
+        tunnels, leases = await settled(asyncio.create_task(finish_revocation()))
     return revoked, tunnels, leases
 
 
@@ -385,7 +441,7 @@ def _bearer(request: Request) -> str:
 def create_app(state: GatewayState) -> FastAPI:
     async def drain_spool() -> None:
         while True:
-            for host_id in drain_revoke_requests(state.revoke_spool):
+            for host_id in await run_blocking(drain_revoke_requests, state.revoke_spool):
                 await revoke_host_and_close(state, host_id)
             await asyncio.sleep(max(0.01, state.revoke_poll_s))
 
@@ -407,15 +463,18 @@ def create_app(state: GatewayState) -> FastAPI:
         )
         notification_stop = asyncio.Event()
         notification_task = asyncio.create_task(
-            state.notifications.run(notification_stop, state.now_ms, state.emit_notification)
+            state.notifications.run(notification_stop, state.now_ms, state.emit_notification_async)
         )
         terminal_task = asyncio.create_task(reconcile_terminal_routes(state))
         app.state.push_worker = worker
         if worker is not None:
             worker.start()
+        monitor = LoopWatch()
+        monitor.start()
         try:
             yield
         finally:
+            await monitor.close()
             terminal_task.cancel()
             with suppress(asyncio.CancelledError):
                 await terminal_task
@@ -543,8 +602,11 @@ def create_app(state: GatewayState) -> FastAPI:
         try:
             body = await pairing_body(request, "relaydeck/gateway/v1/pairing-request")
             assert state.pairing is not None
-            result = state.pairing.request(
-                body, state.hosts.record_for_host(body["host_id"]), state.now_ms()
+            result = await run_blocking(
+                state.pairing.request,
+                body,
+                state.hosts.record_for_host(body["host_id"]),
+                state.now_ms(),
             )
             return pairing_response(result, 201)
         except PairingError as exc:
@@ -555,8 +617,12 @@ def create_app(state: GatewayState) -> FastAPI:
         try:
             body = await pairing_body(request, "relaydeck/gateway/v1/pairing-proof")
             assert state.pairing is not None
-            result = state.pairing.poll(
-                request_id, body, state.hosts.record_for_host(body["host_id"]), state.now_ms()
+            result = await run_blocking(
+                state.pairing.poll,
+                request_id,
+                body,
+                state.hosts.record_for_host(body["host_id"]),
+                state.now_ms(),
             )
             return pairing_response(result)
         except PairingError as exc:
@@ -567,12 +633,20 @@ def create_app(state: GatewayState) -> FastAPI:
         try:
             body = await pairing_body(request, "relaydeck/gateway/v1/pairing-proof")
             assert state.pairing is not None
-            grant = state.pairing.redeem(
-                request_id, body, state.hosts.record_for_host(body["host_id"]), state.now_ms()
+            grant = await run_blocking(
+                state.pairing.redeem,
+                request_id,
+                body,
+                state.hosts.record_for_host(body["host_id"]),
+                state.now_ms(),
             )
         except PairingError as exc:
             return error_response(exc.code, str(exc))
-        # No await between consuming the approval and creating the session.
+        # Cancellation burns the consumed approval; it never retries or issues a credential.
+        # There is no further await before session creation; recheck the host after the worker.
+        host = state.hosts.record_for_host(grant.host_id)
+        if not host or host.account != grant.account or host.token_prefix != grant.host_binding:
+            return error_response("not_found", "Pairing unavailable; start again")
         access, refresh = state.sessions.create(
             grant.account,
             grant.capabilities,
@@ -730,7 +804,9 @@ def create_app(state: GatewayState) -> FastAPI:
                     await state.sockets.close_device(
                         local.account, local.device_id, "unauthenticated"
                     )
-                    state.push.revoke_device(local.account, local.device_id, state.now_ms())
+                    await push_io(
+                        state.push, "revoke_device", local.account, local.device_id, state.now_ms()
+                    )
             if dead is None:
                 return error_response("unauthenticated", "missing or expired token")
         if dead is not None:
@@ -742,7 +818,9 @@ def create_app(state: GatewayState) -> FastAPI:
             # token association (the client also DELETEs its install id,
             # which may differ from the session device id).
             if state.sessions.persistence is None:
-                state.push.revoke_device(dead.account, dead.device_id, state.now_ms())
+                await push_io(
+                    state.push, "revoke_device", dead.account, dead.device_id, state.now_ms()
+                )
             # An optional {"device_ref": ...} logout body also revokes that push record when the
             # session account owns it. Absent, malformed, unknown or foreign refs are a silent
             # no-op.
@@ -754,7 +832,9 @@ def create_app(state: GatewayState) -> FastAPI:
             # Paired push subscriptions use the issued device_id revoked above;
             # an account-owned install ref must not target a different device.
             if isinstance(logout_ref, str) and logout_ref and not dead.host_binding:
-                state.push.revoke_device_by_ref(dead.account, logout_ref, state.now_ms())
+                await push_io(
+                    state.push, "revoke_device_by_ref", dead.account, logout_ref, state.now_ms()
+                )
         return {"ok": True}
 
     # device subscriptions + deep links. Bodies are
@@ -779,7 +859,9 @@ def create_app(state: GatewayState) -> FastAPI:
         if not device_allowed(session, body["device_id"]):
             return error_response("not_found", "no such device")
         try:
-            record = state.push.register_device(
+            record = await push_io(
+                state.push,
+                "register_device",
                 session.account,
                 body["device_id"],
                 body["token"],
@@ -818,8 +900,13 @@ def create_app(state: GatewayState) -> FastAPI:
                 "forbidden", "malformed rotation", details={"reason": "malformed"}
             )
         try:
-            record = state.push.rotate_token(
-                session.account, device_id, body["token"], state.now_ms()
+            record = await push_io(
+                state.push,
+                "rotate_token",
+                session.account,
+                device_id,
+                body["token"],
+                state.now_ms(),
             )
         except push.PushDenied as exc:
             return error_response(exc.code, str(exc) or "rotation refused")
@@ -835,7 +922,8 @@ def create_app(state: GatewayState) -> FastAPI:
         now = state.now_ms()
         auth = state.sessions.device_metadata(session.account, now)
         subscriptions = {
-            row["device_id"]: row for row in state.push.device_metadata(session.account)
+            row["device_id"]: row
+            for row in await push_io(state.push, "device_metadata", session.account)
         }
         if session.host_binding:
             # Filter before ordering/counts as well as before row serialization.
@@ -895,7 +983,9 @@ def create_app(state: GatewayState) -> FastAPI:
         account = session.account
         try:
             revoked_sessions = state.sessions.revoke_device(account, device_id)
-            revoked_push = state.push.revoke_device(account, device_id, state.now_ms())
+            revoked_push = await push_io(
+                state.push, "revoke_device", account, device_id, state.now_ms()
+            )
         finally:
             # Both credential and subscription failures must sever writers.
             state.metadata.revoke(account=account, device_id=device_id)
@@ -927,11 +1017,17 @@ def create_app(state: GatewayState) -> FastAPI:
         if not isinstance(value, str) or not value or len(value) > 256:
             return error_response("forbidden", "malformed resolve", details={"reason": "malformed"})
         if "token" in body:
-            resolved = state.push.resolve_link(value, session.account, state.now_ms())
+            resolved = await push_io(
+                state.push, "resolve_link", value, session.account, state.now_ms()
+            )
         else:
-            resolved = state.push.resolve_hint(session.account, value, state.now_ms())
+            resolved = await push_io(
+                state.push, "resolve_hint", session.account, value, state.now_ms()
+            )
         if resolved is not None and session.host_binding:
-            notification = state.push.get_notification(str(resolved["notification_id"]))
+            notification = await push_io(
+                state.push, "get_notification", str(resolved["notification_id"])
+            )
             if (
                 notification is None
                 or notification["account"] != session.account
@@ -966,14 +1062,42 @@ def create_app(state: GatewayState) -> FastAPI:
         if record is None:
             await websocket.close(code=1008, reason="unauthenticated")
             return
+        if state.sockets.host_count(record.host_id) >= 2:
+            # One current tunnel plus its retiring predecessor; replacement storms
+            # cannot accumulate connection-local queues or blocked cleanup lanes.
+            await websocket.close(code=1013, reason="tunnel_busy")
+            return
         # Single live tunnel per host (OWASP flood/DoS bound): a new
         # tunnel replaces a stale one, and arrival order on the survivor
         # is the terminal-output order.
-        await state.sockets.close_host(record.host_id, "replaced")
+        displaced = state.sockets.host_sockets(record.host_id)
         await websocket.accept()
         state.sockets.register_host(record.host_id, websocket, record)
         intake = SnapshotIntake()
         last_epochs = state.backend.epochs_for_host(record.host_id, record.account)
+        last_receive = time.monotonic()
+
+        def current() -> bool:
+            return state.hosts.lookup(token) == record and state.sockets.host_current(
+                record.host_id, websocket
+            )
+
+        writer = TunnelWriter(websocket.send_text, current)
+        state.sockets.bind_writer(websocket, writer)
+        incoming: BoundedInbox[dict[str, Any] | None] = BoundedInbox()
+        commands: BoundedInbox[dict[str, Any]] = BoundedInbox()
+        admission = TunnelIntake(incoming, intake)
+        cleanup = TunnelCleanup(state.sockets)
+        cleanup.add(displaced, "", "replaced")
+
+        async def timed[T](branch: str, work: Awaitable[T]) -> T:
+            started = time.monotonic()
+            try:
+                return await work
+            finally:
+                elapsed = time.monotonic() - started
+                if elapsed > 0.5:
+                    LOG.warning("tunnel_stall branch=%s ms=%.0f", branch, elapsed * 1000)
 
         async def send_hello() -> None:
             await state.sockets.send_text(
@@ -1014,24 +1138,44 @@ def create_app(state: GatewayState) -> FastAPI:
                 except Exception:
                     return False
                 last_epochs = epochs
-            pending = state.backend.drain_outbox(record.host_id)
-            for message in pending:
-                if message.get("principal") != record.account or not record.account:
-                    LOG.error(
-                        "refused cross-account connector dispatch for host %s", record.host_id
-                    )
-                    continue
-                command_id = str(message.get("command_id", ""))
-                if not command_id or not state.backend.mark_command_dispatched(
-                    command_id, state.now_ms()
-                ):
-                    emit_command_update(state.backend.command_status(command_id))
-                    continue
-                emit_command_update(state.backend.command_status(command_id))
-                try:
-                    await state.sockets.send_text(websocket, json.dumps(message))
-                except Exception:
-                    return False
+            pending = await command_io(state.backend, "drain_outbox", record.host_id)
+            consumed = 0
+            try:
+                for index, message in enumerate(pending):
+                    consumed = index
+                    if message.get("principal") != record.account or not record.account:
+                        LOG.error(
+                            "refused cross-account connector dispatch for host %s", record.host_id
+                        )
+                        consumed = index + 1
+                        continue
+                    command_id = str(message.get("command_id", ""))
+
+                    async def before(command_id: str = command_id) -> bool:
+                        if not command_id or not current():
+                            return False
+                        ready = await command_io(
+                            state.backend, "mark_command_dispatched", command_id, state.now_ms()
+                        )
+                        emit_command_update(
+                            await command_io(state.backend, "command_status", command_id)
+                        )
+                        return bool(ready)
+
+                    try:
+                        await writer.send(json.dumps(message), before=before)
+                    except Exception:
+                        return False
+                    consumed = index + 1
+                consumed = len(pending)
+            finally:
+                binding = state.hosts.record_for_host(record.host_id)
+                restore = (
+                    pending[consumed:]
+                    if binding is not None and binding.account == record.account
+                    else []
+                )
+                state.backend.restore_outbox(record.host_id, restore, pending)
             return True
 
         async def ingest_snapshot(snapshot: dict[str, Any], now_ms: int) -> bool:
@@ -1056,24 +1200,16 @@ def create_app(state: GatewayState) -> FastAPI:
             if previous_epoch is not None and previous_epoch != host.get("epoch"):
                 reset_doc = json.dumps({"kind": "reset", "detail": "stale_epoch"})
                 for lease_id in state.backend.rotate_streams(record.host_id):
-                    await state.sockets.notify_lease(lease_id, reset_doc)
-                    await state.sockets.close_lease(lease_id, "stale_revision")
+                    cleanup.add(state.sockets.lease_sockets(lease_id), reset_doc, "stale_revision")
             return True
 
         async def handle_tunnel_doc(doc: dict[str, Any]) -> bool:
             """One connector->gateway message. True keeps the tunnel;
             False fails it closed (OWASP: per-message authorization, not
-            just handshake auth)."""
+            just handshake auth). Only the command lane calls the awaited
+            acknowledgement/result branches; output never awaits journal work."""
             kind = doc.get("kind")
             now_ms = state.now_ms()
-            if kind in ("snapshot.begin", "snapshot.chunk", "snapshot.end"):
-                try:
-                    snapshot = intake.accept(doc, record.host_id, time.monotonic())
-                except (ValueError, UnicodeError):
-                    return False
-                return snapshot is None or await ingest_snapshot(snapshot, now_ms)
-            if intake.active:
-                return False
             if kind == "terminal.reset_required":
                 if (
                     doc.get("host_id") != record.host_id
@@ -1087,16 +1223,11 @@ def create_app(state: GatewayState) -> FastAPI:
                     record.host_id, doc["terminal_id"], doc["epoch"], record.account
                 )
                 for lease_id in dead:
-                    await state.sockets.notify_lease(
-                        lease_id,
-                        json.dumps(
-                            {
-                                "kind": "reset",
-                                "detail": "stale_epoch",
-                            }
-                        ),
+                    cleanup.add(
+                        state.sockets.lease_sockets(lease_id),
+                        json.dumps({"kind": "reset", "detail": "stale_epoch"}),
+                        "stale_revision",
                     )
-                    await state.sockets.close_lease(lease_id, "stale_revision")
                 return True
             if kind == "terminal.input_failed":
                 if (
@@ -1116,8 +1247,8 @@ def create_app(state: GatewayState) -> FastAPI:
                     or failed_lease.generation != doc["generation"]
                 ):
                     return False
-                await state.sockets.notify_lease(
-                    failed_lease.lease_id,
+                cleanup.add(
+                    state.sockets.lease_sockets(failed_lease.lease_id),
                     json.dumps(
                         {
                             "kind": "gap",
@@ -1134,9 +1265,16 @@ def create_app(state: GatewayState) -> FastAPI:
                 ):
                     return False
                 command_id = str(doc["command_id"])
-                if state.backend.command_owner(command_id) != (record.account, record.host_id):
+                if await command_io(state.backend, "command_owner", command_id) != (
+                    record.account,
+                    record.host_id,
+                ):
                     return False
-                updated = state.backend.note_command_ack(command_id, record.host_id, now_ms)
+                if not current():
+                    raise ConnectionError("tunnel_superseded")
+                updated = await command_io(
+                    state.backend, "note_command_ack", command_id, record.host_id, now_ms
+                )
                 emit_command_update(updated)
                 return updated is not None
             if kind == "command.result":
@@ -1149,12 +1287,16 @@ def create_app(state: GatewayState) -> FastAPI:
                     or ("result" in doc and not isinstance(doc["result"], dict))
                 ):
                     return False
-                if state.backend.command_owner(str(doc["command_id"])) != (
+                if await command_io(state.backend, "command_owner", str(doc["command_id"])) != (
                     record.account,
                     record.host_id,
                 ):
                     return False
-                updated = state.backend.note_command_result(
+                if not current():
+                    raise ConnectionError("tunnel_superseded")
+                updated = await command_io(
+                    state.backend,
+                    "note_command_result",
                     str(doc["command_id"]),
                     record.host_id,
                     str(doc["status"]),
@@ -1236,65 +1378,162 @@ def create_app(state: GatewayState) -> FastAPI:
                 return True
             return False
 
-        try:
-            await send_hello()
-            if not await pump_outbox():
-                return
+        async def receive_documents() -> None:
+            nonlocal last_receive
             while True:
                 try:
-                    intake.check_deadline(time.monotonic())
-                except ValueError:
-                    await websocket.close(code=1008, reason="forbidden")
-                    return
-                try:
-                    message = await asyncio.wait_for(websocket.receive(), timeout=TUNNEL_POLL_S)
+                    message = await timed(
+                        "receive", asyncio.wait_for(websocket.receive(), timeout=TUNNEL_POLL_S)
+                    )
                 except TimeoutError:
-                    if not await pump_outbox():
-                        return
+                    intake.check_deadline(time.monotonic())
                     continue
+                last_receive = time.monotonic()
+                if not current():
+                    raise ConnectionError("tunnel_superseded")
                 if message["type"] == "websocket.disconnect":
-                    break
-                if state.hosts.lookup(token) != record:
-                    await state.sockets.close_socket(websocket, "unauthenticated")
-                    return
-                if "text" in message and message["text"] is not None:
-                    text = message["text"]
-                    # Character count, not bytes: a parse-bomb bound, not a
-                    # byte bound (multibyte input may exceed it in bytes).
-                    if len(text) > TUNNEL_MAX_TEXT:
-                        await websocket.close(code=1008, reason="forbidden")
-                        return
-                    try:
-                        doc = json.loads(text)
-                    except ValueError:
-                        await websocket.close(code=1008, reason="forbidden")
-                        return
-                    if not isinstance(doc, dict):
-                        await websocket.close(code=1008, reason="forbidden")
-                        return
-                    if doc.get("kind") == "ping":
-                        try:
-                            await state.sockets.send_text(websocket, json.dumps({"kind": "pong"}))
-                        except Exception:
-                            # Revoke/close raced the ping: the tunnel is
-                            # over; end it instead of crashing the handler.
-                            return
-                    elif doc.get("kind") == "bye":
-                        break
-                    elif not await handle_tunnel_doc(doc):
-                        await websocket.close(code=1008, reason="forbidden")
-                        return
-                    if not await pump_outbox():
-                        return
+                    incoming.put(None, 0, control=True)
+                    await asyncio.Future()
+                text = message.get("text")
+                if not isinstance(text, str) or len(text.encode()) > TUNNEL_MAX_TEXT:
+                    raise ValueError("bad_tunnel_frame")
+                doc = json.loads(text)
+                if not isinstance(doc, dict):
+                    raise ValueError("bad_tunnel_frame")
+                if doc.get("kind") == "ping":
+                    writer.post((json.dumps({"kind": "pong"}),), control=True)
                 else:
-                    await websocket.close(code=1008, reason="forbidden")
-                    return
-        except (WebSocketDisconnect, TimeoutError):
-            pass
+                    size = len(text.encode())
+                    # Both consumers (including active work and partial snapshots)
+                    # share the same byte budget; journal waits cannot stall output.
+                    if (
+                        incoming.bytes + commands.bytes + admission.batch_bytes + size
+                        > incoming.byte_limit
+                    ):
+                        raise TunnelCapacityError("tunnel_queue_full")
+                    if doc.get("kind") in ("command.ack", "command.result"):
+                        intake.check_deadline(time.monotonic())
+                        if intake.active:
+                            raise ValueError("snapshot_interleaved")
+                        commands.put(doc, size)
+                    else:
+                        admission.put(doc, size, record.host_id, time.monotonic())
+                    if doc.get("kind") == "bye":
+                        await asyncio.Future()
+
+        async def process_documents() -> None:
+            while True:
+                try:
+                    entry = await asyncio.wait_for(incoming.get(), TUNNEL_POLL_S)
+                except TimeoutError:
+                    continue
+                try:
+                    doc = entry[0]
+                    if doc is None or doc.get("kind") == "bye":
+                        # A graceful close still settles all preceding replies.
+                        await commands.queue.join()
+                        return
+                    if not current():
+                        return
+                    kind = doc.get("kind")
+                    branch = (
+                        kind
+                        if kind
+                        in (
+                            "snapshot",
+                            "snapshot.begin",
+                            "snapshot.chunk",
+                            "snapshot.end",
+                            "event",
+                            "terminal.output",
+                            "terminal.reset_required",
+                            "terminal.input_failed",
+                        )
+                        else "unknown_doc"
+                    )
+                    if not await timed(str(branch), handle_tunnel_doc(doc)):
+                        raise ValueError("bad_tunnel_document")
+                finally:
+                    incoming.finish(entry)
+
+        async def process_commands() -> None:
+            """FIFO replies; started persistence settles before this tunnel retires."""
+            while True:
+                entry = await commands.get()
+                try:
+                    if not current():
+                        return
+                    # Own the whole reply, not only its individual journal awaits.
+                    # Supersession during owner lookup is checked before mutation.
+                    accepted = await settled(
+                        asyncio.create_task(
+                            timed(str(entry[0]["kind"]), handle_tunnel_doc(entry[0]))
+                        )
+                    )
+                    if not accepted:
+                        raise ValueError("bad_tunnel_document")
+                finally:
+                    commands.finish(entry)
+
+        async def outbox() -> None:
+            while current():
+                # Retain the drained list through cancellation, including the journal commit.
+                if not await timed("pump_outbox", settled(asyncio.create_task(pump_outbox()))):
+                    raise ConnectionError("tunnel_write_failed")
+                await asyncio.sleep(TUNNEL_POLL_S)
+
+        cleanup_task = asyncio.create_task(cleanup.run())
+        tasks = [asyncio.create_task(writer.run())]
+        try:
+            await timed("hello", send_hello())
+            tasks.extend(
+                [
+                    asyncio.create_task(outbox()),
+                    asyncio.create_task(receive_documents()),
+                    asyncio.create_task(process_documents()),
+                    asyncio.create_task(process_commands()),
+                ]
+            )
+            done, _ = await asyncio.wait(
+                [*tasks, cleanup_task], return_when=asyncio.FIRST_COMPLETED
+            )
+            for task in done:
+                task.result()
+        except TunnelCapacityError:
+            with suppress(Exception):
+                await state.sockets.close_socket(websocket, "tunnel_queue_full")
+        except (WebSocketDisconnect, TimeoutError, ConnectionError, ValueError):
+            with suppress(Exception):
+                await state.sockets.close_socket(websocket, "forbidden")
+        except asyncio.CancelledError:
+            return  # An ASGI disconnect still joins all owned work below.
         finally:
-            state.sockets.unregister(websocket)
-            if not state.sockets.host_count(record.host_id):
-                state.notifications.drop_host(record.host_id)
+            LOG.warning(
+                "tunnel_loop idle_recv_s=%.3f queued=%d bytes=%d oldest_s=%.3f writer=%s "
+                "write_queued=%d write_bytes=%d write_oldest_s=%.3f "
+                "command_queued=%d command_bytes=%d command_oldest_s=%.3f",
+                time.monotonic() - last_receive,
+                incoming.count,
+                incoming.bytes,
+                incoming.oldest_age,
+                writer.phase,
+                writer.inbox.count,
+                writer.inbox.bytes,
+                writer.inbox.oldest_age,
+                commands.count,
+                commands.bytes,
+                commands.oldest_age,
+            )
+
+            async def finish_tunnel() -> None:
+                state.sockets.unregister(websocket)
+                await cancel_tasks(tasks)
+                await cleanup.finish(cleanup_task)
+                if not state.sockets.host_count(record.host_id):
+                    state.notifications.drop_host(record.host_id)
+
+            with suppress(asyncio.CancelledError):
+                await settled(asyncio.create_task(finish_tunnel()))
 
     def _host_guard(session: Any, host_id: str) -> JSONResponse | None:
         if "sessions.read" not in session.capabilities:
@@ -1656,7 +1895,7 @@ def create_app(state: GatewayState) -> FastAPI:
         if expires_ms is not None:
             backend_command["expires_ms"] = expires_ms
         try:
-            record = state.backend.submit_command(backend_command)
+            record = await command_io(state.backend, "submit_command", backend_command)
         except BackendError as exc:
             return error_response(exc.code, exc.message, exc.retryable)
         # session.close: sever downstream sockets of the
@@ -1678,9 +1917,12 @@ def create_app(state: GatewayState) -> FastAPI:
         guard = _host_guard(session, host_id)
         if guard is not None:
             return guard
-        if state.backend.command_owner(command_id) != (session.account, host_id):
+        if await command_io(state.backend, "command_owner", command_id) != (
+            session.account,
+            host_id,
+        ):
             return error_response("not_found", "no such command")
-        record = state.backend.command_status(command_id)
+        record = await command_io(state.backend, "command_status", command_id)
         if record is None or record.get("host_id") != host_id:
             return error_response("not_found", "no such command")
         emit_command_update(record)
@@ -1974,6 +2216,11 @@ def create_app(state: GatewayState) -> FastAPI:
         if grant.generation and grant.generation != lease.generation:
             await websocket.close(code=1008, reason="lease_expired")
             return
+        reset_protocol = websocket.query_params.get("output_reset") == "v1"
+        live_edge = websocket.query_params.get("live_edge") == "1"
+        if live_edge and (not reset_protocol or lease.device_id != grant.device_id):
+            await websocket.close(code=1008, reason="forbidden")
+            return
         resume_params = "epoch" in websocket.query_params or "offset" in websocket.query_params
         resume_epoch = websocket.query_params.get("epoch", "")
         try:
@@ -1993,7 +2240,18 @@ def create_app(state: GatewayState) -> FastAPI:
             await websocket.close(code=1008, reason="lease_expired")
             return
         await websocket.accept()
-        trace = LeaseTrace(
+        close_logged = False
+
+        class StreamTrace(LeaseTrace):
+            def emit(self, event: str, **fields: Any) -> None:
+                nonlocal close_logged
+                if event == "socket_close":
+                    if close_logged:
+                        return
+                    close_logged = True
+                super().emit(event, **fields)
+
+        trace = StreamTrace(
             opaque("principal", grant.account, grant.device_id),
             opaque("terminal", lease.host_id, lease.terminal_id),
             lease_id,
@@ -2008,16 +2266,48 @@ def create_app(state: GatewayState) -> FastAPI:
         viewer_id = str(id(websocket))
         recovery_close = False
 
+        def disconnected() -> bool:
+            return (
+                getattr(websocket, "application_state", None) == WebSocketState.DISCONNECTED
+                or getattr(websocket, "client_state", None) == WebSocketState.DISCONNECTED
+            )
+
+        def preserve_reader() -> None:
+            # Publish the handoff before sending reset: the client can mint its replacement
+            # ticket immediately, before this handler's close/finally gets another turn.
+            if (
+                lease.mode == "control"
+                and grant.device_id == lease.device_id
+                and not state.sockets.has_device_lease(
+                    grant.account, grant.device_id, lease_id, excluding=websocket
+                )
+            ):
+                state.backend.begin_reader_handoff(
+                    lease_id, grant.account, grant.device_id, lease.generation
+                )
+
         async def close_stream(reason: str) -> None:
             # Reset/revoke can close this socket while receive is suspended.
             # Registry removal claims the close before its first await; do not
             # send a second close or overwrite the first reset/revoke reason.
-            if (
-                getattr(websocket, "application_state", None) == WebSocketState.DISCONNECTED
-                or getattr(websocket, "client_state", None) == WebSocketState.DISCONNECTED
-            ):
+            if disconnected():
                 return
+            if reason in ("stale_epoch", "stale_offset", "overflow", "reset"):
+                preserve_reader()
             await state.sockets.close_socket(websocket, reason)
+
+        async def report_input_limit() -> bool:
+            """Drop this input only; a rate limit does not end the output stream."""
+            if disconnected():
+                return False
+            try:
+                await state.sockets.send_text(
+                    websocket, json.dumps({"kind": "gap", "detail": "rate_limited"})
+                )
+            except Exception:
+                # Revocation/close can win after the state check. Never send again.
+                return False
+            return True
 
         async def forward_input(chunk: terminal_wire.InputChunk) -> None:
             record = state.hosts.record_for_host(lease.host_id)
@@ -2045,8 +2335,38 @@ def create_app(state: GatewayState) -> FastAPI:
             else:
                 doc.update(input_kind=chunk.kind, data_b64=base64.b64encode(chunk.data).decode())
             parse_terminal_input(doc, lease.host_id)
-            if not await state.sockets.notify_host(lease.host_id, json.dumps(doc), binding=record):
-                raise BackendError("host_offline", "input delivery uncertain; not replayed", True)
+
+            refused = ""
+
+            async def still_allowed() -> bool:
+                nonlocal refused
+                current_lease = state.backend.open_lease(lease_id)
+                valid = (
+                    current_lease is not None
+                    and current_lease.mode == "control"
+                    and current_lease.generation == chunk.generation
+                    and current_lease.epoch == lease.epoch
+                    and current_lease.owner == grant.account
+                    and current_lease.device_id == grant.device_id
+                    and state.hosts.record_for_host(lease.host_id) == record
+                )
+                refused = (
+                    "stale_revision"
+                    if not valid
+                    else (
+                        "input_failed"
+                        if current_lease is not None and current_lease.resume_pending
+                        else ""
+                    )
+                )
+                return not refused
+
+            if not await state.sockets.notify_host(
+                lease.host_id, json.dumps(doc), binding=record, before=still_allowed
+            ):
+                raise BackendError(
+                    refused or "host_offline", "input not delivered; not replayed", True
+                )
 
         async def push_pending() -> str | None:
             """Send queued live bytes. Returns None while flowing, else
@@ -2060,6 +2380,7 @@ def create_app(state: GatewayState) -> FastAPI:
                 return None
             if queue.reset_pending or queue.overflowed:
                 detail = "stale_epoch" if queue.reset_pending else "overflow"
+                preserve_reader()
                 try:
                     await state.sockets.send_text(
                         websocket, json.dumps({"kind": "reset", "detail": detail})
@@ -2087,6 +2408,35 @@ def create_app(state: GatewayState) -> FastAPI:
                 # only its own lease's attachment stream, and the id is
                 # per-connection so co-viewers never share a queue.
                 fanout.subscribe(viewer_id)
+            baseline: dict[str, Any] | None = None
+            if reset_protocol and (live_edge or (not resume_epoch and resume_offset == 0)):
+                # Subscribe and capture the authorized boundary without yielding. New output
+                # enters this viewer's queue while the baseline and capped replay are sent.
+                epoch = fanout.ring.epoch if fanout is not None else lease.epoch
+                if live_edge and resume_epoch != epoch:
+                    recovery_close = True
+                    preserve_reader()
+                    await state.sockets.send_text(
+                        websocket,
+                        json.dumps(
+                            {
+                                "kind": "reset",
+                                "detail": "stale_epoch",
+                            }
+                        ),
+                    )
+                    await close_stream("stale_epoch")
+                    return
+                end = fanout.ring.end_offset if fanout is not None else 0
+                base = fanout.ring.base_offset if fanout is not None else 0
+                start = end if live_edge else max(base, end - FIRST_REPLAY_MAX_BYTES)
+                baseline = {
+                    "kind": "history_reset",
+                    "epoch": epoch,
+                    "offset": start,
+                    "incomplete": live_edge or start > base,
+                }
+                resume_epoch, resume_offset, resume_params = epoch, start, True
             if resume_params:
                 # ring resume: exact continuation while retained,
                 # else an explicit reset doc (never a forged tail).
@@ -2097,6 +2447,8 @@ def create_app(state: GatewayState) -> FastAPI:
                     return
                 if stream.status != "ok":
                     recovery_close = stream.status in ("stale_epoch", "stale_offset")
+                    if recovery_close:
+                        preserve_reader()
                     await state.sockets.send_text(
                         websocket, json.dumps({"kind": "reset", "detail": stream.status})
                     )
@@ -2112,6 +2464,8 @@ def create_app(state: GatewayState) -> FastAPI:
                         return
                 if grant.resume:
                     state.tickets.discard_resume(lease_id, grant.account, grant.device_id)
+                if baseline is not None:
+                    await state.sockets.send_text(websocket, json.dumps(baseline))
                 for offset, data in stream.chunks:
                     await state.sockets.send_bytes(
                         websocket, terminal_wire.encode_output(stream.epoch, offset, data)
@@ -2128,10 +2482,19 @@ def create_app(state: GatewayState) -> FastAPI:
                     return
                 if stream.status != "ok":
                     recovery_close = stream.status in ("stale_epoch", "stale_offset")
+                    if recovery_close:
+                        preserve_reader()
                     await state.sockets.send_text(
                         websocket, json.dumps({"kind": "reset", "detail": stream.status})
                     )
                     await close_stream(stream.status)
+                    return
+                if sum(len(data) for _, data in stream.chunks) > VIEWER_QUEUE_MAX_BYTES:
+                    recovery_close = True
+                    await state.sockets.send_text(
+                        websocket, json.dumps({"kind": "reset", "detail": "history_incomplete"})
+                    )
+                    await close_stream("history_incomplete")
                     return
                 for offset, data in stream.chunks:
                     await state.sockets.send_bytes(
@@ -2167,9 +2530,8 @@ def create_app(state: GatewayState) -> FastAPI:
                         await close_stream("forbidden")
                         return
                     if not state.input_bytes.check(lease_id, state.now_ms(), cost=len(chunk.data)):
-                        await state.sockets.send_text(
-                            websocket, json.dumps({"kind": "gap", "detail": "rate_limited"})
-                        )
+                        if not await report_input_limit():
+                            return
                         continue
                     try:
                         fresh = state.backend.write_input(
@@ -2182,30 +2544,55 @@ def create_app(state: GatewayState) -> FastAPI:
                         if fresh:
                             await forward_input(chunk)
                     except BackendError as exc:
-                        await state.sockets.send_text(
-                            websocket,
-                            json.dumps(
-                                {
-                                    "kind": "gap"
-                                    if exc.code
-                                    in ("stale_revision", "host_offline", "rate_limited")
-                                    else "bye",
-                                    "detail": exc.code,
-                                    **(
-                                        {
-                                            "generation": chunk.generation,
-                                            "input_seq": chunk.input_seq,
-                                        }
-                                        if 1 <= chunk.generation <= 0xFFFFFFFF
-                                        and 1 <= chunk.input_seq <= 0xFFFFFFFF
-                                        else {}
-                                    ),
-                                }
-                            ),
+                        if exc.code == "rate_limited":
+                            if not await report_input_limit():
+                                return
+                            continue
+                        if exc.code == "input_failed":
+                            await state.sockets.send_text(
+                                websocket,
+                                json.dumps(
+                                    {
+                                        "kind": "gap",
+                                        "detail": "input_failed",
+                                        "generation": chunk.generation,
+                                        "input_seq": chunk.input_seq,
+                                    }
+                                ),
+                            )
+                            continue
+                        recovery_close = exc.code in (
+                            "stale_revision",
+                            "host_offline",
                         )
-                        if exc.code not in ("stale_revision", "host_offline", "rate_limited"):
+                        trace.emit(
+                            "socket_close", reason=exc.code, source="server", socket=websocket
+                        )
+                        if not disconnected():
+                            with suppress(Exception):
+                                await state.sockets.send_text(
+                                    websocket,
+                                    json.dumps(
+                                        {
+                                            "kind": "gap"
+                                            if exc.code in ("stale_revision", "host_offline")
+                                            else "bye",
+                                            "detail": exc.code,
+                                            **(
+                                                {
+                                                    "generation": chunk.generation,
+                                                    "input_seq": chunk.input_seq,
+                                                }
+                                                if 1 <= chunk.generation <= 0xFFFFFFFF
+                                                and 1 <= chunk.input_seq <= 0xFFFFFFFF
+                                                else {}
+                                            ),
+                                        }
+                                    ),
+                                )
+                        if exc.code not in ("stale_revision", "host_offline"):
                             await close_stream(exc.code)
-                            return
+                        return
                 elif "text" in message and message["text"] is not None:
                     # Character count, not bytes: a parse-bomb bound, not a
                     # byte bound (multibyte input may exceed it in bytes).

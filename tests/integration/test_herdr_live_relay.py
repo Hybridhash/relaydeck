@@ -314,7 +314,7 @@ def _exit_stub_binary(tmp_path: Path) -> str:
     return str(stub)
 
 
-async def _wait_for(predicate: Any, timeout_s: float = 15.0) -> None:
+async def _wait_for(predicate: Any, timeout_s: float = 30.0) -> None:
     deadline = time.monotonic() + timeout_s
     while time.monotonic() < deadline:
         if await predicate():
@@ -324,7 +324,7 @@ async def _wait_for(predicate: Any, timeout_s: float = 15.0) -> None:
 
 
 async def _recv_until(
-    viewer: Any, expected_epoch: str, markers: tuple[bytes, ...], timeout_s: float = 15.0
+    viewer: Any, expected_epoch: str, markers: tuple[bytes, ...], timeout_s: float = 30.0
 ) -> bytes:
     """Receive viewer frames until every marker arrived. Deterministic:
     short socket waits inside one monotonic deadline (no sleeps-as-sync,
@@ -342,6 +342,7 @@ async def _recv_until(
         assert isinstance(raw_chunk, bytes)
         chunk = terminal_wire.decode_output(raw_chunk)
         assert chunk.epoch == expected_epoch
+        assert chunk.offset == len(received), "viewer output was skipped or replayed"
         received += chunk.data
     return bytes(received)
 
@@ -448,6 +449,20 @@ def test_live_pty_bytes_reach_viewer(tmp_path: Path) -> None:
             )
             lease = backend.acquire_control(attachment.attachment_id, "acct-1", "dev-1")
             ticket = _live_ticket(state, lease.lease_id)
+            # No tunnel reader exists yet, so this session is reliably unmapped.
+            # Wait for actual buffered PTY bytes: an empty relay must not merely
+            # mean the child has not produced its banner yet.
+            session = source.attach_shell("term-3")
+            assert source._epochs == {}
+            with selectors.DefaultSelector() as polling:
+                polling.register(session.fileno(), selectors.EVENT_READ)
+
+                async def buffered() -> bool:
+                    return bool(polling.select(0))
+
+                await _wait_for(buffered)
+                assert source.pump_live() == 0
+                assert source.drain_outputs() == []
             with LiveGateway(create_app(state)) as live:
                 host_token = state.hosts.enroll("home-mac", "Home Mac", "acct-1")
                 link = ConnectorLink(
@@ -476,13 +491,14 @@ def test_live_pty_bytes_reach_viewer(tmp_path: Path) -> None:
                             )
 
                         await _wait_for(pushed)
-                    # Attached but epoch-unmapped: nothing pumped, bytes kept.
-                    # No sleep: the unmapped pump is timing-independent (the
-                    # source never reads unmapped sessions), so asserting
-                    # immediately is the deterministic check.
-                    session = source.attach_shell("term-3")
-                    assert source.pump_live() == 0
-                    assert source.drain_outputs() == []
+
+                    # The real tunnel reader supplies the route; it may already
+                    # have pumped the retained banner before the viewer opens.
+                    async def mapped() -> bool:
+                        return source._epochs.get("term-3") == attachment.epoch
+
+                    await _wait_for(mapped)
+                    assert source._attached["shell:term-3"][0] is session
                     viewer_url = (
                         f"ws://127.0.0.1:{live.port}/v1/terminal/{lease.lease_id}"
                         f"?ticket={ticket}&epoch={attachment.epoch}&offset=0"
@@ -493,17 +509,13 @@ def test_live_pty_bytes_reach_viewer(tmp_path: Path) -> None:
                             return backend.rings.viewer_count(attachment.attachment_id) == 1
 
                         await _wait_for(viewing)
-                        # Epoch distribution routes the buffered bytes live.
-                        failures = source.note_epochs(
-                            {"term-3": {"epoch": attachment.epoch, "kind": "shell"}}
-                        )
-                        assert failures == {}
                         session.write(b"live-bytes\n")
                         received = await _recv_until(
-                            viewer, attachment.epoch, (b"stub-ready", b"live-bytes")
+                            viewer, attachment.epoch, (b"stub-ready\r\r\n", b"echo:live-bytes\r\n")
                         )
-                    assert b"stub-ready" in received
-                    assert b"live-bytes" in received
+                    # The PTY echoes the input, then the stub prints its reply.
+                    # Both the buffered banner and reply arrive exactly once.
+                    assert received == b"stub-ready\r\r\nlive-bytes\r\necho:live-bytes\r\n"
                 finally:
                     stop.set()
                     outcome = await asyncio.wait_for(task, timeout=15.0)

@@ -6,7 +6,7 @@ when they are missing, the optional usage hook, source additions, and the
 Tailscale Serve mapping; an existing config is never rewritten. `--yes`
 answers only the Serve mapping question. Serve uses only the configured
 private HTTPS port, never 8443 or 8444, and refuses Funnel. Connector enrollment
-is not done here; it stays the explicit runbook flow (docs/runbooks/install.md).
+is not done here; it stays the explicit flow in the README (Install, step 3).
 
 It never prints or reads secrets, and tests inject the Tailscale runner and the probe.
 """
@@ -383,7 +383,7 @@ def run_setup(
         )
         exit_code = 1
     lines.append(
-        "Connector enrollment is not performed here: follow docs/runbooks/connector.md once, "
+        "Connector enrollment is not performed here: follow the README (Install, step 3) once, "
         "with the owner's verified public key."
     )
     if probe is not None:

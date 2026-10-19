@@ -327,7 +327,10 @@ def test_terminal_socket_stale_revision_gaps() -> None:
         }
         ws.send_bytes(terminal_wire.encode_text(lease.lease_id, 9, 1, b"ok"))
         ws.send_text(json.dumps({"kind": "bye"}))
-    assert backend.input_logs[lease.lease_id] == [(9, 1, "text", b"ok")]
+    # A gap ends the reader: even a valid generation arriving afterward is
+    # not input authority. Recovery must establish a separately validated reader.
+    assert backend.input_logs.get(lease.lease_id, []) == []
+    assert backend.resize_log == []
 
 
 def test_terminal_socket_view_only_cannot_write() -> None:

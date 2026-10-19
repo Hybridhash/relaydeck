@@ -275,7 +275,10 @@ def test_composer_defaults_are_unchanged() -> None:
         field = app.find("composer-draft")
         assert (field.min_lines, field.max_lines) == (1, 5)
         assert not field.autofocus
-        assert field.on_focus is None and field.on_blur is None
+        # Focus is tracked for the Ctrl/Cmd+Enter shortcut only; with no on_focus_change the
+        # handlers report nowhere and must not raise.
+        field.on_focus(None)
+        field.on_blur(None)
         assert app.find("composer-box").expand is None
 
     run(scenario())

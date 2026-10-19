@@ -280,6 +280,12 @@ class Backend(ABC):
         """Pending gateway->connector tunnel messages; draining consumes."""
         return []
 
+    def restore_outbox(
+        self, host_id: str, pending: list[dict[str, Any]], taken: list[dict[str, Any]] | None = None
+    ) -> None:
+        """Return unattempted intents after a connection-local pump is cancelled."""
+        return None
+
     def mark_command_dispatched(self, command_id: str, now_ms: int) -> bool:
         """Write-ahead dispatch marker for the tunnel pump: True when the
         intent moved accepted -> dispatched (pump must send); False when

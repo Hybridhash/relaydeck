@@ -8,7 +8,8 @@ already-patched output produces the same result.
 
 Changes to OUT:
 - flutter_bootstrap.js: `serviceWorkerSettings` is removed, so Flutter's loader registers nothing.
-- index.html: one registration snippet (before </body>) and one `rd-build` meta (in <head>).
+- index.html: one registration snippet and one keyboard focus guard (before </body>) and one
+  `rd-build` meta (in <head>).
 - flutter_service_worker.js: our worker replaces Flet's 784-byte stub at the same URL, with BUILD
   and the explicit shell list embedded.
 - rd-sw-reset.html: the network-only kill switch.
@@ -54,17 +55,22 @@ PAGE = "index.html"
 
 SNIPPET_ID = "rd-sw-register"
 CLIENT_SCRIPT = HERE / "web" / "rd-sw-client.js"
+KEYBOARD_ID = "rd-keyboard-focus"
+KEYBOARD_SCRIPT = HERE / "web" / "rd-keyboard-focus.js"
+PAGE_SCRIPTS = ((SNIPPET_ID, CLIENT_SCRIPT), (KEYBOARD_ID, KEYBOARD_SCRIPT))
 
 
-def snippet() -> str:
-    """The one registration + update-notice script, inlined into the served index."""
-    body = CLIENT_SCRIPT.read_text().rstrip("\n")
+def snippet(script_id: str = SNIPPET_ID, path: Path = CLIENT_SCRIPT) -> str:
+    """One page script, inlined verbatim into the served index."""
+    body = path.read_text().rstrip("\n")
     if "</script" in body.lower():
         raise ValueError("the page script must not contain a closing script tag")
-    return f'  <script id="{SNIPPET_ID}">\n{body}\n  </script>\n'
+    return f'  <script id="{script_id}">\n{body}\n  </script>\n'
 
 
-SNIPPET_RE = re.compile(r'[ \t]*<script id="rd-sw-register">.*?</script>\n', re.S)
+SNIPPET_RE = re.compile(
+    r'[ \t]*<script id="(?:rd-sw-register|rd-keyboard-focus)">.*?</script>\n', re.S
+)
 META_RE = re.compile(r'[ \t]*<meta name="rd-build" content="[^"]*">\n')
 CONFIG_MARKER = "serviceWorkerSettings: {"
 SERVICE_SETTINGS_RE = re.compile(r"\n[ \t]*serviceWorkerSettings: \{.*?\n[ \t]*\},", re.S)
@@ -87,11 +93,12 @@ def strip_meta(html: str) -> str:
 
 
 def with_snippet(html: str) -> str:
-    """Exactly one registration snippet, before </body>."""
+    """Exactly one of each page script, before </body>."""
     html = SNIPPET_RE.sub("", html)
     if html.count("</body>") != 1:
         raise ValueError("index.html must contain exactly one </body>")
-    return html.replace("</body>", snippet() + "</body>", 1)
+    scripts = "".join(snippet(script_id, path) for script_id, path in PAGE_SCRIPTS)
+    return html.replace("</body>", scripts + "</body>", 1)
 
 
 def with_meta(html: str, build: str) -> str:

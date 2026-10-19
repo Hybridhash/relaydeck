@@ -79,7 +79,7 @@ def test_a_progress_notice_keeps_the_composer_height() -> None:
 
             app = await render_component(Probe)
             row = app.find(phone_composer.STATUS_ROW_KEY)
-            heights[submission] = (row.height, [c.value for c in row.content.controls])
+            heights[submission] = (row.height, [c.content.value for c in row.content.controls])
         assert heights[SUBMISSION_SENDING] == (phone_composer.STATUS_ROW_HEIGHT, [])
         assert heights[SUBMISSION_PROGRESS] == (
             phone_composer.STATUS_ROW_HEIGHT,

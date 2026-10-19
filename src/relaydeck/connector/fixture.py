@@ -18,6 +18,7 @@ from typing import Any
 from relaydeck.connector.herdr import EXPECTED_PROTOCOL, HerdrError
 from relaydeck.connector.journal import DispatchAdapter
 from relaydeck.connector.source import LinkSource
+from relaydeck.contracts.launch import AGENT_NAME
 
 __all__ = [
     "FIXTURE_EPOCH",
@@ -209,7 +210,7 @@ class FixtureAdapter(LinkSource):
         return {"type": "agent_prompted"}
 
     async def tab_create(self, workspace_id: str, *, label: str | None = None) -> dict[str, Any]:
-        self._calls.append(("tab.create", {"workspace_id": workspace_id}))
+        self._calls.append(("tab.create", {"workspace_id": workspace_id, "label": label}))
         if workspace_id not in self._workspaces:
             raise HerdrError("no_such_workspace", f"unknown workspace {workspace_id}")
         tab_id = self._next("tab")
@@ -271,6 +272,23 @@ class FixtureAdapter(LinkSource):
         # Upstream AgentInfo keys identity as terminal_id (schema +
         # agent_prompted golden); there is no "id" key.
         return {"agent": {"terminal_id": agent_id}}
+
+    async def agent_list(self) -> list[dict[str, Any]]:
+        self._calls.append(("agent.list", {}))
+        return [dict(agent) for agent in self._agents.values()]
+
+    async def agent_rename(self, target: str, name: str | None) -> dict[str, Any]:
+        self._calls.append(("agent.rename", {"target": target, "name": name}))
+        if target not in self._agents:
+            raise HerdrError("agent_not_found", "agent is no longer listed")
+        if name is not None and not AGENT_NAME.fullmatch(name):
+            raise HerdrError("invalid_agent_name", "name does not satisfy the upstream rule")
+        if name is not None and any(
+            other != target and agent.get("name") == name for other, agent in self._agents.items()
+        ):
+            raise HerdrError("agent_name_taken", "another agent already has this name")
+        self._agents[target]["name"] = name or ""
+        return {"type": "ok"}
 
     async def pane_close(self, pane_id: str) -> dict[str, Any]:
         self._calls.append(("pane.close", {"pane_id": pane_id}))

@@ -17,7 +17,7 @@ from relaydeck.contracts.schemas import SchemaError, validate
 
 MAX_RECORDS = 128
 MAX_BYTES = 131072
-KINDS = {"agent.prompt", "agent.start", "shell.create", "tab.create"}
+KINDS = {"agent.prompt", "agent.rename", "agent.start", "shell.create", "tab.create"}
 # tab.create remains readable in legacy storage; gateway submissions use shell.create.
 OUTCOMES = {"pending", "accepted", "dispatched", "unknown", "succeeded", "failed", "rejected"}
 FINAL = {"succeeded", "failed", "rejected"}
@@ -183,7 +183,7 @@ class PendingCommands:
         ):
             raise ValueError
         target = row["target"]
-        if row["kind"] == "agent.prompt":
+        if row["kind"] in ("agent.prompt", "agent.rename"):
             if set(target) != {"agent_id"}:
                 raise ValueError
         elif set(target) != {"workspace_id"} and target != {"workspace_mode": "new"}:
@@ -220,7 +220,9 @@ class PendingCommands:
 
     @staticmethod
     def _settled_prompt(row: dict[str, Any]) -> bool:
-        return bool(row["kind"] == "agent.prompt" and row["outcome"] == "succeeded")
+        return bool(
+            row["kind"] in ("agent.prompt", "agent.rename") and row["outcome"] == "succeeded"
+        )
 
     @staticmethod
     def unresolved(row: dict[str, Any]) -> bool:
@@ -241,6 +243,7 @@ class PendingCommands:
             if key in self.records or any(
                 r["host"] == key[0]
                 and r["kind"] == command["kind"]
+                and r["kind"] != "agent.rename"
                 and r["target"] == command["target"]
                 and self.unresolved(r)
                 for r in self.records.values()

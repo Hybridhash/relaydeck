@@ -30,6 +30,7 @@ FONT_STEP = 1.0
 FONT_DEFAULT_WEB = 13.0
 FONT_DEFAULT_PHONE = 12.0
 
+PINS_MAX = 200
 AGENT_WORKFLOWS = (WORKFLOW_AGENT_COMPOSER, WORKFLOW_AGENT_DIRECT)
 
 
@@ -47,6 +48,8 @@ class TerminalPrefs:
     # a light tap on Send and Copy (native apps; not iPhone/iPad browsers).
     haptics: bool = True
     space_key: str = ""
+    # Agents pinned to the top of the Console, by scoped key. Kept in this browser only.
+    pinned_agents: tuple[str, ...] = ()
 
     def effective_font_size(self, phone: bool) -> float:
         if self.font_size is not None:
@@ -89,6 +92,19 @@ def clean(raw: Any) -> TerminalPrefs:
         and all(ord(char) >= 32 and ord(char) != 127 for char in space)
     ):
         prefs = replace(prefs, space_key=space)
+    pins = raw.get("pinned_agents")
+    if isinstance(pins, list):
+        clean_pins = tuple(
+            dict.fromkeys(
+                pin
+                for pin in pins
+                if isinstance(pin, str)
+                and 0 < len(pin) <= 512
+                and ":" in pin
+                and all(ord(char) >= 32 and ord(char) != 127 for char in pin)
+            )
+        )
+        prefs = replace(prefs, pinned_agents=clean_pins[:PINS_MAX])
     return prefs
 
 
@@ -124,6 +140,7 @@ __all__ = [
     "FONT_MAX",
     "FONT_MIN",
     "FONT_STEP",
+    "PINS_MAX",
     "PREFS_KEY",
     "TerminalPrefs",
     "clean",

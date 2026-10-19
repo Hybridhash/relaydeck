@@ -36,6 +36,16 @@ def _selected_outline(selected: bool) -> list[ft.BoxShadow] | None:
     ]
 
 
+def _highlight_ring() -> ft.BoxShadow:
+    """Static 4px ring in the accent, shown briefly on a renamed card (no animation)."""
+    return ft.BoxShadow(
+        color=ft.Colors.with_opacity(0.18, T.PRIMARY_FILL),
+        spread_radius=4,
+        blur_radius=0,
+        offset=ft.Offset(0, 0),
+    )
+
+
 def AgentCard(
     agent_id: str,
     name: str,
@@ -48,6 +58,10 @@ def AgentCard(
     agent: str = "",
     compact: bool = False,
     subject: str = "",
+    highlighted: bool = False,
+    on_name_double_tap: Callable[[], Any] | None = None,
+    on_long_press: Callable[[], Any] | None = None,
+    pinned: bool = False,
 ) -> Any:
     """Full agent card: title + pill, subject line (optional), subtitle, meta row.
 
@@ -56,7 +70,8 @@ def AgentCard(
     the tooltip keeps the full name, prefixed with the agent identity
     when the kind is known. The subtitle's leading agent word renders
     as an identity pill; a 3px identity stripe runs down the card's
-    left edge inside the rounded border.
+    left edge inside the rounded border. An unread agent shows
+    "Unread" in the meta row (`meta_right`); a freshly renamed card carries a static accent ring.
     """
     # Local import: theme.py imports this package for tokens, so a
     # module-level import would cycle (theme -> cards -> theme).
@@ -71,8 +86,22 @@ def AgentCard(
     meta_value = f" · {rest}" if rest and rest != subtitle else rest
     status_word = T.STATUS_LABELS.get(status, T.STATUS_LABELS[T.STATUS_UNKNOWN])
     tooltip = f"{identity.label} agent, {status_word}, {name}" if agent else name
-    edge = T.BLOCKED if blocked else T.BORDER
-    return _action_button(
+    edge = T.PRIMARY_FILL if highlighted else T.BLOCKED if blocked else T.BORDER
+    title: Any = ft.Text(
+        name,
+        style=text_style(FAMILY_INTERFACE, T.TYPE_CARD_TITLE, title_ink),
+        no_wrap=True,
+        overflow=ft.TextOverflow.ELLIPSIS,
+        expand=True,
+    )
+    if on_name_double_tap is not None:
+        title = ft.GestureDetector(
+            key=f"agent-name-{agent_id}",
+            expand=True,
+            on_double_tap=lambda _e: on_name_double_tap(),
+            content=title,
+        )
+    button = _action_button(
         key=f"agent-card-{agent_id}",
         radius=T.RADIUS_CARD,
         tooltip=None if compact else tooltip,
@@ -87,7 +116,11 @@ def AgentCard(
                 right=ft.BorderSide(1, edge),
                 bottom=ft.BorderSide(1, edge),
             ),
-            shadow=_selected_outline(selected),
+            shadow=[
+                *(_selected_outline(selected) or []),
+                *([_highlight_ring()] if highlighted else []),
+            ]
+            or None,
             content=ft.Column(
                 spacing=3,
                 controls=[
@@ -95,12 +128,18 @@ def AgentCard(
                         spacing=T.GAP_CARD,
                         vertical_alignment=ft.CrossAxisAlignment.CENTER,
                         controls=[
-                            ft.Text(
-                                name,
-                                style=text_style(FAMILY_INTERFACE, T.TYPE_CARD_TITLE, title_ink),
-                                no_wrap=True,
-                                overflow=ft.TextOverflow.ELLIPSIS,
-                                expand=True,
+                            title,
+                            *(
+                                [
+                                    ft.Icon(
+                                        ft.Icons.PUSH_PIN,
+                                        key=f"agent-pinned-{agent_id}",
+                                        size=14,
+                                        color=meta_ink,
+                                    )
+                                ]
+                                if pinned
+                                else []
                             ),
                             StatusPill(status, inverted=blocked),
                         ],
@@ -149,28 +188,38 @@ def AgentCard(
                             ),
                         ],
                     ),
-                    ft.Row(
-                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-                        controls=[
-                            ft.Text(
-                                meta_left,
-                                style=text_style(FAMILY_MONO, T.TYPE_META, meta_ink),
-                                no_wrap=True,
-                                overflow=ft.TextOverflow.ELLIPSIS,
-                                expand=True,
-                            ),
-                            ft.Text(
-                                meta_right,
-                                style=text_style(FAMILY_MONO, T.TYPE_META, meta_ink),
-                                no_wrap=True,
-                                overflow=ft.TextOverflow.ELLIPSIS,
-                            ),
-                        ],
+                    *(
+                        [
+                            ft.Row(
+                                alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                                controls=[
+                                    ft.Text(
+                                        meta_left,
+                                        style=text_style(FAMILY_MONO, T.TYPE_META, meta_ink),
+                                        no_wrap=True,
+                                        overflow=ft.TextOverflow.ELLIPSIS,
+                                        expand=True,
+                                    ),
+                                    ft.Text(
+                                        meta_right,
+                                        style=text_style(FAMILY_MONO, T.TYPE_META, meta_ink),
+                                        no_wrap=True,
+                                        overflow=ft.TextOverflow.ELLIPSIS,
+                                    ),
+                                ],
+                            )
+                        ]
+                        if meta_left or meta_right
+                        else []
                     ),
                 ],
             ),
         ),
     )
+    if on_long_press is not None:
+        # The button's own press recognizer also owns the hold, so no second recognizer competes.
+        button.on_long_press = lambda _e: on_long_press()
+    return button
 
 
 def _tile_style(status: str) -> tuple[str, str, int]:

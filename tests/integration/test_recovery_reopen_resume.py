@@ -76,6 +76,9 @@ def test_a_fresh_viewer_recovery_reopens_the_same_control_lease(kind, history):
             urls = []
             actor._socket_factory = _production_factory(ctx, urls)
             before = len(ctx.requests)
+            # This helper models a fresh renderer; its old diagnostic byte log is not
+            # the new renderer's screen. Complete retained history needs no native reset.
+            actor.output_log.clear()
             outcome = await drive_recovery(
                 controller, actor._ops.terminal_ticket, fresh_viewer=True
             )
@@ -96,22 +99,15 @@ def test_a_fresh_viewer_recovery_reopens_the_same_control_lease(kind, history):
                 )
                 assert not reader.done()
             else:
-                # Evicted history is never presented as complete: the stream stops at the gap
-                # and offers the live position; the next step reattaches there and says so.
-                await asyncio.wait_for(reader, 2)
-                assert controller._client.next_offset == 0
-                assert controller.reattach_needed or controller.pending_resume is not None
-                assert ctx.backend.open_lease(lease.lease_id) is not None
-                assert await drive_recovery(controller, actor._ops.terminal_ticket) in (
-                    "reattached",
-                    "resumed",
+                # Retention base moved, but the complete retained ring fits the cap.
+                # It needs no incomplete notice, native reset or ownership change.
+                await _wait(lambda: bytes(actor.output_log) == b"new")
+                assert actor.term_state.notice is None or (
+                    actor.term_state.notice.text != INCOMPLETE_HISTORY
                 )
-                ctx.readers.append(asyncio.create_task(actor.run()))
-                await _wait(lambda: controller._client.next_offset > 0)
-                await _wait(
-                    lambda: actor.term_state.notice is not None
-                    and actor.term_state.notice.text == INCOMPLETE_HISTORY
-                )
+                assert not reader.done()
+                assert controller.pending_resume is None and not controller.reattach_needed
+                assert bytes(actor.output_log) == b"new"
                 assert ctx.backend.open_lease(lease.lease_id).generation == generation
             assert controller._client._input_seq == input_seq
             assert ctx.backend.input_logs == {} and ctx.backend.resize_log == []
@@ -133,15 +129,23 @@ def test_the_session_factory_opens_first_ticket_only_and_reopens_with_the_positi
             assert "epoch=" not in urls[-1]
             fresh._client.reopening = True  # as when opening again after its first open
             factory("tk-again")
-            assert urls[-1].endswith("&epoch=&offset=0")
+            from urllib.parse import parse_qs, urlsplit
+
+            query = parse_qs(urlsplit(urls[-1]).query, keep_blank_values=True)
+            assert query == {
+                "ticket": ["tk-again"],
+                "output_reset": ["v1"],
+                "epoch": [""],
+                "offset": ["0"],
+            }
 
     run(scenario())
 
 
 def test_the_url_builder_appends_the_position_only_when_given():
     build = production_stream_factory("ws://test")
-    assert build("lease-1", "tk").url == "ws://test/v1/terminal/lease-1?ticket=tk"
+    assert build("lease-1", "tk").url == "ws://test/v1/terminal/lease-1?ticket=tk&output_reset=v1"
     assert (
         build("lease-1", "tk", "epoch=e&offset=5").url
-        == "ws://test/v1/terminal/lease-1?ticket=tk&epoch=e&offset=5"
+        == "ws://test/v1/terminal/lease-1?ticket=tk&output_reset=v1&epoch=e&offset=5"
     )

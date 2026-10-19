@@ -44,6 +44,7 @@ from relaydeck.client.features.composer.domain import (
     StagedMarker,
 )
 from relaydeck.client.features.composer.draft_field import use_draft_value
+from relaydeck.client.features.composer.shortcut import use_send_shortcut
 from relaydeck.client.features.terminal.events import click, value_change
 from relaydeck.client.features.terminal.paste_policy import PasteReview
 from relaydeck.client.theme import FONT_SIZE, MIN_TOUCH, palette
@@ -139,6 +140,18 @@ def ComposerBox(
     # a parent render between a native paste and its on_change must not
     # send the older draft back into the field (same guard as the phone composer).
     draft_value, remember_draft = use_draft_value(draft, focusable=True)
+    shortcut, shortcut_hint = use_send_shortcut(
+        draft=draft, can_send=not send_disabled, send=lambda: on_send()
+    )
+
+    def focus_changed(focused: bool) -> None:
+        shortcut.focus(focused)
+        if on_focus_change is not None:
+            on_focus_change(focused)
+
+    def draft_changed(text: str) -> Any:
+        return None if shortcut.swallows(text) else on_draft_change(text)
+
     draft_control = ft.TextField(
         key=DRAFT_KEY,
         expand=True,
@@ -163,9 +176,9 @@ def ComposerBox(
                 border_radius=T.RADIUS_KEY, side=ft.BorderSide(2, tokens["accent_text"])
             ),
         },
-        on_change=value_change(on_draft_change),
-        on_focus=(lambda _e: on_focus_change(True)) if on_focus_change else None,
-        on_blur=(lambda _e: on_focus_change(False)) if on_focus_change else None,
+        on_change=value_change(draft_changed),
+        on_focus=lambda _e: focus_changed(True),
+        on_blur=lambda _e: focus_changed(False),
     )
     remember_draft(draft_control)
     frame_controls: list[Any] = [draft_control]
@@ -220,13 +233,21 @@ def ComposerBox(
     send = ft.IconButton(
         ft.Icons.ARROW_UPWARD,
         key=SEND_KEY,
-        tooltip="Insert into terminal" if blocked else "Send message",
+        tooltip=f"{'Insert into terminal' if blocked else 'Send'} ({shortcut_hint})",
         disabled=send_disabled,
         width=MIN_TOUCH,
         height=MIN_TOUCH,
         style=send_style,
         on_click=click(on_send),
     )
+    if attachment is not None and isinstance(attachment, ft.IconButton):
+        # Same footprint and axis as Send, so the two buttons line up in the footer row.
+        attach_style = chrome_style(dark)
+        attach_style.shape = ft.RoundedRectangleBorder(radius=24)
+        attach_style.padding = 0
+        attachment.width = attachment.height = MIN_TOUCH
+        attachment.icon_size = 22
+        attachment.style = attach_style
     draft_field = frame_controls.pop(0)
     frame_controls.insert(
         0,

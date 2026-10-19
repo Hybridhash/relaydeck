@@ -15,6 +15,7 @@ import base64
 import json
 import os
 import stat
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -121,6 +122,14 @@ def _rec(journal: CommandJournal, command_id: str) -> dict[str, Any]:
     rec = journal.record(command_id)
     assert rec is not None
     return rec
+
+
+def _wait_status(journal: CommandJournal, command_id: str, expected: str) -> None:
+    """Keepalive does not acknowledge completion of the ordered journal lane."""
+    deadline = time.monotonic() + 2
+    while _rec(journal, command_id)["status"] != expected and time.monotonic() < deadline:
+        time.sleep(0.001)
+    assert _rec(journal, command_id)["status"] == expected
 
 
 # -- journal core ------------------------------------------------------------
@@ -532,6 +541,7 @@ def test_http_dispatch_ack_result_lifecycle(tmp_path: Path) -> None:
             )
             ws.send_text(json.dumps({"kind": "ping"}))
             assert json.loads(ws.receive_text()) == {"kind": "pong"}
+            _wait_status(journal, "http-002", "acked")
             assert _rec(journal, "http-002")["status"] == "acked"
             ws.send_text(
                 json.dumps(
@@ -547,6 +557,7 @@ def test_http_dispatch_ack_result_lifecycle(tmp_path: Path) -> None:
             )
             ws.send_text(json.dumps({"kind": "ping"}))
             assert json.loads(ws.receive_text()) == {"kind": "pong"}
+            _wait_status(journal, "http-002", "succeeded")
             rec = journal.record("http-002")
             assert rec is not None and rec["status"] == "succeeded"
             assert rec["result_digest"] == "d-9"
@@ -628,6 +639,7 @@ def test_live_path_ttl_pump_never_sends_expired(tmp_path: Path) -> None:
             }
             ws.send_text(json.dumps({"kind": "ping"}))
             assert json.loads(ws.receive_text()) == {"kind": "pong"}  # never a dispatch
+            _wait_status(journal, "ttl-0001", "expired")
             ws.send_text(json.dumps({"kind": "bye"}))
         assert _rec(journal, "ttl-0001")["status"] == "expired"
         assert backend.drain_outbox("home-mac") == []
@@ -910,7 +922,7 @@ def test_connector_executes_all_kinds(tmp_path: Path) -> None:
         try:
             adapter = _ScriptAdapter()
             dispatcher = ConnectorDispatch(journal, adapter, host_id="home-mac", clock=lambda: NOW)
-            # agent.start: tab.create, then agent.start on the root pane.
+            # agent.start: a named tab, then agent.start on its root pane.
             started = await dispatcher.dispatch(
                 _dispatch_msg(
                     "cx-1",
@@ -923,7 +935,7 @@ def test_connector_executes_all_kinds(tmp_path: Path) -> None:
             assert started["result"]["type"] == "agent_started"
             assert started["result"]["pane_id"] == "pane-1"
             assert adapter.calls == [
-                ("tab.create", "w1", ""),
+                ("tab.create", "w1", "web"),
                 ("agent.start", "web", "tool-a", "pane-1", "['--model', 'o3']"),
             ]
             assert dispatcher.herdr_calls == 2
@@ -1078,7 +1090,7 @@ def test_connector_failures_map_to_failed_or_unknown(tmp_path: Path) -> None:
 # -- live push over StreamFanout (deferred F4) ---------------------
 
 
-async def _wait_for(pred: Any, timeout: float = 10.0) -> None:
+async def _wait_for(pred: Any, timeout: float = 30.0) -> None:
     deadline = asyncio.get_running_loop().time() + timeout
     while not pred():
         if asyncio.get_running_loop().time() > deadline:

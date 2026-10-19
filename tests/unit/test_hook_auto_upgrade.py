@@ -601,6 +601,7 @@ def test_stop_during_startup_leaves_no_upgrade_after_close(
         stub = SimpleNamespace(
             route=None,
             _remove_route=lambda: None,
+            _request_shutdown=lambda: CompanionRuntime._request_shutdown(stub),
             _finish=CompanionRuntime._finish,
             stop=stop,
             webpush_task=None,

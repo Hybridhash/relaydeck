@@ -212,7 +212,8 @@ def test_mapping_requires_explicit_recovery_and_preserves_overflow(
             if failure == "superseded":
                 assert session.controller is controller and term._reset_count == resets
             elif failure == "overflow":
-                assert session.controller is controller and controller.reattach_needed
+                assert session.controller is controller and controller.live_edge_pending
+                assert not controller.reattach_needed
                 assert controller.key_generation() is None
             else:
                 assert session.controller is None and "reattach explicitly" in session.notice

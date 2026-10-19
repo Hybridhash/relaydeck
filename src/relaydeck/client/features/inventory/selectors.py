@@ -7,10 +7,11 @@ presentational and every rule is unit-testable without Flet.
 from __future__ import annotations
 
 from collections import Counter
-from collections.abc import Iterable, Mapping
+from collections.abc import Collection, Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
+from relaydeck.contracts.launch import agent_slug
 from relaydeck.domain.agent_order import status_rank
 from relaydeck.domain.models import AgentStatus, AppState, Tab, scope_key
 
@@ -27,6 +28,12 @@ def _label(text: object) -> str:
     return _tidy(text)
 
 
+def _display(name: object, tab_label: object) -> str:
+    """The tab label when the agent's name is its slug (a free-form rename), else the name."""
+    label, own = _label(tab_label), _label(name)
+    return label if own and label and agent_slug(label) == own else own
+
+
 def agent_names(state: AppState) -> dict[str, str]:
     """Display name per agent key (`scope_key(host, terminal_id)`).
 
@@ -39,7 +46,7 @@ def agent_names(state: AppState) -> dict[str, str]:
     for agent in state.inventory.agents.values():
         tab = tabs.get(scope_key(agent.host_id, agent.tab_id))
         base = (
-            _label(agent.name)
+            _display(agent.name, tab.label if tab else "")
             or _label(tab.label if tab else "")
             or _tidy(agent.title)
             or _tidy(agent.agent).title()
@@ -88,15 +95,22 @@ def metadata_rows(
 ) -> tuple[AgentRow, ...]:
     """Trusted typed page metadata; zero activity is unknown, not 'never'.
 
-    `names` (from `agent_names`) supplies the display name when the agent is
-    in the loaded inventory; otherwise the page's own name/title is used."""
+    A page's explicit name wins over older loaded inventory. `names` supplies
+    the tab-label/title fallback when the page has no name."""
     result = []
     for row in rows:
         at = row.get("last_activity_ms", 0)
         activity = relative_ms(now_ms, at) if at else "Activity unknown"
         status = AgentStatus(row["status"])
         key = scope_key(row["host_id"], row["terminal_id"])
-        title = (names or {}).get(key) or row.get("name") or row.get("title") or row["terminal_id"]
+        known = (names or {}).get(key)
+        title = (
+            (known if known and _label(row.get("name")) == agent_slug(known) else "")
+            or _label(row.get("name"))
+            or known
+            or row.get("title")
+            or row["terminal_id"]
+        )
         subject = _tidy(row.get("title")) if _tidy(row.get("title")) != title else ""
         result.append(
             AgentRow(
@@ -239,6 +253,24 @@ def agent_rows(
         )
     rows.sort(key=lambda r: (status_rank(r.status.value), r.title.casefold(), r.key))
     return tuple(rows)
+
+
+def pinned_first(rows: tuple[AgentRow, ...], pins: Collection[str]) -> tuple[AgentRow, ...]:
+    """Pinned agents first; each group keeps the incoming order. Unknown pins are ignored."""
+    return tuple(row for row in rows if row.key in pins) + tuple(
+        row for row in rows if row.key not in pins
+    )
+
+
+def pruned_pins(
+    state: AppState, pins: Collection[str], toggled: str = "", limit: int = 200
+) -> tuple[str, ...]:
+    """Pins of agents that still exist, with `toggled` flipped; capped at `limit`."""
+    live = {scope_key(a.host_id, a.terminal_id) for a in state.inventory.agents.values()}
+    kept = [pin for pin in dict.fromkeys(pins) if pin in live and pin != toggled]
+    if toggled and toggled in live and toggled not in pins:
+        kept.append(toggled)
+    return tuple(kept[-limit:])
 
 
 def shell_rows(

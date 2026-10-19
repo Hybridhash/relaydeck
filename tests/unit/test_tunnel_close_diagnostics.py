@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -24,6 +25,127 @@ from relaydeck.connector.link import (
     _WebsocketTransport,
 )
 from tests.support.sync.scripted_transport import _ScriptedTransport
+
+
+@pytest.mark.parametrize("branch", ["receive", "terminal"])
+def test_tunnel_failure_identifies_inflight_await_without_payloads(
+    branch: str, tmp_path: Path, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def scenario() -> None:
+        marker = "ticket=PRIVATE_GRANT Cookie=PRIVATE_COOKIE /private/PRIVATE_PATH"
+        caplog.set_level("WARNING", logger="relaydeck.connector.link")
+        inbound = (
+            [json.dumps({"kind": "terminal.input", "data": marker})] if branch == "terminal" else []
+        )
+        transport = _ScriptedTransport(inbound)
+        link = ConnectorLink(
+            LinkConfig(
+                gateway_url="http://localhost",
+                host_id="home-mac",
+                host_token=marker,
+                journal_path=str(tmp_path / "journal.db"),
+            ),
+            FixtureAdapter(),
+        )
+        entered = asyncio.Event()
+
+        async def terminal(*args: Any) -> None:
+            entered.set()
+            await asyncio.Event().wait()
+
+        monkeypatch.setattr(link, "_handle_terminal", terminal)
+        task = asyncio.create_task(link._serve_messages(transport, asyncio.Event()))
+        try:
+            if branch == "terminal":
+                await asyncio.wait_for(entered.wait(), 1)
+            else:
+                await asyncio.sleep(0)
+            link._log_tunnel_failure(transport, TimeoutError(marker), "stream")
+            assert f"inflight={branch} inflight_age_s=" in caplog.text
+            assert "recv_idle_s=" in caplog.text and marker not in caplog.text
+            assert all(r.exc_info is None for r in caplog.records)
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+            await link.close()
+
+    asyncio.run(scenario())
+
+
+def test_gateway_stopwatches_receive_handler_outbox_and_final_idle(
+    caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from fastapi.routing import APIWebSocketRoute
+
+    from relaydeck.gateway import app as gateway_module
+    from relaydeck.gateway.app import create_app
+    from tests.support.terminal.sockets import _state
+
+    async def scenario() -> None:
+        caplog.set_level("INFO", logger="relaydeck.gateway.app")
+        state, backend, _ = _state()
+        token = state.hosts.enroll("home-mac", account="acct-1")
+        endpoint = next(
+            r.endpoint
+            for r in create_app(state).routes
+            if isinstance(r, APIWebSocketRoute) and r.path == "/v1/connectors"
+        )
+        now = [100.0]
+        monkeypatch.setattr(gateway_module, "time", SimpleNamespace(monotonic=lambda: now[0]))
+        epochs = backend.epochs_for_host
+        ingest = backend.ingest_terminal_output
+
+        def delayed_epochs(*args: Any) -> Any:
+            now[0] += 0.7
+            return epochs(*args)
+
+        def delayed_output(*args: Any) -> Any:
+            now[0] += 0.8
+            return ingest(*args)
+
+        monkeypatch.setattr(backend, "epochs_for_host", delayed_epochs)
+        monkeypatch.setattr(backend, "ingest_terminal_output", delayed_output)
+        marker = "PRIVATE_PATH_COOKIE_GRANT"
+
+        class Socket:
+            query_params = {"token": token}
+
+            def __init__(self) -> None:
+                self.inbound = [
+                    json.dumps(
+                        {
+                            "kind": "terminal.output",
+                            "host_id": "home-mac",
+                            "terminal_id": marker,
+                            "epoch": "e1",
+                            "data_b64": "eA==",
+                        }
+                    ),
+                    json.dumps({"kind": "bye"}),
+                ]
+
+            async def accept(self) -> None:
+                pass
+
+            async def send_text(self, data: str) -> None:
+                pass
+
+            async def close(self, **kwargs: Any) -> None:
+                pass
+
+            async def receive(self) -> dict[str, str]:
+                now[0] += 0.6
+                return {"type": "websocket.receive", "text": self.inbound.pop(0)}
+
+        await endpoint(Socket())
+        text = caplog.text
+        for branch in ("receive", "terminal.output", "pump_outbox"):
+            assert f"tunnel_stall branch={branch} ms=" in text
+        assert "tunnel_loop idle_recv_s=" in text
+        assert marker not in text and token not in text
+        assert all(r.exc_info is None for r in caplog.records)
+
+    asyncio.run(scenario())
 
 
 def test_real_wire_pong_updates_monotonic_age_and_keeps_builtin_acknowledgement() -> None:
@@ -58,7 +180,7 @@ def test_transport_uses_supported_custom_connection_factory(
         transport = _WebsocketTransport("ws://localhost/v1/connectors", "synthetic")
         await transport.open()
         assert recorded["create_connection"] is _PongTrackedConnection
-        assert "ping_interval" not in recorded and "ping_timeout" not in recorded
+        assert recorded["ping_interval"] == recorded["ping_timeout"] == 20
 
     asyncio.run(scenario())
 

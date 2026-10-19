@@ -172,6 +172,9 @@ def _safe_path(path: Path) -> None:
             raise UsageUnavailable()
 
 
+LOCK_WAIT_SECONDS = 0.25
+
+
 class SqliteUsageStore:
     """Host-partitioned ledger, with optional prices and injectable epoch-ms clock.
 
@@ -192,6 +195,7 @@ class SqliteUsageStore:
         self._price_digest = _price_digest(self.prices)
         self._clock = clock or (lambda: int(time.time() * 1000))
         self._lock = threading.RLock()
+        self._stopping = threading.Event()
         self._closed = False
         try:
             self._zone = ZoneInfo(timezone)
@@ -387,31 +391,71 @@ class SqliteUsageStore:
         self.close()
 
     def close(self) -> None:
-        with self._lock:
+        if not self._lock.acquire(timeout=LOCK_WAIT_SECONDS):
+            raise UsageUnavailable("busy")
+        try:
             if not self._closed:
-                self._db.close()
+                # Publish logical closure before the native close; shutdown never waits
+                # on this mutex and may race either side of the connection closing.
                 self._closed = True
+                try:
+                    self._db.close()
+                except BaseException:
+                    self._closed = False
+                    raise
+        finally:
+            self._lock.release()
+
+    def begin_shutdown(self) -> None:
+        """Reject new ledger work and interrupt active SQL without waiting for its lock."""
+        self._stopping.set()
+        if not self._closed:
+            try:
+                self._db.interrupt()
+            except sqlite3.ProgrammingError:
+                if not self._closed:
+                    raise  # Only the verified concurrent-close race is benign.
+
+    @property
+    def accepting_work(self) -> bool:
+        """Lock-free admission check, including for previously completed reports."""
+        return not self._closed and not self._stopping.is_set()
 
     @contextmanager
     def _transaction(self, *, write: bool = True) -> Iterator[sqlite3.Connection]:
-        with self._lock:
-            if self._closed:
+        # Admitted reports and ingest may legitimately take seconds. Polling this
+        # mutex bounds shutdown responsiveness, not their execution/admission time.
+        # HTTP deadlines and dedicated worker slots bound request-side work instead.
+        while not self._lock.acquire(timeout=LOCK_WAIT_SECONDS):
+            if self._closed or self._stopping.is_set():
                 raise UsageUnavailable("closed")
+        try:
+            if self._closed or self._stopping.is_set():
+                raise UsageUnavailable("closed")
+            self._db.set_progress_handler(lambda: int(self._stopping.is_set()), 1000)
             try:
                 self._db.execute("BEGIN IMMEDIATE" if write else "BEGIN")
                 yield self._db
+                if self._stopping.is_set():
+                    raise UsageUnavailable("closed")
                 self._db.commit()
             except BaseException as exc:
+                self._db.set_progress_handler(None, 0)
                 if self._db.in_transaction:
                     self._db.rollback()
                 if isinstance(exc, sqlite3.Error):
                     code = getattr(exc, "sqlite_errorcode", 0) & 255
                     raise UsageUnavailable(
                         "busy"
-                        if code in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED)
+                        if code
+                        in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED, sqlite3.SQLITE_INTERRUPT)
                         else "corrupt"
                     ) from None
                 raise
+            finally:
+                self._db.set_progress_handler(None, 0)
+        finally:
+            self._lock.release()
 
     def _horizon(self, now_ms: int, db: sqlite3.Connection) -> int:
         today = datetime.fromtimestamp(now_ms / 1000, self._zone).date()
@@ -1331,6 +1375,8 @@ class SqliteUsageStore:
                 )
 
         with self._transaction(write=False) as db:
+            generation = self._generation(db)  # First read pins the SQLite snapshot.
+            as_of_ms = self._clock()
             db.create_function("usage_hour", 1, self._local_hour, deterministic=True)
             args = (query.host_id, query.from_day, query.to_day, self._horizon(now_ms, db))
             # SQL sums over ingest-time prices; legacy Python
@@ -1559,6 +1605,9 @@ class SqliteUsageStore:
                 next_cursor,
                 workspace_days=recency,
                 workspace_labels=labels,
+                data_generation=generation,
+                as_of_ms=as_of_ms,
+                kind_activity=tuple(self._kind_activity(db, query.host_id).items()),
             )
 
     @staticmethod
@@ -1584,7 +1633,11 @@ class SqliteUsageStore:
     def data_generation(self) -> int:
         """Report-input generation (meta counter); 0 before any change."""
         with self._transaction(write=False) as db:
-            row = db.execute("SELECT value FROM meta WHERE key='data_generation'").fetchone()
+            return self._generation(db)
+
+    @staticmethod
+    def _generation(db: sqlite3.Connection) -> int:
+        row = db.execute("SELECT value FROM meta WHERE key='data_generation'").fetchone()
         return int(row[0]) if row and str(row[0]).isdigit() else 0
 
     def price_digest(self) -> str:
@@ -1681,9 +1734,13 @@ class SqliteUsageStore:
         """Each kind's latest event time: a reading older than this may be wrong."""
         _key(host_id)
         with self._transaction(write=False) as db:
-            rows = db.execute(
-                "SELECT kind,MAX(occurred) FROM events WHERE host=? GROUP BY kind", (host_id,)
-            ).fetchall()
+            return self._kind_activity(db, host_id)
+
+    @staticmethod
+    def _kind_activity(db: sqlite3.Connection, host_id: str) -> dict[str, int]:
+        rows = db.execute(
+            "SELECT kind,MAX(occurred) FROM events WHERE host=? GROUP BY kind", (host_id,)
+        ).fetchall()
         return {kind: int(at) for kind, at in rows if at is not None}
 
     @staticmethod

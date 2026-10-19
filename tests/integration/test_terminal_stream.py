@@ -835,7 +835,7 @@ def test_client_resume_over_live_server() -> None:
                 on_gap=gaps.append,
             )
             await client.open("lease-7", 3, "rdt_live", "e1", 6)
-            assert client.resume_query() == "epoch=e1&offset=6"
+            assert client.resume_query() == "epoch=e1&offset=6&output_reset=v1"
             await client.send_input(b"ls\n")
             runner = asyncio.ensure_future(client.run())
             deadline = time.monotonic() + 5
@@ -1002,10 +1002,11 @@ def test_controller_viewer_overflow_resets() -> None:
         on_bytes=lambda data: None,
     )
     controller.on_viewer_overflow()
-    assert controller.reattach_needed is True
-    assert controller.state.status == "reset"
+    assert controller.reattach_needed is False
+    assert controller.live_edge_pending and controller.ui_input_fenced
+    assert controller.state.status == "reconnecting"
     assert controller.state.notice is not None
-    assert controller.state.notice.text == VIEWER_OVERFLOW_HISTORY
+    assert "History incomplete" in controller.state.notice.text
 
 
 # -- stress profiles and responsiveness --------------------------------------------

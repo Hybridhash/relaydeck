@@ -172,9 +172,6 @@ class LeaseStore:
         self._attachments[attachment_id] = renewed
         return renewed, dead
 
-    def leases_of(self, attachment_id: str) -> tuple[LeaseRecord, ...]:
-        return tuple(r for r in self._leases.values() if r.attachment_id == attachment_id)
-
     def upstream_mode(self, attachment_id: str, now_ms: int) -> str:
         """An observer must never retain Herdr's direct-attach size lock.
 

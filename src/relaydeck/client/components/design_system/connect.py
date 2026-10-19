@@ -1,13 +1,13 @@
 """Controlled Connect panel for the Mac-local device pairing flow.
 
 Step hierarchy follows android-pair.html (reference only); every word
-and command comes from docs/runbooks/device-pairing.md instead of the
+and command comes from the documented pairing flow instead of the
 mock's unimplemented claims: no QR/camera scanner, no plugin command,
 no account-login step. The application owns all state, progress, timers, network
 and secure storage; this module renders a frozen view model plus
 callbacks and never sees verifiers, tokens or cookies.
 
-Documented companion commands only (runbook Local owner ceremony):
+Documented companion commands only (the owner ceremony in the README):
 `relaydeck pairing open --ttl-seconds 120` on the Mac, and the matching
 `relaydeck pairing approve --request <id> --code <XXX-XXX>`, with real ids
 substituted when the view model carries them.

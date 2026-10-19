@@ -79,12 +79,15 @@ import threading
 import time
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, ParamSpec, TypeVar
 
 from relaydeck.contracts.canonical import canonical_json
 from relaydeck.contracts.schemas import GATEWAY_PROTOCOL
+from relaydeck.offload import OrderedGate, run_blocking
 
 SCHEMA_VERSION = 1
+P = ParamSpec("P")
+T = TypeVar("T")
 
 TERMINAL_STATUSES = ("succeeded", "failed", "rejected", "expired")
 NONTERMINAL_STATUSES = ("accepted", "dispatched", "acked", "unknown")
@@ -182,6 +185,7 @@ class CommandJournal:
         self._path = Path(os.path.expanduser(str(path)))
         self._clock = clock or _utcnow_ms
         self._lock = threading.Lock()
+        self._async_lock = OrderedGate()
         self._path.parent.mkdir(parents=True, exist_ok=True)
         # Pre-create 0600 so sqlite never inherits a lax umask for the
         # main file (creds-file precedent: enrollment._write_private).
@@ -237,6 +241,11 @@ class CommandJournal:
 
     def _now(self, now: int | None) -> int:
         return self._clock() if now is None else now
+
+    async def run(self, call: Callable[P, T], *args: P.args, **kwargs: P.kwargs) -> T:
+        """FIFO loop callers; keep write-ahead completion before the next operation."""
+        async with self._async_lock.hold():
+            return await run_blocking(call, *args, **kwargs)
 
     def close(self) -> None:
         with self._lock:

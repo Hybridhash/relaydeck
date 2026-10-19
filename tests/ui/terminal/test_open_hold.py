@@ -170,12 +170,10 @@ def test_control_settlement_precedes_release_and_a_window_resize_while_held_wins
         out["report"](120, 28)  # Window changed while control was settling.
         clock.advance_by(agent_hooks.OPEN_SETTLE_S / 2)
         await app.settle(rounds=1)
-        out["report"](120, 28)
+        out["report"](120, 28)  # A re-sent unchanged grid is not layout activity.
+        assert sent == []
         clock.advance_by(agent_hooks.OPEN_SETTLE_S / 2)
         await app.settle(rounds=1)
-        assert sent == []
-        clock.advance_by(agent_hooks.OPEN_HOLD_S)
-        await app.settle()
         assert sent == [(120, 28)] and not out["held"]
 
     run(scenario())
@@ -271,9 +269,15 @@ def test_continuous_reports_cannot_postpone_the_settled_hold_cap(
         out["settle"](True)
         await app.settle(rounds=1)
         await stream(cap * 2)
-        # Reports never paused for the quiet interval, including after the cap.
+        # Changing grids run to the cap; an unchanged grid is a re-send and does not
+        # postpone the quiet window.
+        quiet = min(agent_hooks.OPEN_SETTLE_S, cap) if expected is not None else cap
         assert sent and not out["held"] and app.find("probe").value == "shown"
-        assert sent[0][0] - start == pytest.approx(cap)
+        first = sent[0][0] - start
+        if changing or quiet == cap:
+            assert first == pytest.approx(cap)
+        else:
+            assert quiet <= first < cap  # released at the first stream step past the window
         clock.advance_by(agent_hooks.RESIZE_SETTLE_S)
         await app.settle(rounds=1)
         assert len(sent) > 1  # After release the last live report is still published.

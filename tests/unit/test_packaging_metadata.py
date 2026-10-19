@@ -1,7 +1,6 @@
 """the packaging metadata is installable outside the checkout (static, offline).
 
-The install itself is proven by scripts/check_dist_install.sh, which builds the wheel and installs
-it into a temporary venv. These tests keep the declarations honest between runs: no path dependency
+These tests keep the packaging declarations honest: no path dependency
 in the distribution, Python 3.13, every runtime import declared, and the extension packages inside
 the wheel.
 """

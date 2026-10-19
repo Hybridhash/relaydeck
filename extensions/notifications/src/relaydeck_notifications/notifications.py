@@ -13,7 +13,6 @@ range` (same shape as the terminal extension's `on_data_channel_open`
 fix). Every annotation here must evaluate at def time (py>=3.13).
 """
 
-from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -89,16 +88,6 @@ class RelayDeckNotifications(Service):
         if not data:
             return None
         return parse_push_payload({k: str(v) for k, v in dict(data).items()})
-
-    def add_tap_listener(self, listener: Callable[[PushPayload], None]) -> None:
-        def guarded(event: PushTapEvent) -> None:
-            try:
-                payload = parse_push_payload(tap_payload_dict(event))
-            except ValueError:
-                return
-            listener(payload)
-
-        self.on_push_tap = guarded
 
     def _test_event(self, name: str, data: dict[str, Any]) -> None:
         """Test seam: build the event object the Dart side would send."""

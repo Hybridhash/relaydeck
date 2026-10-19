@@ -10,6 +10,7 @@ import pytest
 
 from relaydeck.client.features.terminal.foreground_recovery import (
     MAX_ATTEMPTS,
+    ForegroundRecovery,
 )
 from tests.support.foreground_recovery import Harness
 from tests.support.foreground_recovery import run_recovery as _run
@@ -155,7 +156,7 @@ def test_an_obsolete_transport_epoch_does_not_publish(kind: str) -> None:
     _run(kind, body)
 
 
-def test_retries_are_bounded_per_epoch_and_renewed_by_a_new_one() -> None:
+def test_retries_survive_remount_and_transport_epoch_changes() -> None:
     async def body(h: Harness) -> None:
         entry = await h.open()
         await h.hide()
@@ -176,11 +177,27 @@ def test_retries_are_bounded_per_epoch_and_renewed_by_a_new_one() -> None:
         assert refused == MAX_ATTEMPTS
         assert outcomes == ["refused"] * MAX_ATTEMPTS
         assert h.recovery.request(entry, "reconnect") is None  # budget spent: nothing starts
-        h.stamp[1] += 1  # a new authenticated transport epoch renews the budget
-        task = h.recovery.request(entry, "reconnect")
-        assert task is not None
-        await task
-        assert refused == MAX_ATTEMPTS + 1
+        h.stamp[1] += 1
+        assert h.recovery.request(entry, "reconnect") is None
+        h.recovery.close()
+        h.recovery = ForegroundRecovery(
+            retained=h.pool,
+            current=h._current,
+            stamp=lambda: (h.stamp[0], h.stamp[1]),
+            verify=h.verified.append,
+        )
+        assert h.recovery.request(entry, "reconnect") is None  # remount cannot refill
+        assert refused == MAX_ATTEMPTS
+        assert entry.session.notice == "Connection keeps dropping. Tap Reconnect."
+        budget = entry.session.gap_recovery
+        budget.attempt, budget.stale_retry_at = 4, 123.0
+        h.stamp[0] += 1
+        for _ in range(MAX_ATTEMPTS):
+            task = h.recovery.request(entry, "visible")
+            assert task is not None and await task == "refused"
+        assert refused == 2 * MAX_ATTEMPTS
+        assert h.recovery.request(entry, "visible") is None
+        assert budget.attempt == 4 and budget.stale_retry_at == 123.0
 
     _run("agent", body)
 
@@ -203,6 +220,10 @@ def test_an_explicit_reconnect_renews_the_budget() -> None:
         assert task is None  # budget spent
         await entry.session.reconnect()  # the user tapped Reconnect
         entry.session.require_ui_recovery()
+        assert entry.session.gap_recovery.foreground_attempts == 0
+        assert entry.session.recovery_cause is None
+        assert h.recovery.request(entry, "reconnect") is None  # disclosure stays explicit
+        entry.session._recovery_cause = "lifecycle"  # a subsequent genuine lifecycle loss
         task = h.recovery.request(entry, "reconnect")
         assert task is not None  # the tap renewed the budget
 

@@ -6,7 +6,7 @@ ordered resume flow, process-death and configuration-change
 simulation, network-switch resynchronization, and the storage/privacy
 policy. All logic here is testable without Flet and without a device;
 the device matrix that needs real hardware stays explicitly blocked
-(see `stores.FORCE_STOP_LIMITS` and `scripts/check_device_scenarios.py`).
+(see `stores.FORCE_STOP_LIMITS`).
 """
 
 from relaydeck.client.features.lifecycle.connectivity import (

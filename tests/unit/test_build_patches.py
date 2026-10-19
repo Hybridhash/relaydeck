@@ -48,12 +48,12 @@ def _run(*argv: str, **env: str) -> subprocess.CompletedProcess[str]:
     )
 
 
-@pytest.mark.parametrize("folder", FOLDERS)
-def test_every_patch_folder_documents_why_base_apply_and_removal(folder: str) -> None:
-    readme = (PATCHES / folder / "README.md").read_text(encoding="utf-8")
-    lowered = readme.lower()
-    assert "remove" in lowered
-    assert "base" in lowered or "host" in lowered
+def test_one_readme_documents_every_patch_with_base_and_removal() -> None:
+    lowered = (PATCHES / "README.md").read_text(encoding="utf-8").lower()
+    for folder in FOLDERS:
+        assert f"`{folder}/`" in lowered, folder
+        assert not (PATCHES / folder / "README.md").exists(), folder  # one concise guide only
+    assert "remove" in lowered and "base" in lowered
     assert "no git" not in lowered  # a patch README is not a work log
 
 
@@ -134,6 +134,15 @@ def test_file_picker_diff_reproduces_the_vendored_tree(tmp_path: Path) -> None:
 PRISTINE_FLET = PUB / "hosted/pub.dev/flet-1.0.3"
 
 
+def _file_tree(root: Path) -> dict[Path, bytes | str]:
+    """Compare every file/link; empty local directories are not source drift."""
+    return {
+        p.relative_to(root): os.readlink(p) if p.is_symlink() else p.read_bytes()
+        for p in root.rglob("*")
+        if p.is_symlink() or p.is_file()
+    }
+
+
 @pytest.mark.skipif(not PRISTINE_FLET.is_dir(), reason="pristine flet 1.0.3 not cached")
 def test_flet_merge_diff_reproduces_tree_and_rejects_drift(tmp_path: Path) -> None:
     script = PATCHES / "flet-reconnect-merge-patch" / "apply.sh"
@@ -141,10 +150,14 @@ def test_flet_merge_diff_reproduces_tree_and_rejects_drift(tmp_path: Path) -> No
     first = _run(str(script), str(dest))
     assert first.returncode == 0, first.stderr
     vendored = ROOT / "extensions/terminal/third_party/flet-1.0.3-rd1"
-    assert _run("diff", "-r", str(dest), str(vendored)).returncode == 0
+    (dest / "empty" / "nested").mkdir(parents=True)
+    assert _file_tree(dest) == _file_tree(vendored)
+    (dest / "empty" / "nested").rmdir()
+    (dest / "empty").rmdir()
     assert _run(str(script), "--check", str(dest)).returncode == 0
     model = dest / "lib/src/models/control.dart"
     model.write_text(model.read_text().replace("flet_reconnect_merge_rd1", "tampered"))
+    assert _file_tree(dest) != _file_tree(vendored)
     assert _run(str(script), "--check", str(dest)).returncode == 1
     assert _run(str(script), str(dest)).returncode == 1
     assert _run(str(script), "--force", str(dest)).returncode == 0

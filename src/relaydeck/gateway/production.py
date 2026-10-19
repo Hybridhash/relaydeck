@@ -81,6 +81,7 @@ from relaydeck.gateway.leases import Attachment, LeaseError, LeaseStore
 from relaydeck.gateway.metadata_follower import MAX_METADATA_FOLLOWERS, MetadataFollower
 from relaydeck.gateway.ring import STATUS_OK, RingStore, StreamFanout
 from relaydeck.journal import CommandJournal, JournalConflict
+from relaydeck.offload import OrderedGate
 
 MAX_OUTBOX_PER_HOST = 128
 
@@ -107,6 +108,7 @@ class JournalBackend(Backend):
         record_inputs: bool = False,
     ) -> None:
         self.journal = journal
+        self.command_lock = OrderedGate()
         self.now_ms = now_ms or _utcnow_ms
         self.ownership = ownership or LeaseStore()
         self.rings = rings or RingStore()
@@ -123,6 +125,7 @@ class JournalBackend(Backend):
         self.resize_log: list[ResizeRequest] = []
         self.attach_index: dict[tuple[str, str], str] = {}
         self._outbox: dict[str, list[dict[str, Any]]] = {}
+        self._reserved_outbox: dict[str, set[str]] = {}
         self._enqueued: set[str] = set()
         self._event_index = EventLogIndex()
         self._socket_closes: list[str] = []
@@ -218,17 +221,31 @@ class JournalBackend(Backend):
 
     def submit_command(self, command: dict[str, Any]) -> dict[str, Any]:
         cid = str(command["command_id"])
-        host_id = str(command["host_id"])
         at = self.now_ms()
         self.journal.expire_sweep(at)  # TTL at enqueue: expired rows settle first.
-        if self.journal.record(cid) is None:
+        self.prepare_command(command, self.journal.record(cid))
+        record, current = self.persist_command(command, at)
+        return self.accept_command(record, current)
+
+    def prepare_command(self, command: dict[str, Any], existing: dict[str, Any] | None) -> None:
+        """Advisory loop-owned checks; the connector re-verifies generation before execution."""
+        host_id = str(command["host_id"])
+        if existing is None:
             # New intent only: replays dedupe to their recorded outcome
             # below and are never re-enforced (idempotent replay wins).
             self._enforce_expected_revision(command, host_id)
-            if len(self._outbox.get(host_id, ())) >= MAX_OUTBOX_PER_HOST:
+            if (
+                len(self._outbox.get(host_id, ())) + len(self._reserved_outbox.get(host_id, ()))
+            ) >= MAX_OUTBOX_PER_HOST:
                 # Refuse before durable acceptance/local close effects; a
                 # later recovery must not execute a supposedly refused ID.
                 raise BackendError("rate_limited", "connector outbox full", True)
+
+    def persist_command(
+        self, command: dict[str, Any], at: int
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        """Journal-only phase; safe on the journal's worker lane."""
+        cid, host_id = str(command["command_id"]), str(command["host_id"])
         try:
             record = self.journal.submit(
                 command_id=cid,
@@ -247,13 +264,14 @@ class JournalBackend(Backend):
             raise BackendError("command_conflict", str(exc)) from None
         current = self.journal.record(cid)
         assert current is not None
-        if current["status"] != "accepted":
-            # Dedupe of an in-flight or settled intent: recorded outcome,
-            # never re-enqueued (same ID + same body never dispatches twice).
-            return record
-        if current["kind"] == "session.close":
-            self._close_local_for_command(current)
-        self._enqueue(cid)
+        return record, current
+
+    def accept_command(self, record: dict[str, Any], current: dict[str, Any]) -> dict[str, Any]:
+        """Finish loop-owned effects only after durable acceptance."""
+        if current["status"] == "accepted":
+            if current["kind"] == "session.close":
+                self._close_local_for_command(current)
+            self.enqueue_record(str(current["command_id"]), current)
         return record
 
     def _enforce_expected_revision(self, command: dict[str, Any], host_id: str) -> None:
@@ -329,14 +347,20 @@ class JournalBackend(Backend):
         self._socket_closes.extend(dead)
 
     def _enqueue(self, command_id: str) -> None:
+        current = self.journal.record(command_id)
+        self.enqueue_record(command_id, current)
+
+    def enqueue_record(self, command_id: str, current: dict[str, Any] | None) -> None:
+        """Apply an already-read journal record on the event-loop thread."""
         if command_id in self._enqueued:
             return
-        current = self.journal.record(command_id)
         if current is None or current["status"] != "accepted":
             return
         host_id = str(current["host_id"])
+        if command_id in self._reserved_outbox.get(host_id, ()):
+            return
         pending = self._outbox.setdefault(host_id, [])
-        if len(pending) >= MAX_OUTBOX_PER_HOST:
+        if len(pending) + len(self._reserved_outbox.get(host_id, ())) >= MAX_OUTBOX_PER_HOST:
             raise BackendError("rate_limited", "connector outbox full", True)
         pending.append(
             {
@@ -409,10 +433,36 @@ class JournalBackend(Backend):
         # expired here; the pump's dispatch marker re-checks per id, so
         # a message drained just before its deadline still never sends.
         self.journal.expire_sweep(self.now_ms())
+        return self.take_outbox(host_id)
+
+    def take_outbox(self, host_id: str, *, reserve: bool = False) -> list[dict[str, Any]]:
+        """Drain loop-owned messages after the durable expiry sweep completes."""
         pending = self._outbox.pop(host_id, [])
         for message in pending:
             self._enqueued.discard(str(message.get("command_id", "")))
+            if reserve:
+                self._reserved_outbox.setdefault(host_id, set()).add(str(message["command_id"]))
         return pending
+
+    def restore_outbox(
+        self, host_id: str, pending: list[dict[str, Any]], taken: list[dict[str, Any]] | None = None
+    ) -> None:
+        """Preserve accepted intents; a durable marker still refuses uncertain resends."""
+        reserved = self._reserved_outbox.get(host_id, set())
+        reserved.difference_update(
+            str(m["command_id"]) for m in (taken if taken is not None else pending)
+        )
+        if not reserved:
+            self._reserved_outbox.pop(host_id, None)
+        now = self.now_ms()
+        restored = [
+            m
+            for m in pending
+            if str(m.get("command_id", "")) not in self._enqueued
+            and (not m.get("expires_ms") or int(m["expires_ms"]) > now)
+        ]
+        self._outbox[host_id] = restored + self._outbox.get(host_id, [])
+        self._enqueued.update(str(m["command_id"]) for m in restored)
 
     def mark_command_dispatched(self, command_id: str, now_ms: int) -> bool:
         # TTL at dispatch: past-deadline intents are refused (settled

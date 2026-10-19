@@ -88,6 +88,17 @@ class HostApp:
         for _ in range(rounds):
             await asyncio.sleep(0.01)
 
+    async def wait_for(self, key: str, timeout: float = 10.0) -> Any:
+        """The control once it renders; a loaded runner can need more than one settle."""
+        deadline = asyncio.get_running_loop().time() + timeout
+        while True:
+            try:
+                return self.find(key)
+            except KeyError:
+                if asyncio.get_running_loop().time() >= deadline:
+                    raise
+            await asyncio.sleep(0.01)
+
     async def set_props_and_fire(
         self, key: str, props: dict[str, Any], event: str, data: Any = ""
     ) -> None:

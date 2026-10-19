@@ -233,7 +233,9 @@ def test_observer_status_query_failure_and_wrong_identity_are_unknown() -> None:
 def test_reconnect_discards_late_command_observation_without_replay() -> None:
     async def scenario() -> None:
         entered, complete = asyncio.Event(), asyncio.Event()
+        reconciling, reconciled = asyncio.Event(), asyncio.Event()
         submitted: list[dict[str, Any]] = []
+        observed: list[tuple[str, str]] = []
 
         async def submit(command: dict[str, Any]) -> dict[str, Any]:
             submitted.append(command)
@@ -241,8 +243,13 @@ def test_reconnect_discards_late_command_observation_without_replay() -> None:
 
         async def observe(host: str, command: str) -> dict[str, Any]:
             assert host == "home-mac" and command == submitted[0]["command_id"]
-            entered.set()
-            await complete.wait()
+            observed.append((host, command))
+            if len(observed) == 1:
+                entered.set()
+                await complete.wait()
+            else:
+                reconciling.set()
+                await reconciled.wait()
             return {"status": "succeeded"}
 
         store = ComposerStore(
@@ -258,9 +265,16 @@ def test_reconnect_discards_late_command_observation_without_replay() -> None:
         pending = asyncio.create_task(store.send())
         await entered.wait()
         store.reconnect()
+        await reconciling.wait()
         complete.set()
         assert await pending == SEND_IGNORED
         assert store.submission == "unknown" and store.draft == "preserve late draft"
+        # The old observation stays fenced; a fresh read by the same command id may prove
+        # delivery and clear an unchanged draft, without resubmitting anything.
+        reconciled.set()
+        await asyncio.gather(*tuple(store._reconcile_tasks))
+        assert store.submission == "acked" and store.draft == ""
+        assert observed == [("home-mac", submitted[0]["command_id"])] * 2
         assert len(submitted) == 1
 
     asyncio.run(scenario())

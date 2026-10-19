@@ -3,6 +3,27 @@
 User-visible changes by release. Versions follow the package version
 (`relaydeck --version`).
 
+## 0.2.2
+
+- **Agent names**: an agent keeps its name after its process exits. Rename an agent from its
+  card: swipe left, long-press, right-click, double-click the name or press F2. The sheet
+  suggests names from the agent's task and offers Undo after saving. Names may contain spaces,
+  capitals and emoji.
+- **Console**: pin agents to the top from the long-press menu. Unread agents show "Unread", and the
+  status counters take less space.
+- **Phone keyboard**: the keyboard stays open after Send and while the terminal scrolls. The button
+  next to Send hides or shows it.
+- **Sending**: Ctrl+Enter (Cmd+Enter on Apple keyboards) sends the draft. A send interrupted by a
+  reconnect is checked with the Mac before the draft is kept.
+- **Reconnecting**: after a dropped connection, retries wait for the Mac and back off instead of
+  looping. Persistent failures show a Reconnect prompt. Busy terminals and fast typing no longer
+  close the connection.
+- **Opening terminals**: cold opens show the terminal sooner, with fewer redraws behind it.
+- **Usage**: long reports finish and stay visible while new usage is recorded, with the time they
+  were calculated. A busy Mac answers quickly instead of queueing requests.
+- **Companion**: stop and restart complete promptly. `kill -USR1 <pid>` writes thread stacks to the
+  companion log for diagnosis.
+
 ## 0.2.1
 
 - **Returning to the app**: terminals reconnect on their own when the app comes back to the

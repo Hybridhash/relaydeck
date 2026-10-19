@@ -231,6 +231,7 @@ class UsagePage:
     workspace_days: tuple[tuple[str, str | None], ...] = ()
     # "ok", or "exceeded": the report was over the server cap and carries no rows
     capacity: str = "ok"
+    as_of_ms: int | None = None  # Optional for older servers; immutable across cursor pages.
 
 
 # -- parsing -------------------------------------------------------------------------------------
@@ -565,6 +566,7 @@ def parse_usage_page(doc: object) -> UsagePage:
         workspaces=tuple(workspaces),
         workspace_days=tuple(workspace_days),
         capacity=capacity,
+        as_of_ms=_int(body.get("as_of_ms"), nullable=True),
     )
 
 

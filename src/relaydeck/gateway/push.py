@@ -260,8 +260,7 @@ def hint_relevance(category: str, current_status: str) -> str:
 
 
 def link_url(public_origin: str, token: str) -> str:
-    """App-link URL for a minted token. Matches the manifest
-    pathPrefix /app/ (android_manifest.md)."""
+    """App-link URL for a minted token. Matches the Android app-link pathPrefix /app/."""
     return f"{public_origin.rstrip('/')}{LINK_PATH_PREFIX}{token}"
 
 
