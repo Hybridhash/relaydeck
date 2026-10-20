@@ -158,8 +158,8 @@ def test_wide_split_collapse_keeps_selection_and_order() -> None:
         assert app.find("console-test-detail").value == "DETAIL"
         assert len(calls["builds"]) == 1
         # Selected full card carries the 3px outline ring (visuals on content).
-        assert app.find("agent-card-a-fx").content.shadow is not None
-        assert app.find("agent-card-a-onboard").content.shadow is None
+        assert app.find("agent-card-a-fx").content.border.left.width == 6  # selected bar
+        assert app.find("agent-card-a-onboard").content.border.left.width == 3
 
         collapsed = await render_component(ConsoleShell, **_props(doc, 1440, calls, collapsed=True))
         await collapsed.settle()

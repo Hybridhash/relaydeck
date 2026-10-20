@@ -33,14 +33,12 @@ from relaydeck.client.components.design_system import tokens as T
 from relaydeck.client.components.design_system.fonts import FAMILY_INTERFACE, FAMILY_MONO
 from relaydeck.client.components.design_system.primitives import _action_button, text_style
 from relaydeck.client.diagnostics import failure_category
-from relaydeck.client.features.terminal.events import click, selection_change, spawn
+from relaydeck.client.features.terminal.events import click, spawn
 from relaydeck.client.features.terminal.key_bar import KEY_BAR_GROUPS, KeyBarItem
 from relaydeck.client.features.terminal.scrolling import ALT_SELECTION_HINT
 from relaydeck.client.features.terminal.selection_model import (
     display_width,
     normalize_range,
-    str_to_utf16_offset,
-    utf16_to_str_offset,
 )
 
 logger = logging.getLogger(__name__)
@@ -327,6 +325,65 @@ def ConnectionDot(live: bool, text: str, action: Callable[[], Any] | None) -> An
     )
 
 
+# Bundled text fonts lack these glyphs; use Flet's Material font.
+KEY_ICONS = {
+    "key-left": ft.Icons.ARROW_BACK,
+    "key-right": ft.Icons.ARROW_FORWARD,
+    "key-up": ft.Icons.ARROW_UPWARD,
+    "key-down": ft.Icons.ARROW_DOWNWARD,
+    "key-backspace": ft.Icons.BACKSPACE_OUTLINED,
+    "key-enter": ft.Icons.KEYBOARD_RETURN,
+}
+
+
+def key_chip(
+    item: KeyBarItem,
+    *,
+    state: str,
+    enabled: bool,
+    on_press: Callable[[Any], Any],
+    on_hold: Callable[[Any], Any] | None,
+    key: str,
+    tooltip: bool = False,
+    size: int = 40,
+) -> Any:
+    """One terminal key; the key bar and the tools popover both use it."""
+    icon = KEY_ICONS.get(item.id)
+    label = "S-Tab" if item.id == "key-shift-tab" else item.label
+    color = WHITE if state == "locked" else T.TEXT
+    button = ft.TextButton(
+        key=key,
+        height=size,
+        width=size if icon else max(size, len(label) * 8 + 16),
+        disabled=not enabled,
+        tooltip=(item.semantics + (" (locked)" if state == "locked" else "")) if tooltip else None,
+        style=ft.ButtonStyle(
+            padding=0,
+            bgcolor=ft.Colors.TRANSPARENT,
+            side=ft.BorderSide(0, ft.Colors.TRANSPARENT),
+            shape=ft.RoundedRectangleBorder(radius=8),
+            overlay_color={
+                ft.ControlState.FOCUSED: T.PRIMARY_FILL,
+                ft.ControlState.HOVERED: T.RAISED,
+            },
+        ),
+        content=ft.Container(
+            height=size - 6,
+            alignment=ft.Alignment.CENTER,
+            border_radius=8,
+            bgcolor=T.PRIMARY_FILL if state == "locked" else T.RAISED,
+            border=ft.Border.all(1, T.PRIMARY_TEXT_LIGHT if state == "once" else T.BORDER),
+            content=ft.Icon(icon, size=16, color=color)
+            if icon
+            else ft.Text(label, size=13, color=color, no_wrap=True),
+        ),
+        on_click=on_press,
+        on_long_press=on_hold,
+        data={"latch": state},
+    )
+    return ft.Semantics(label=item.semantics, button=True, content=button)
+
+
 @ft.component
 def MobileKeyBar(
     *,
@@ -390,59 +447,20 @@ def MobileKeyBar(
             async def hold(event: Any, selected: KeyBarItem = item) -> None:
                 await perform(lambda: on_item(selected, True))
 
-            # Bundled text fonts lack these glyphs; use Flet's Material font.
-            icon = {
-                "key-left": ft.Icons.ARROW_BACK,
-                "key-right": ft.Icons.ARROW_FORWARD,
-                "key-up": ft.Icons.ARROW_UPWARD,
-                "key-down": ft.Icons.ARROW_DOWNWARD,
-                "key-backspace": ft.Icons.BACKSPACE_OUTLINED,
-                "key-enter": ft.Icons.KEYBOARD_RETURN,
-            }.get(item.id)
-            label = "S-Tab" if item.id == "key-shift-tab" else item.label
-            color = WHITE if state == "locked" else T.TEXT
-            button = ft.TextButton(
+            button = key_chip(
+                item,
+                state=state,
+                enabled=ok,
+                on_press=press,
+                on_hold=hold if item.long_press else None,
                 key=paste_key
                 if item.id == "action-paste"
                 else "terminal-select-text"
                 if item.id == "action-select"
                 else item.id,
-                height=40,
-                width=40 if icon else max(40, len(label) * 8 + 16),
-                disabled=not ok,
-                tooltip=(item.semantics + (" (locked)" if state == "locked" else ""))
-                if medium
-                else None,
-                style=ft.ButtonStyle(
-                    padding=0,
-                    bgcolor=ft.Colors.TRANSPARENT,
-                    side=ft.BorderSide(0, ft.Colors.TRANSPARENT),
-                    shape=ft.RoundedRectangleBorder(radius=8),
-                    overlay_color={
-                        ft.ControlState.FOCUSED: T.PRIMARY_FILL,
-                        ft.ControlState.HOVERED: T.RAISED,
-                    },
-                ),
-                content=ft.Container(
-                    height=34,
-                    alignment=ft.Alignment.CENTER,
-                    border_radius=8,
-                    bgcolor=T.PRIMARY_FILL if state == "locked" else T.RAISED,
-                    border=ft.Border.all(1, T.PRIMARY_TEXT_LIGHT if state == "once" else T.BORDER),
-                    content=ft.Icon(icon, size=16, color=color)
-                    if icon
-                    else ft.Text(
-                        label,
-                        size=13,
-                        color=color,
-                        no_wrap=True,
-                    ),
-                ),
-                on_click=press,
-                on_long_press=hold if item.long_press else None,
-                data={"latch": state},
+                tooltip=medium,
             )
-            chips.append(ft.Semantics(label=item.semantics, button=True, content=button))
+            chips.append(button)
         if chips:
             groups.append(
                 ft.Row(key=f"keybar-group-{index}", tight=True, spacing=6, controls=chips)
@@ -853,9 +871,11 @@ def TerminalHeader(
     connection_text: str = "",
     connection_live: bool = True,
     on_connection_action: Callable[[], Any] | None = None,
+    title_control: Any = None,
 ) -> Any:
     """Name + mono host line, then pills and header actions. On a phone
-    the pills drop under the title so the actions keep their width."""
+    the pills drop under the title so the actions keep their width; `title_control`
+    replaces the phone title text (the agent switcher)."""
     compact = phone and mobile_terminal
     leading: list[Any] = []
     if on_back is not None:
@@ -894,7 +914,7 @@ def TerminalHeader(
         ),
     ]
     if phone:
-        texts = texts[:1]
+        texts = [title_control] if title_control is not None else texts[:1]
         texts[0].style = text_style(FAMILY_INTERFACE, TYPE_ROW_TITLE, T.TEXT)
     return ft.Row(
         key=key,
@@ -1033,12 +1053,18 @@ def PhoneSelectionSheet(
         if live() and written is not None:
             set_result("Copied")
 
-    async def move(base: int, extent: int) -> None:
-        if not live() or on_selection_change is None or base < 0 or extent < 0:
+    async def picked(event: Any) -> None:
+        selected = event.data
+        if not live() or on_selection_change is None or not selected:
             return
-        pending = on_selection_change(
-            utf16_to_str_offset(text, base), utf16_to_str_offset(text, extent)
-        )
+        # The area reports only the text; any match bounds the same copy.
+        start = text.find(selected)
+        if start < 0:
+            selected = selected.replace("\n", "\r\n")
+            start = text.find(selected)
+        if start < 0:
+            return
+        pending = on_selection_change(start, start + len(selected))
         if inspect.isawaitable(pending):
             await pending
 
@@ -1048,35 +1074,20 @@ def PhoneSelectionSheet(
 
     resolved = normalize_range(anchor, focus, text)
     ink = T.TEXT if dark else T.LIGHT_INK
-    # The horizontal scroll branch gives the field an explicit width and
-    # contains no flex child on its unbounded horizontal axis. Both branches
-    # retain Row -> scrolling Column -> growable TextField ancestry. The
-    # field has no vertical flex on the scroller's unbounded content axis.
+    # A selection area over plain text: Flutter draws the highlight and handles itself.
+    # A field or selectable text keeps a hidden browser input that iOS draws out of place.
     unwrapped_width = max(
         320, max((display_width(s) for s in text.splitlines()), default=0) * font_size * 0.7 + 32
     )
-    field = ft.TextField(
-        key="phone-select-field",
-        value=text,
-        read_only=True,
-        multiline=True,
-        fit_parent_size=False,
-        min_lines=1,
-        max_lines=None,
-        width=None if wrapped else unwrapped_width,
-        text_style=ft.TextStyle(font_family=FAMILY_MONO, size=font_size, color=ink),
-        enable_interactive_selection=True,
-        can_request_focus=visible,
-        disabled=not visible,
-        autofocus=False,
-        autocorrect=False,
-        enable_suggestions=False,
-        label="Read-only terminal output",
-        selection=ft.TextSelection(
-            base_offset=str_to_utf16_offset(text, resolved.anchor),
-            extent_offset=str_to_utf16_offset(text, resolved.focus),
+    field = ft.SelectionArea(
+        key="phone-select-area",
+        on_change=picked,
+        content=ft.Text(
+            text,
+            key="phone-select-field",
+            width=None if wrapped else unwrapped_width,
+            style=ft.TextStyle(font_family=FAMILY_MONO, size=font_size, color=ink),
         ),
-        on_selection_change=selection_change(move),
     )
 
     def action(

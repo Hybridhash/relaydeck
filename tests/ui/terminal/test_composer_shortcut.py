@@ -92,6 +92,16 @@ def test_the_swallowed_newline_can_be_anywhere_in_the_draft() -> None:
     run(scenario())
 
 
+def test_the_newline_left_after_the_send_cleared_the_field_is_swallowed() -> None:
+    async def scenario() -> None:
+        app, sends, drafts = await _focused_box()
+        await _press(app, meta=True)
+        await app.set_props_and_fire(DRAFT_KEY, {"value": "\n"}, "change", "\n")
+        assert sends == [1] and drafts == []
+
+    run(scenario())
+
+
 def test_plain_enter_and_shift_combinations_never_send() -> None:
     async def scenario() -> None:
         app, sends, drafts = await _focused_box()

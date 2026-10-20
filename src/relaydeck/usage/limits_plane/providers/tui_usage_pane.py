@@ -93,6 +93,7 @@ _QUIT_S = 15.0
 _SHELL_S = 10.0
 _IDLE_RECHECK_S = 5.0  # the tool may not have finished signing in when /usage first ran
 _ENTER_RETRIES = 3
+_TYPED_SETTLE_S = 0.8  # an Enter right behind typed text reads as part of a paste (Muse 1.4.10)
 _ENTER_WAIT_MS = 6000
 _SETTLE_WAIT_MS = 8000
 RECOVERY_MAX_ENTRIES = 8
@@ -423,10 +424,13 @@ class _Run:
         """Send text/enter, retrying Enter until the marker shows (every
         write is verified; screen text plus the pre-write foreground check)."""
         self.require_foreground(pane_id, frozenset({self.recipe.binary}))
-        if text is not None:
-            self.seam.send_text(pane_id, text, self.budget(_CALL_S))
-        for _ in range(_ENTER_RETRIES):
+        for attempt in range(_ENTER_RETRIES):
             self.require_foreground(pane_id, frozenset({self.recipe.binary}))
+            if text is not None and (attempt == 0 or self.input_empty(pane_id)):
+                # A command run before the tool finished loading prints a panel without the
+                # marker; once the input is empty again, a fresh run prints the full one.
+                self.seam.send_text(pane_id, text, self.budget(_CALL_S))
+                time.sleep(_TYPED_SETTLE_S)
             self.seam.send_keys(pane_id, ("enter",), self.budget(_CALL_S))
             if self.seam.wait_output(
                 pane_id,
@@ -444,6 +448,13 @@ class _Run:
             self.budget(wait_ms / 1000 + 5.0),
         ):
             raise _Abort(LimitError.TIMEOUT, NOTE_NO_USAGE_MARKER)
+
+    def input_empty(self, pane_id: str) -> bool:
+        screen = self.seam.pane_read(pane_id, self.recipe.max_lines, self.budget(_CALL_S))
+        marks = list(re.finditer(self.recipe.prompt_marker, screen))
+        if not marks or self.is_refusal(screen):  # a refusal answered it; never ask twice
+            return False
+        return not screen[marks[-1].end() :].split("\n", 1)[0].strip()
 
     def scope(self, workspace: str) -> str:
         root = self.recipe.session_root or ""
@@ -685,7 +696,13 @@ class _Run:
                 self.budget(_SETTLE_WAIT_MS / 1000 + 5.0),
             ):
                 raise _Abort(LimitError.TIMEOUT, NOTE_DISMISS_FAILED)
-        self.quit_cleanly(tab)
+        try:
+            self.quit_cleanly(tab)
+        except _Abort as abort:
+            if abort.note != NOTE_QUIT_FAILED:
+                raise
+            # The reading is complete; closing the tab ends a tool that ignored the quit.
+            self._journal("uncertain", tab, note=NOTE_QUIT_FAILED)
         self.capture_hint(tab, launched)
         if self.foreground(tab.pane_id) not in SHELL_NAMES:
             # Data complete and the tool was told to quit; a hung quit still
@@ -709,6 +726,7 @@ class _Run:
         """Quit with verification; unknown states get no quit text."""
         self.require_foreground(tab.pane_id, frozenset({self.recipe.binary}))
         self.seam.send_text(tab.pane_id, self.recipe.quit_text, self.budget(_CALL_S))
+        time.sleep(_TYPED_SETTLE_S)
         for _ in range(_ENTER_RETRIES):
             self.require_foreground(tab.pane_id, frozenset({self.recipe.binary}))
             self.seam.send_keys(tab.pane_id, ("enter",), self.budget(_CALL_S))

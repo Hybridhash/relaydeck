@@ -16,6 +16,7 @@ from relaydeck.client.components.design_system import tokens as T
 from relaydeck.client.components.design_system.fonts import FAMILY_INTERFACE, FAMILY_MONO
 from relaydeck.client.components.design_system.primitives import (
     AgentPill,
+    SpaceChip,
     StatusPill,
     _action_button,
     text_style,
@@ -34,6 +35,11 @@ def _selected_outline(selected: bool) -> list[ft.BoxShadow] | None:
             offset=ft.Offset(0, 0),
         )
     ]
+
+
+_BAR = 3
+_SELECTED_BAR = 6
+_SELECTED_LINE = ft.Colors.with_opacity(0.45, T.TEXT)
 
 
 def _highlight_ring() -> ft.BoxShadow:
@@ -62,6 +68,7 @@ def AgentCard(
     on_name_double_tap: Callable[[], Any] | None = None,
     on_long_press: Callable[[], Any] | None = None,
     pinned: bool = False,
+    space: str = "",
 ) -> Any:
     """Full agent card: title + pill, subject line (optional), subtitle, meta row.
 
@@ -75,7 +82,7 @@ def AgentCard(
     """
     # Local import: theme.py imports this package for tokens, so a
     # module-level import would cycle (theme -> cards -> theme).
-    from relaydeck.client.theme import agent_identity, agent_subtitle_rest
+    from relaydeck.client.theme import agent_identity, agent_subtitle_rest, space_tint
 
     blocked = status == T.STATUS_BLOCKED
     title_ink = T.BLOCKED_TEXT if blocked else T.TEXT
@@ -83,6 +90,8 @@ def AgentCard(
     meta_ink = T.BLOCKED_SMALL_TEXT if blocked else T.TEXT_MUTED
     identity = agent_identity(agent, True)
     rest = agent_subtitle_rest(subtitle, agent)
+    if space and (rest == space or rest.startswith(f"{space} · ")):
+        rest = rest[len(space) :].removeprefix(" · ")  # the chip shows the space
     meta_value = f" · {rest}" if rest and rest != subtitle else rest
     status_word = T.STATUS_LABELS.get(status, T.STATUS_LABELS[T.STATUS_UNKNOWN])
     tooltip = f"{identity.label} agent, {status_word}, {name}" if agent else name
@@ -107,20 +116,23 @@ def AgentCard(
         tooltip=None if compact else tooltip,
         on_press=lambda: on_select(agent_id),
         content=ft.Container(
-            padding=ft.Padding.symmetric(vertical=T.CARD_PAD_V, horizontal=T.CARD_PAD_H),
+            # Selected: the agent bar doubles, the card lifts and a grey line runs along the
+            # bottom; the padding gives back the extra border so the content never shifts.
+            padding=ft.Padding.only(
+                left=T.CARD_PAD_H - (_SELECTED_BAR - _BAR if selected else 0),
+                right=T.CARD_PAD_H,
+                top=T.CARD_PAD_V,
+                bottom=T.CARD_PAD_V - (1 if selected else 0),
+            ),
             border_radius=ft.BorderRadius.all(T.RADIUS_CARD),
-            bgcolor=T.BLOCKED if blocked else T.CARD,
+            bgcolor=T.BLOCKED if blocked else T.CARD_SELECTED if selected else T.CARD,
             border=ft.Border(
-                left=ft.BorderSide(3, identity.color),
+                left=ft.BorderSide(_SELECTED_BAR if selected else _BAR, identity.color),
                 top=ft.BorderSide(1, edge),
                 right=ft.BorderSide(1, edge),
-                bottom=ft.BorderSide(1, edge),
+                bottom=ft.BorderSide(2, _SELECTED_LINE) if selected else ft.BorderSide(1, edge),
             ),
-            shadow=[
-                *(_selected_outline(selected) or []),
-                *([_highlight_ring()] if highlighted else []),
-            ]
-            or None,
+            shadow=[_highlight_ring()] if highlighted else None,
             content=ft.Column(
                 spacing=3,
                 controls=[
@@ -169,6 +181,18 @@ def AgentCard(
                             ),
                             *(
                                 [
+                                    SpaceChip(
+                                        space,
+                                        space_tint(space),
+                                        key=f"agent-space-{agent_id}",
+                                        ink=T.BLOCKED_TEXT if blocked else None,
+                                    )
+                                ]
+                                if space
+                                else []
+                            ),
+                            *(
+                                [
                                     ft.Text(
                                         meta_value,
                                         style=text_style(
@@ -184,6 +208,22 @@ def AgentCard(
                                     )
                                 ]
                                 if meta_value
+                                else []
+                            ),
+                            *(
+                                # Unread rides at the end of this row, which every card has, so
+                                # reading never removes a row and the card keeps its height.
+                                [
+                                    ft.Text(
+                                        meta_right,
+                                        key=f"agent-unread-text-{agent_id}",
+                                        style=text_style(FAMILY_MONO, T.TYPE_META, meta_ink),
+                                        no_wrap=True,
+                                        expand=not meta_value,
+                                        text_align=ft.TextAlign.RIGHT,
+                                    )
+                                ]
+                                if meta_right and not meta_left
                                 else []
                             ),
                         ],
@@ -209,7 +249,7 @@ def AgentCard(
                                 ],
                             )
                         ]
-                        if meta_left or meta_right
+                        if meta_left
                         else []
                     ),
                 ],

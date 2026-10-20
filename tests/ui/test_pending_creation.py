@@ -14,7 +14,7 @@ import pytest
 from relaydeck.client.app import Root
 from relaydeck.client.features.inventory.routing import RouteBridge
 from relaydeck.client.features.sync.transport import HttpxGatewayTransport
-from relaydeck.client.pending_commands import MemoryCommandStore, PendingCommands
+from relaydeck.client.pending_commands import REVIEW_GRACE_MS, MemoryCommandStore, PendingCommands
 from tests.support.host_harness import render_component, run
 from tests.support.scripted_sessions import make_scripted_sessions
 from tests.support.ui.navigation import _state, _StubController
@@ -110,14 +110,22 @@ def test_root_creation_settles_verified_success(kind: str, inventory: str) -> No
                     "shell.create" if kind == "shell" else "agent.start"
                 )
                 assert len(journal.records) == 1
-                assert app.find("command-recovery") is not None
+                # An operation in flight is not something to review yet.
+                assert app.find("command-recovery-empty") is not None
                 release_status.set()
                 await app.settle(40)
                 if inventory == "changed_epoch":
                     assert not routes
                     assert len(journal.records) == 1
-                    assert app.find("command-recovery") is not None
                     assert "do not retry" in app.find("sheet-error").value
+                    if journal.needs_review(next(iter(journal.records.values())), journal.clock()):
+                        assert app.find("command-recovery") is not None
+                    else:  # still in flight: it is listed once the grace period passes
+                        later = journal.clock() + REVIEW_GRACE_MS
+                        journal.clock = lambda: later
+                        journal.changed()
+                        await app.settle()
+                        assert app.find("command-recovery") is not None
                 else:
                     assert not journal.records
                     assert not any(journal.unresolved(row) for row in journal.records.values())

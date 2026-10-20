@@ -143,7 +143,7 @@ def test_light_theme_spaces_remain_visible_and_scoped_under_host_chips(
         assert changed[-1].space_key == "home-mac:w2"
         tiles = app.find("shells-tiles" if shells else "agents-tiles")
         assert [node.key for node in tiles.controls] == (
-            ["shell-home-mac:w2"] if shells else ["agent-home-mac:w2", "agent-home-mac:d2"]
+            ["shell-home-mac:w2"] if shells else ["agent-home-mac:d2", "agent-home-mac:w2"]
         )
 
     run(scenario())

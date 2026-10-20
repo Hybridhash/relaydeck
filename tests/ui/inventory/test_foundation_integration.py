@@ -207,7 +207,7 @@ def test_theme_and_viewport_updates_preserve_live_session_and_draft() -> None:
         assert session.input_token == input_token
         assert app.find("composer-draft").value == "keep هذا draft"
         assert app.find("composer-draft").fill_color == palette(True)["raised"]
-        assert app.find("composer-draft").max_lines == 4
+        assert app.find("composer-draft").max_lines == 2
         app.session.apply_patch(app.page._i, {"platform_brightness": "light"})
         await app.session.dispatch_event(app.page._i, "platform_brightness_change", "light")
         routes.set_size(768, 1024)

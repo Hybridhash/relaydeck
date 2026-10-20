@@ -35,6 +35,7 @@ from relaydeck.client.features.shell.screen import mount_shell_screen
 from relaydeck.client.features.sync.controller import SyncController
 from relaydeck.client.features.sync.transport import HttpxGatewayTransport
 from relaydeck.client.features.terminal.surfaces import mount_agent_screen
+from relaydeck.client.features.terminal.switcher import switcher_rows
 from relaydeck.client.features.usage.source import gateway_usage_fetch
 
 # design tokens (minimal first theme, centrally configurable).
@@ -72,6 +73,14 @@ def agent_space_tabs(
         for identifier, item in state.inventory.agents.items()
         if item.host_id == host_id and (workspace_id is None or item.workspace_id == workspace_id)
     )
+
+
+def space_switcher_rows(
+    state: Any, host_id: str, key: str, agent: Any, names: dict[str, str]
+) -> tuple[Any, ...]:
+    # Same space only: an agent in another space may not be loaded, so it can't be opened.
+    same_space = {tab[0] for tab in agent_space_tabs(state, host_id, agent, names)}
+    return tuple(row for row in switcher_rows(state, host_id, key, names) if row.key in same_space)
 
 
 def build_retained_views(
@@ -139,8 +148,9 @@ def build_retained_views(
                 on_connection_action=(on_session_recovery or handle_logout)
                 if app_state.revoked
                 else retry_sync,
-                agent_tabs=agent_space_tabs(app_state, entry.host_id, agent, names),
-                selected_agent=entry.key,
+                switcher_rows=space_switcher_rows(
+                    app_state, entry.host_id, entry.key, agent, names
+                ),
                 # dock switches do not add a history entry.
                 on_agent_tab=partial(select_inventory_agent, record=False),
                 on_operations=(lambda: set_operations_open(True))

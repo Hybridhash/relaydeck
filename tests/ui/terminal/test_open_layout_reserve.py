@@ -24,6 +24,8 @@ from tests.support.ui.hook_clock import HookClock
 pytestmark = pytest.mark.open_hold
 
 KEY_BAR = "agent-mobile-keybar"
+# Floating layers sit over the screen and never take part in its height.
+FLOATING = ("tools-popover", "agent-switcher-layer")
 
 
 def _height_signature(app: Any) -> list[tuple[Any, ...]]:
@@ -31,8 +33,8 @@ def _height_signature(app: Any) -> list[tuple[Any, ...]]:
     root = app.page.views[0]
     inside_key_bar: set[int] = set()
     for control in iter_controls([root], active_only=False):
-        if getattr(control, "key", None) == KEY_BAR:
-            inside_key_bar = {id(c) for c in iter_controls([control], active_only=False)}
+        if getattr(control, "key", None) in (KEY_BAR, *FLOATING):
+            inside_key_bar |= {id(c) for c in iter_controls([control], active_only=False)}
     signature: list[tuple[Any, ...]] = []
     for control in iter_controls([root], active_only=False):
         if id(control) in inside_key_bar:

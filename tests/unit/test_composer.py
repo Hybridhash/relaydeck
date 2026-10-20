@@ -262,6 +262,17 @@ def test_exactly_one_prompt_per_send() -> None:
     run(scenario())
 
 
+def test_blank_edge_lines_never_reach_the_agent() -> None:
+    async def scenario() -> None:
+        script, store = _quiet()
+        store.replace_draft("\n\r\nfirst line\n  second\n\n")
+        assert await store.send() == SEND_DELIVERED_VIA_PROMPT
+        assert script.prompts == [("w1:p1", "first line\n  second")]
+        assert store.draft == ""
+
+    run(scenario())
+
+
 def test_submission_sending_observable_midflight() -> None:
     async def scenario() -> None:
         script = _Script()

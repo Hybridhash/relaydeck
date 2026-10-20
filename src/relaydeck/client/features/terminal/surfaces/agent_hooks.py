@@ -306,3 +306,23 @@ def use_open_hold(
         return None
 
     return report, held
+
+
+def use_screen_overlay(
+    close_on: list[Any],
+) -> tuple[str, Callable[[str], None], Callable[[], None]]:
+    """The open floating layer ("", "tools" or "switcher"); any change in `close_on` closes it."""
+    opened, set_opened = ft.use_state("")
+
+    def stable() -> tuple[Callable[[str], None], Callable[[], None]]:
+        def toggle(name: str) -> None:
+            set_opened(lambda current: "" if current == name else name)
+
+        def close() -> None:
+            set_opened("")
+
+        return toggle, close
+
+    toggle, close = ft.use_memo(stable, dependencies=[])
+    ft.use_effect(close, dependencies=close_on)
+    return opened, toggle, close

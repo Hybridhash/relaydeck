@@ -642,9 +642,18 @@ def UsagePanel(
     # A dialog never shows zero for a value the page did not supply: unknown is "—" (B2 item 3).
     all_value = screen.summary.tokens if screen.summary is not None else "—"
 
+    readable = {row.refresh.kind for row in screen.plan if row.refresh is not None}
+
+    def refresh_kind(kind: str) -> None:
+        """A tool the Mac can read again gets a new reading; for the rest the page reloads."""
+        if kind in readable:
+            press_refresh(kind)
+        else:
+            request_refresh()
+
     def on_action(kind: str, key: str) -> Callable[[Any], None]:
         if kind == "refresh":
-            return lambda _e: request_refresh()
+            return lambda _e: refresh_kind(key)
         return lambda _e: set_dialog(f"setup:{key}")
 
     def on_see_spaces(_e: Any) -> None:
@@ -734,7 +743,7 @@ def UsagePanel(
 
     def provider_action(kind: str, action: str) -> None:
         if action == "refresh":
-            request_refresh()
+            refresh_kind(kind)
         else:
             set_dialog(f"setup:{kind}")
 

@@ -36,6 +36,23 @@ async def _fire(app: Any, key: str, event: str = "click", value: str | None = No
     await app.settle()
 
 
+async def _compose(app: Any) -> None:
+    # Narrow layouts show the idle text box; focusing it starts composing.
+    try:
+        await _fire(app, "agent-compose-toggle")
+    except KeyError:
+        await _fire(app, "composer-draft", "focus")
+
+
+async def _direct(app: Any) -> None:
+    # Narrow layouts open Direct input from the tools popover.
+    try:
+        await _fire(app, "agent-workflow-toggle")
+    except KeyError:
+        await _fire(app, "terminal-tools-button")
+        await _fire(app, "tools-mode-direct")
+
+
 async def _tab(app: Any, tab: str, width: int) -> None:
     # Hosts is a Settings section now: the "hosts" tab opens Settings, where the host list lives.
     destination = "settings" if tab == "hosts" else tab
@@ -57,7 +74,7 @@ def test_tab_round_trip_after_back_stays_on_list(
             await _open(app, "home-mac:term-1")
             agent = pool.foreground.session
             if width < 1100:
-                await _fire(app, "agent-compose-toggle")
+                await _compose(app)
             await _fire(app, "composer-draft", "change", "unsent tab draft")
             assert agent.store.draft == "unsent tab draft"
             if tab == "terminals":
@@ -280,7 +297,7 @@ def test_existing_scoped_storage_restores_unsent_compose_and_pictures_after_root
                 await _open(app, "home-mac:term-1")
                 agent = pool.foreground.session
                 if width < 1100:
-                    await _fire(app, "agent-compose-toggle")
+                    await _compose(app)
                 if not reload:
                     await _fire(app, "composer-draft", "change", "stored unsent\ntext")
                     await choose(
@@ -365,7 +382,7 @@ def test_tab_and_agent_round_trip_preserves_compose_text_and_attached_picture(
             await _open(app, "home-mac:term-1")
             agent = pool.foreground.session
             if width < 1100:
-                await _fire(app, "agent-compose-toggle")
+                await _compose(app)
             await _fire(app, "composer-draft", "change", "exact unsent\ncompose draft")
             await choose(
                 app, "terminal-attach-picture" if width < 1100 else "composer-attach-picture"
@@ -413,7 +430,7 @@ def test_unsent_direct_editor_text_is_retained_without_replaying_it(width: int) 
         try:
             await _open(app, "home-mac:term-1")
             agent = pool.foreground.session
-            await _fire(app, "agent-workflow-toggle")
+            await _direct(app)
             field = _active(app, "agent-workflow-direct-typing")
             field_id = field._i
             await _fire(app, "agent-workflow-direct-typing", "change", "  abc")

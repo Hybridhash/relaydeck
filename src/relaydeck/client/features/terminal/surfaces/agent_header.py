@@ -27,6 +27,8 @@ from relaydeck.client.features.terminal.models import TerminalViewState
 from relaydeck.client.features.terminal.pictures import (
     attach_button,
 )
+from relaydeck.client.features.terminal.surfaces.agent_switcher import SwitcherTitle
+from relaydeck.client.features.terminal.switcher import SwitcherRow, working_count
 
 if TYPE_CHECKING:
     pass
@@ -39,6 +41,15 @@ from relaydeck.client.features.terminal.surfaces.common import (
     AGENT_STATUS_KEY,
     AGENT_TITLE_KEY,
 )
+
+
+def _switcher_title(title: str, switcher: Any) -> Any:
+    if switcher is None or not switcher[0]:
+        return None
+    rows, opened, toggle = switcher
+    return SwitcherTitle(
+        title=title, working=working_count(rows), open=opened, on_open=lambda: toggle("switcher")
+    )
 
 
 def build_agent_header(
@@ -62,6 +73,7 @@ def build_agent_header(
     window: str,
     window_size: tuple[int, int],
     workflow: str,
+    switcher: tuple[tuple[SwitcherRow, ...], bool, Callable[[str], None]] | None = None,
 ) -> Any:
     """The agent header (full, or the slim typing-mode / phone variant)."""
     status_pill = StatusPill(agent_status.lower(), label=agent_status)
@@ -115,19 +127,18 @@ def build_agent_header(
                 else (),
             )
         )
-    return ft.Container(
-        key=AGENT_HEADER_KEY,
-        content=TerminalHeader(
-            title=agent_title,
-            host_line=host_line,
-            pills=pills,
-            actions=actions,
-            on_back=on_back,
-            title_key=AGENT_TITLE_KEY,
-            phone=slim,
-            mobile_terminal=slim,
-            connection_text=connection_text,
-            connection_live=connection_live and window == STATE_IN_CONTROL,
-            on_connection_action=on_connection_action,
-        ),
+    header = TerminalHeader(
+        title=agent_title,
+        host_line=host_line,
+        pills=pills,
+        actions=actions,
+        on_back=on_back,
+        title_key=AGENT_TITLE_KEY,
+        phone=slim,
+        mobile_terminal=slim,
+        connection_text=connection_text,
+        connection_live=connection_live and window == STATE_IN_CONTROL,
+        on_connection_action=on_connection_action,
+        title_control=_switcher_title(agent_title, switcher) if phone else None,
     )
+    return ft.Container(key=AGENT_HEADER_KEY, content=header)

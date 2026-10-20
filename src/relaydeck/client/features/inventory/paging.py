@@ -83,8 +83,11 @@ class InventoryPager:
     def _current(self, generation: int) -> bool:
         return generation == self._generation
 
-    def _check(self, host_id: str, doc: dict[str, Any]) -> None:
-        if doc.get("host_id") != host_id or doc.get("host_epoch") != self.hosts[host_id]:
+    def _check(
+        self, host_id: str, doc: dict[str, Any], hosts: Mapping[str, str] | None = None
+    ) -> None:
+        expected = (self.hosts if hosts is None else hosts).get(host_id)
+        if doc.get("host_id") != host_id or doc.get("host_epoch") != expected:
             raise TransportError("stale_epoch", "inventory host context changed", True)
 
     def _merge(self, host_id: str, doc: dict[str, Any]) -> None:
@@ -117,15 +120,16 @@ class InventoryPager:
             and (not filters.project_host or host == filters.project_host)
         }
         context_changed = (self.account, self.hosts, self.filters) != (account, selected, filters)
+        if account != self.account:
+            self.clear()  # another account's agents are never shown, even for a moment
         self.invalidate()
         generation = self._generation
-        self.account, self.hosts, self.filters = account, selected, filters
-        if context_changed:
-            self.rows.clear()
-            self.pages.clear()
+        # Other filters or hosts keep the current rows on screen until the new ones replace them.
+        self.account, self.filters = account, filters
         self.busy, self.error = True, ""
         self.changed()
         if len(selected) > MAX_HOSTS:
+            self.hosts = selected
             self.rows.clear()
             self.pages.clear()
             self.busy = False
@@ -147,7 +151,7 @@ class InventoryPager:
                         query=filters.query,
                     )
                     if self._current(generation):
-                        self._check(host_id, doc)
+                        self._check(host_id, doc, selected)
                         fresh[host_id] = doc
                 except TransportError as exc:
                     errors.append(exc.code)
@@ -156,6 +160,9 @@ class InventoryPager:
             await asyncio.gather(*(fetch(host_id) for host_id in selected))
             if not self._current(generation):
                 return
+            if context_changed:
+                self.rows, self.pages = {}, {}
+            self.hosts = selected
             # A failed host keeps only same-context cached metadata, explicitly stale.
             for host_id in fresh:
                 self.rows = {

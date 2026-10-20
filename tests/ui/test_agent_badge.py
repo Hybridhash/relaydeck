@@ -8,6 +8,7 @@ import pytest
 from relaydeck.client.components.design_system import tokens as T
 from relaydeck.client.components.design_system.cards import AgentCard
 from relaydeck.client.components.session_rows import agent_tile
+from relaydeck.client.features.a11y.focus import iter_controls
 from relaydeck.client.features.inventory.selectors import AgentRow, AgentStatus
 from relaydeck.client.theme import agent_badge_ink, agent_identity
 from tests.support.host_harness import render_component, run
@@ -123,5 +124,89 @@ def test_tile_keys_callbacks_status_unread_unchanged() -> None:
         assert unread.value == "Unread" and unread.key == "unread-h:tool-a" and unread.visible
         await app.set_props_and_fire("agent-h:tool-a", {}, "click")
         assert seen == ["h:tool-a"]
+
+    run(scenario())
+
+
+def test_card_space_chip_takes_the_space_out_of_the_muted_line() -> None:
+    async def scenario() -> None:
+        from relaydeck.client.theme import space_tint
+
+        app = await render_component(
+            AgentCard,
+            agent_id="h:t1",
+            name="agent",
+            status="working",
+            subtitle="tool-a · Delay Deck · 2m ago",
+            meta_left="",
+            meta_right="",
+            selected=False,
+            on_select=lambda _key: None,
+            agent="tool-a",
+            space="Delay Deck",
+        )
+        chip = app.find("agent-space-h:t1")
+        dot, label = chip.content.controls
+        assert label.value == "Delay Deck" and dot.bgcolor == space_tint("Delay Deck")
+        texts = [
+            getattr(node, "value", "") for node in iter_controls([app.find("agent-card-h:t1")])
+        ]
+        assert " · 2m ago" in texts and not any("Delay Deck ·" in str(t) for t in texts)
+        assert space_tint("Delay Deck") == space_tint(" delay deck ")  # stable per space
+
+    run(scenario())
+
+
+@pytest.mark.parametrize("selected", [False, True])
+def test_selected_card_lifts_widens_its_bar_and_draws_a_bottom_line_without_shifting(
+    selected: bool,
+) -> None:
+    async def scenario() -> None:
+        app = await render_component(
+            AgentCard,
+            agent_id="h:t1",
+            name="agent",
+            status="working",
+            subtitle="tool-a · 2m ago",
+            meta_left="",
+            meta_right="",
+            selected=selected,
+            on_select=lambda _key: None,
+            agent="tool-a",
+        )
+        box = app.find("agent-card-h:t1").content
+        left, bottom = box.border.left.width, box.border.bottom.width
+        assert (left, bottom) == ((6, 2) if selected else (3, 1))
+        assert box.bgcolor == (T.CARD_SELECTED if selected else T.CARD)
+        assert box.shadow is None  # no white ring
+        # Border plus padding is the same either way, so the content never moves.
+        assert left + box.padding.left == 3 + T.CARD_PAD_H
+        assert bottom + box.padding.bottom == 1 + T.CARD_PAD_V
+
+    run(scenario())
+
+
+def test_reading_an_agent_never_changes_its_card_height() -> None:
+    async def scenario() -> None:
+        rows = []
+        for unread in (True, False):
+            app = await render_component(
+                AgentCard,
+                agent_id="h:t1",
+                name="agent",
+                status="done",
+                subtitle="tool-a · 2m ago",
+                meta_left="",
+                meta_right="Unread" if unread else "",
+                selected=False,
+                on_select=lambda _key: None,
+                agent="tool-a",
+                subject="a task",
+            )
+            column = app.find("agent-card-h:t1").content.content
+            rows.append(len(column.controls))
+            if unread:
+                assert app.find("agent-unread-text-h:t1").value == "Unread"
+        assert rows[0] == rows[1]  # no row appears or vanishes when the agent is read
 
     run(scenario())

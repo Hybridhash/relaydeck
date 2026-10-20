@@ -33,7 +33,6 @@ from relaydeck.client.features.terminal.pictures import (
     attach_button,
     picture_chips,
 )
-from relaydeck.client.features.terminal.surfaces.agent_tab_row import AgentTabRow
 
 if TYPE_CHECKING:
     from relaydeck.client.features.composer.domain import StagedMarker
@@ -112,18 +111,7 @@ def _toggle_buttons(
     return keyboard_button, compose_button
 
 
-def _typing_slot(
-    *,
-    visible: bool,
-    agent_tabs: tuple[tuple[str, str, str], ...],
-    agent_status: str,
-    agent_title: str,
-    on_agent_tab: Callable[[str], Any] | None,
-    selected_agent: str,
-    tokens: dict[str, str],
-    dot_blink: bool,
-    typing_field: Any,
-) -> ft.Container:
+def _typing_slot(typing_field: Any) -> ft.Container:
     return ft.Container(
         key="agent-typing-slot",
         expand=True,
@@ -131,19 +119,7 @@ def _typing_slot(
         content=ft.Column(
             tight=True,
             horizontal_alignment=ft.CrossAxisAlignment.STRETCH,
-            controls=[
-                AgentTabRow(
-                    visible=visible,
-                    agent_tabs=agent_tabs,
-                    agent_status=agent_status,
-                    agent_title=agent_title,
-                    on_agent_tab=on_agent_tab,
-                    selected_agent=selected_agent,
-                    tokens=tokens,
-                    blink=dot_blink,
-                ),
-                typing_field,
-            ],
+            controls=[typing_field],
         ),
     )
 
@@ -151,7 +127,6 @@ def _typing_slot(
 def build_phone_dock(
     *,
     agent_status: str,
-    agent_tabs: tuple[tuple[str, str, str], ...],
     agent_title: str,
     attach_enabled: bool,
     attached_output: bool,
@@ -169,7 +144,6 @@ def build_phone_dock(
     dismiss_composer_keyboard: Callable[[], None],
     composing: Callable[[], Any],
     dark: bool,
-    dot_blink: bool = False,
     detail_width: float,
     direct_binding: Any,
     direct_field: Any,
@@ -185,7 +159,6 @@ def build_phone_dock(
     markers: tuple[StagedMarker, ...],
     mobile_mode: str,
     modifier_states: dict[str, str] | None,
-    on_agent_tab: Callable[[str], Any] | None,
     on_attach_picture: Any,
     on_cancel_blocked: Callable[[], Any],
     on_clear_error: Callable[[], Any],
@@ -203,7 +176,6 @@ def build_phone_dock(
     phone_lines: int,
     picture_action: Any,
     pictures: tuple[Any, ...],
-    selected_agent: str,
     send_then_leave: Callable[..., Any],
     set_comp_size: Callable[[tuple[float, float]], Any],
     show_key_row: bool,
@@ -222,6 +194,12 @@ def build_phone_dock(
 ) -> Any:
     """The phone input dock (composer, key bar, tab/typing row), normal or typing column."""
     compose = mobile_mode == "compose" and workflow == WORKFLOW_AGENT_COMPOSER
+    # Idle in control, the dock follows the "Agents open in" setting.
+    idle = mobile_mode == "reading" and in_control
+    text_box = compose or (idle and workflow == WORKFLOW_AGENT_COMPOSER)
+    direct_row = mobile_mode == "direct" or (idle and workflow != WORKFLOW_AGENT_COMPOSER)
+    # In control, the key bar is for Direct input; otherwise it serves read-only output.
+    key_bar_shown = (mobile_mode == "direct" if in_control else attached_output) and not compose
 
     keyboard_button, compose_button = _toggle_buttons(
         close_keyboard=close_keyboard,
@@ -243,7 +221,7 @@ def build_phone_dock(
             enabled=keys_enabled and in_control and not terminal.selection.open,
             on_paste=on_paste if in_control else None,
             on_select=on_open_selection if attached_output else None,
-            visible=not compose and (in_control or attached_output),
+            visible=key_bar_shown,
             medium=tier == "medium",
             show_keys=show_key_row and in_control,
             paste_key=AGENT_PASTE_KEY,
@@ -274,19 +252,9 @@ def build_phone_dock(
         key="agent-tab-row",
         height=40,
         spacing=4,
-        visible=True,
+        visible=direct_row,
         controls=[
-            _typing_slot(
-                visible=mobile_mode != "direct" or not in_control,
-                agent_tabs=agent_tabs,
-                agent_status=agent_status,
-                agent_title=agent_title,
-                on_agent_tab=on_agent_tab,
-                selected_agent=selected_agent,
-                tokens=tokens,
-                dot_blink=dot_blink,
-                typing_field=typing_field,
-            ),
+            _typing_slot(typing_field),
             ft.Semantics(label="Compose message", button=True, content=compose_button),
             attach_button(
                 on_attach_picture,
@@ -329,8 +297,9 @@ def build_phone_dock(
         toggle=None,
         dark=dark,
         blocked=agent_status.lower() == "blocked",
-        visible=compose,
-        focusable=compose
+        working=agent_status.lower() == "working",
+        visible=text_box,
+        focusable=text_box
         and composer_focusable
         and not terminal.selection.open
         and not composer_closing,
@@ -363,9 +332,15 @@ def build_phone_dock(
             width=round(detail_width),
         )
         memo = dock_sizes if dock_sizes is not None else {}
-        spacer = 0.0 if split else memo.get(signature) or dock_h or PHONE_DOCK_HEIGHT
+        remembered = memo.get(signature)
+        if split:
+            spacer = 0.0
+        elif remembered is not None:  # an empty dock measures 0, which is a real height
+            spacer = remembered
+        else:
+            spacer = dock_h or PHONE_DOCK_HEIGHT
         if on_layout is not None:
-            on_layout(spacer, not compose and (in_control or attached_output), signature in memo)
+            on_layout(spacer, key_bar_shown, signature in memo)
         bottom.append(ft.Container(key="agent-input-spacer", height=spacer))
 
         def measured(e: Any) -> None:

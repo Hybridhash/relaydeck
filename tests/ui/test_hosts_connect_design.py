@@ -44,7 +44,11 @@ from relaydeck.client.features.terminal.surfaces import (
     AGENT_KEYBOARD_KEYS_KEY,
     AGENT_TAKEOVER_CONFIRM_KEY,
 )
-from relaydeck.client.pending_commands import MemoryCommandStore, PendingCommands
+from relaydeck.client.pending_commands import (
+    REVIEW_GRACE_MS,
+    MemoryCommandStore,
+    PendingCommands,
+)
 from relaydeck.domain.models import (
     AppState,
     Connection,
@@ -592,7 +596,7 @@ def test_height_crossing_keeps_engine_writer_draft_and_dock() -> None:
             if width < 600:
                 assert dock.expand is None  # compact phone bar never shares viewport flex
                 assert app.find("composer-footer") is not None
-                assert app.find("composer-draft").max_lines == 4
+                assert app.find("composer-draft").max_lines == 2
             elif height < 600:
                 # Composer stays intrinsic; the terminal takes the rest.
                 assert dock.expand is None
@@ -647,6 +651,24 @@ async def _open_recovery(journal: PendingCommands, **kw: Any) -> HostApp:
     await app.set_props_and_fire("command-recovery-toggle", {}, "click")
     await app.settle()
     return app
+
+
+def test_a_send_in_flight_is_listed_only_once_it_outlasts_the_grace_period() -> None:
+    async def scenario() -> None:
+        now = 1_000_000
+        journal = _journal_with([_recovery_row("h1", "c1", outcome="pending", created_ms=now)])
+        journal.clock = lambda: now + 1_000
+        app = await render_component(
+            CommandRecovery, journal=journal, transport=object(), granted=frozenset(), go=_noop
+        )
+        await app.settle()
+        assert app.find("command-recovery-empty") is not None
+        journal.clock = lambda: now + REVIEW_GRACE_MS
+        journal.changed()
+        await app.settle()
+        assert app.find("command-recovery-toggle") is not None
+
+    run(scenario())
 
 
 def test_command_recovery_list_content_sized_then_bounded() -> None:

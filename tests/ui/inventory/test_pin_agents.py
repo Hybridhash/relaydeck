@@ -144,9 +144,9 @@ def test_pins_survive_a_remount_and_missing_agents_are_pruned(width: int) -> Non
         again = await _root(store, width)
         try:
             assert _order(again)[:2] == [
-                "home-mac:w2",
                 "home-mac:d2",
-            ]  # status order inside the group
+                "home-mac:w2",
+            ]  # name order inside the group
         finally:
             await again.set_props_and_fire("test-unmount", {}, "click")
 

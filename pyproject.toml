@@ -1,6 +1,6 @@
 [project]
 name = "relaydeck"
-version = "0.2.2"
+version = "0.2.3"
 description = "Watch and drive your Herdr terminal sessions from phone, tablet and browser"
 readme = "README.md"
 requires-python = ">=3.13,<3.14"

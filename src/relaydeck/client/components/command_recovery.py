@@ -7,7 +7,7 @@ from typing import Any
 
 import flet as ft
 
-from relaydeck.client.pending_commands import PendingCommands
+from relaydeck.client.pending_commands import REVIEW_GRACE_MS, PendingCommands
 from relaydeck.domain.models import scope_key
 
 # pinned Flet has no max-height, so the opened review list
@@ -28,6 +28,7 @@ def CommandRecovery(
     unsub: Any = ft.use_ref(None)
     task: Any = ft.use_ref(None)
     alive: Any = ft.use_ref(True)
+    timer: Any = ft.use_ref(None)
 
     def subscribe() -> None:
         alive.current = True
@@ -58,7 +59,25 @@ def CommandRecovery(
 
         task.current = asyncio.create_task(work())
 
-    rows = list(journal.records.values())
+    now = journal.clock()
+    records = list(journal.records.values())
+    rows = [row for row in records if journal.needs_review(row, now)]
+    waiting = [row.get("created_ms", 0) + REVIEW_GRACE_MS for row in records if row not in rows]
+    due = min(waiting, default=0)
+
+    def recheck() -> None:
+        # Re-render when the oldest unconfirmed operation crosses the grace period.
+        if due:
+            timer.current = asyncio.get_running_loop().call_later(
+                max(0, due - now) / 1000, lambda: refresh(lambda value: value + 1)
+            )
+
+    def stop_recheck() -> None:
+        if timer.current is not None:
+            timer.current.cancel()
+            timer.current = None
+
+    ft.use_effect(recheck, dependencies=[due], cleanup=stop_recheck)
     if not rows and not journal.error:
         return ft.Container(key="command-recovery-empty", height=0)
     controls: list[Any] = [

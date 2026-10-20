@@ -48,8 +48,9 @@ def test_staging_compose_picture_from_reading_reveals_phone_draft(
         )
         app.session.apply_patch(app.page._i, {"width": width, "height": 844})
         try:
-            with pytest.raises(KeyError):
-                _active(app, "composer-draft")
+            if not in_control:
+                with pytest.raises(KeyError):
+                    _active(app, "composer-draft")
             terminal = session.current_term
             token = session.input_token
             before = (len(ops.attaches), len(ops.leases), len(sockets.sockets))
@@ -220,8 +221,9 @@ def test_suppressed_picture_additions_cannot_reveal_later(
                 session.set_foreground(True)
                 await app.settle()
             await app.set_props_and_fire("tier-medium", {}, "click")
-            with pytest.raises(KeyError):
-                _active(app, "composer-draft")
+            if case != "direct":  # leaving Direct input shows the idle text box, unfocused
+                with pytest.raises(KeyError):
+                    _active(app, "composer-draft")
             assert before == (len(ops.attaches), len(ops.leases), len(sockets.sockets))
             assert not submitted and all(not socket.sent_bytes for socket in sockets.sockets)
             assert not any(

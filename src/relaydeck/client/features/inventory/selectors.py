@@ -131,14 +131,13 @@ def metadata_rows(
                 agent=row.get("agent", ""),
             )
         )
-    result.sort(
-        key=lambda row: (
-            status_rank(row.status.value),
-            row.title.casefold(),
-            row.key,
-        )
-    )
+    result.sort(key=_stable_order)
     return tuple(result)
+
+
+def _stable_order(row: AgentRow) -> tuple[str, str]:
+    """By name: a status change updates the card's pill and never moves the card."""
+    return row.title.casefold(), row.key
 
 
 @dataclass(frozen=True)
@@ -251,7 +250,7 @@ def agent_rows(
                 agent=agent.agent,
             )
         )
-    rows.sort(key=lambda r: (status_rank(r.status.value), r.title.casefold(), r.key))
+    rows.sort(key=_stable_order)
     return tuple(rows)
 
 

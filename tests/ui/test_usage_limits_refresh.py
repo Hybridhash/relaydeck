@@ -47,6 +47,7 @@ class Server:
         self.reading = True
         self.outcome = RefreshOutcome("started", attempt_id="a1")
         self.presses: list[tuple[str, str]] = []
+        self.status = "fresh"
 
     def document(self) -> dict[str, Any]:
         kind: dict[str, Any] = {
@@ -63,7 +64,7 @@ class Server:
             "used_percent": 42.0,
             "window_minutes": 10080,
             "resets_at_ms": _now() + 2 * 86_400_000,
-            "status": "fresh",
+            "status": self.status,
         }
         extra: dict[str, Any] = {}
         if self.credit:
@@ -107,7 +108,7 @@ class Server:
                     "kind": "k1",
                     "quota_key": "q",
                     "observed_ms": self.observed,
-                    "status": "fresh",
+                    "status": self.status,
                     "windows": [window],
                     **extra,
                 }
@@ -236,6 +237,21 @@ def test_press_shows_a_spinner_then_checked_just_now() -> None:
         }
         await _until(app, lambda: "checked just now" in _texts(app))
         assert isinstance(_button(app), ft.IconButton) and not _button(app).disabled
+
+    run(scenario())
+
+
+@pytest.mark.parametrize("readable", [True, False])
+def test_needs_attention_refresh_reads_the_tool_again_when_it_can(readable: bool) -> None:
+    async def scenario() -> None:
+        server = Server({"available": readable, "reason": None, "in_progress": False})
+        server.observed = _now() - 8 * 60 * MIN
+        server.status = "stale"
+        app = await render_component(Harness, fetch=server)
+        await _until(app, lambda: _has(app, "attention-refresh-k1"))
+        await app.set_props_and_fire("attention-refresh-k1", {}, "click")
+        await app.settle()
+        assert server.presses == ([("host-a", "k1")] if readable else [])
 
     run(scenario())
 

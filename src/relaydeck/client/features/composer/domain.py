@@ -573,7 +573,7 @@ class ComposerStore:
             host_id=self._host_id,
             host_epoch=self._host_epoch,
             agent_id=self._agent_id,
-            text=text,
+            text=text.strip("\r\n"),  # blank edge lines would reach the agent as empty lines
             expected_revision=self._expected_revision,
         )
         try:
@@ -594,7 +594,7 @@ class ComposerStore:
             else:
                 # Scripted source seam only; production observes the existing
                 # journal identity and never makes a second upstream call.
-                await self._prompt_waiting_out_launch(text)
+                await self._prompt_waiting_out_launch(text.strip("\r\n"))
         except Exception as exc:  # noqa: BLE001 - outcome mapping is the contract
             if generation != self._send_generation:
                 return SEND_IGNORED

@@ -49,6 +49,7 @@ from relaydeck.client.features.terminal.surfaces.common import (
 # Slot geometry eases between the normal and split layouts. The
 # props are set in both layouts (never toggled), so no wrapper is added or removed.
 SLOT_ANIMATION = ft.Animation(200, ft.AnimationCurve.EASE_OUT)
+WIDE_DRAFT_LINES = 3
 
 
 def _measure_composer(
@@ -140,6 +141,7 @@ def build_expanded_input(
                 on_clear_error=on_clear_error,
                 dark=dark,
                 blocked=agent_status.lower() == "blocked",
+                working=agent_status.lower() == "working",
                 attachment=attach_button(
                     on_attach_picture,
                     enabled=attach_enabled,
@@ -148,7 +150,7 @@ def build_expanded_input(
                 ),
                 chips=picture_chips(pictures, on_remove_picture) if pictures else None,
                 on_focus_change=on_composer_focus,
-                fill_lines=expanded_lines if split else None,
+                fill_lines=expanded_lines if split else WIDE_DRAFT_LINES,
             ),
         )
     else:

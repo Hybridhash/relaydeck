@@ -151,7 +151,12 @@ def test_correlated_busy_refusal_still_retries_the_same_pane_once(
         )
         assert result["status"] == stored["status"] == "succeeded"
         assert result["result"]["agent_id"] == "agent-1"
-        assert [w["method"] for w in writes] == ["tab.create", "agent.start", "agent.start"]
+        assert [w["method"] for w in writes] == [
+            "tab.create",
+            "agent.start",
+            "agent.start",
+            "agent.rename",
+        ]
         assert writes[1]["params"] == writes[2]["params"]
         assert writes[1]["id"] == "rd-2" and writes[2]["id"] == "rd-3"
 

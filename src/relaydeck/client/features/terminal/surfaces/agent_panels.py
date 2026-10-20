@@ -205,6 +205,7 @@ def build_watching_composer(
             on_clear_error=on_clear_error,
             dark=dark,
             blocked=agent_status.lower() == "blocked",
+            working=agent_status.lower() == "working",
             attachment=attach_button(
                 on_attach_picture,
                 enabled=attach_enabled,

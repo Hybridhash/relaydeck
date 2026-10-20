@@ -47,7 +47,8 @@ def test_keyboard_toggle_gates_focus_before_hide_and_preserves_retained_session(
             await app.settle()
             field = app.find(_typing_key(app))
             assert not field.visible and field.disabled and not field.can_request_focus
-            assert app.find("mobile-keybar").visible
+            # Agent keys live in the tools popover; a shell keeps its key bar.
+            assert app.find("mobile-keybar").visible is (surface == "shell")
             patches = [
                 message.body.patch
                 for message in app.conn.sent[start:]

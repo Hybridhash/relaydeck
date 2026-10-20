@@ -186,6 +186,33 @@ def AgentPill(
     )
 
 
+def SpaceChip(label: str, color: str, key: str | None = None, ink: str | None = None) -> Any:
+    """Space chip beside the agent pill: same 18px size, a dot and a softer wash, so the
+    agent identity stays the strongest colour on the card."""
+    return ft.Container(
+        key=key,
+        height=18,
+        padding=ft.Padding.symmetric(horizontal=6),
+        border_radius=ft.BorderRadius.all(9),
+        bgcolor=ft.Colors.with_opacity(0.12, color),
+        alignment=ft.Alignment.CENTER,
+        content=ft.Row(
+            tight=True,
+            spacing=4,
+            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+            controls=[
+                ft.Container(width=6, height=6, border_radius=3, bgcolor=ink or color),
+                ft.Text(
+                    label,
+                    style=text_style(FAMILY_INTERFACE, _AGENT_BADGE_TYPE, ink or color),
+                    no_wrap=True,
+                    overflow=ft.TextOverflow.ELLIPSIS,
+                ),
+            ],
+        ),
+    )
+
+
 COUNT_TILE_HEIGHT = 52
 _COUNT_STRIP_NUMBER = {**T.TYPE_COUNT_NUMBER, "size": 24, "height": 1.0}
 

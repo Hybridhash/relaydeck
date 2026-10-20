@@ -694,10 +694,21 @@ class SqliteUsageStore:
                             raise UsageUnavailable()
                         LimitStatus(window.status)
                         _validate_amounts(window)
-                db.execute(
-                    "DELETE FROM limits WHERE host=? AND kind=? AND account=? AND quota=?",
-                    (host, kind, account, snapshot.quota_key),
-                )
+                scope = (host, kind, account, snapshot.quota_key)
+                if snapshot.windows and all(w.idle for w in snapshot.windows):
+                    # An idle screen reports only its first window; the others keep their last
+                    # reading (and its age) instead of vanishing.
+                    keys = [w.window_key for w in snapshot.windows]
+                    db.execute(
+                        "DELETE FROM limits WHERE host=? AND kind=? AND account=? AND quota=?"
+                        f" AND window IN ({','.join('?' * (len(keys) + 1))})",
+                        (*scope, *keys, ""),
+                    )
+                else:
+                    db.execute(
+                        "DELETE FROM limits WHERE host=? AND kind=? AND account=? AND quota=?",
+                        scope,
+                    )
                 for window in windows:
                     db.execute(
                         "INSERT INTO limits(host,kind,account,quota,window,observed,body,"
@@ -1790,13 +1801,23 @@ class SqliteUsageStore:
                 continue  # historical: another account is the active one for this source
             latest = max(row[0] for row in rows)
             newest = [row for row in rows if row[0] == latest]
+            read = list(newest)  # what the latest reading saw; it alone sets the overall status
+            if newest and all(row[1] is not None and row[1].idle for row in newest):
+                # An idle screen reports only its first window; the others show their last
+                # reading as stale (or expired once their reset passed) rather than vanishing.
+                shown = {row[1].window_key for row in newest if row[1] is not None}
+                for row in rows:
+                    if row[0] != latest and row[1] is not None and row[1].window_key not in shown:
+                        aged = row[2] if row[2] == LimitStatus.EXPIRED else LimitStatus.STALE
+                        newest.append((row[0], replace(row[1], status=aged), aged, *row[3:]))
+                        shown.add(row[1].window_key)
             snapshots.append(
                 LimitSnapshot(
                     kind,
                     quota,
                     latest,
                     tuple(row[1] for row in newest if row[1] is not None),
-                    max((row[2] for row in newest), key=_LIMIT.__getitem__),
+                    max((row[2] for row in read), key=_LIMIT.__getitem__),
                     source=newest[0][3],
                     account_ref=account or None,
                     error=newest[0][4],

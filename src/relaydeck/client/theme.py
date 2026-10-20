@@ -60,10 +60,12 @@ _CONSOLE_KEYS = frozenset(
         "ground",
         "dot",
         "card",
+        "card_selected",
         "raised",
         "panel",
         "nav",
         "terminal_bg",
+        "terminal_canvas",
         "border",
         "border_dashed_offline",
         "text",
@@ -164,6 +166,7 @@ _OVERLAY_CONSOLE = frozenset(
         "ground",
         "dot",
         "card",
+        "card_selected",
         "raised",
         "panel",
         "nav",
@@ -401,6 +404,15 @@ _AGENT_PALETTE: tuple[tuple[str, str, str], ...] = tuple(
 _AGENT_FALLBACK_DARK: str = _AGENT_TABLE["fallback_dark"]
 _AGENT_FALLBACK_LIGHT: str = _AGENT_TABLE["fallback_light"]
 _AGENT_LIGHT_INK_FALLBACK: str = _AGENT_TABLE["light_ink_fallback"]
+_SPACE_TINTS: tuple[str, ...] = tuple(str(tint) for tint in _AGENT_TABLE["space_tints"])
+if not _SPACE_TINTS:
+    raise _fail("agent", "space_tints must not be empty")
+
+
+def space_tint(label: str) -> str:
+    """Stable chip colour for a space name: the same space always gets the same tint."""
+    index = zlib.crc32(label.strip().casefold().encode("utf-8")) % len(_SPACE_TINTS)
+    return _SPACE_TINTS[index]
 
 
 def _palette_entry(kind: str) -> tuple[str, str, str]:

@@ -144,6 +144,8 @@ def TerminalScreen(
     can_scroll: Callable[[], bool] | None = None,
     on_keyboard: Callable[[], Any] | None = None,
     keyboard_shown: bool = False,
+    on_tools: Callable[[], Any] | None = None,
+    tools_open: bool = False,
     scroll_input_enabled: bool = False,
     cached_screen: str = "",
     connecting: bool = False,
@@ -343,8 +345,10 @@ def TerminalScreen(
             # Touch tablets/phones have no wheel; show the scroll
             # controls on touch regardless of width class. Mouse desktops
             # show only "Jump to latest", and only when the view is not at the end
-            # (a full-screen app owns its position, so it stays offered while live).
-            visible=placeholder is None and (compact or touch or scroll_away(scroll_state)),
+            # (a full-screen app owns its position, so it stays offered while live),
+            # plus the tools button on narrow layouts, where it is the only way to the keys.
+            visible=placeholder is None
+            and (compact or touch or on_tools is not None or scroll_away(scroll_state)),
             jump_only=not (compact or touch),
             state=scroll_state or ViewState(alt=False, at_bottom=True, mouse=False),
             binding=scroll_binding,
@@ -352,6 +356,8 @@ def TerminalScreen(
             can_scroll=can_scroll,
             on_keyboard=on_keyboard,
             keyboard_shown=keyboard_shown,
+            on_tools=on_tools,
+            tools_open=tools_open,
         )
     )
     controls.append(

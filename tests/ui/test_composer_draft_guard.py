@@ -7,8 +7,14 @@ from __future__ import annotations
 from typing import Any
 
 import flet as ft
+import pytest
 
-from relaydeck.client.features.composer.components import ComposerBox
+from relaydeck.client.features.composer.components import (
+    PROGRESS_HINT,
+    VALIDATION_KEY,
+    ComposerBox,
+)
+from relaydeck.client.features.composer.domain import BLOCKER_EMPTY
 from tests.support.host_harness import render_component, run
 
 
@@ -84,5 +90,42 @@ def test_untouched_field_keeps_rendering_the_model_draft() -> None:
         assert app.find("composer-draft").value == "hello"
         await _rerender(app, _props("hello world"))
         assert app.find("composer-draft").value == "hello world"
+
+    run(scenario())
+
+
+@pytest.mark.parametrize("fill_lines", [3, None])
+def test_progress_notice_ends_when_the_agent_stops(fill_lines: int | None) -> None:
+    async def scenario() -> None:
+        props = {**_props("next"), "submission": "progress", "fill_lines": fill_lines}
+        app = await render_component(_Parent, {**props, "working": False})
+        if fill_lines:
+            assert app.find(VALIDATION_KEY).content.value == ""
+        with pytest.raises(KeyError):
+            app.find("composer-progress")
+
+    run(scenario())
+
+
+@pytest.mark.parametrize(
+    "submission,shown", [("idle", "Write a message to send."), ("progress", PROGRESS_HINT)]
+)
+def test_fixed_box_shows_one_status_line_in_a_reserved_row(submission: str, shown: str) -> None:
+    async def scenario() -> None:
+        props = {
+            **_props(""),
+            "blockers": (BLOCKER_EMPTY,),
+            "submission": submission,
+            "fill_lines": 3,
+        }
+        app = await render_component(_Parent, props)
+        field = app.find("composer-draft")
+        assert (field.min_lines, field.max_lines) == (3, 3)
+        row = app.find(VALIDATION_KEY)
+        line = row.content.content if isinstance(row.content, ft.Shimmer) else row.content
+        assert row.height and line.value == shown
+        assert isinstance(row.content, ft.Shimmer) is (submission == "progress")
+        with pytest.raises(KeyError):
+            app.find("composer-progress")
 
     run(scenario())

@@ -1,6 +1,6 @@
-"""dock agent switches do not grow the history stack.
+"""header agent switches do not grow the history stack.
 
-Open agent A from the list (one history entry), switch to B and C with the dock agent buttons
+Open agent A from the list (one history entry), switch to B and C with the header switcher
 (no further entries), then a back gesture (route change to the list) lands on the list.
 Actual Root controls and retained sessions; the recorded `go` calls are the route pushes.
 """
@@ -24,9 +24,9 @@ async def _fire(app: Any, key: str) -> None:
     await app.settle()
 
 
-# The dock agent buttons exist on the phone layout only.
+# The header agent switcher exists on the phone layout only.
 @pytest.mark.parametrize("width", [390])
-def test_dock_switches_keep_one_history_entry_and_back_lands_on_list(
+def test_switcher_picks_keep_one_history_entry_and_back_lands_on_list(
     width: int, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(_StubTransport, "snapshot", valid_inventory)
@@ -40,8 +40,9 @@ def test_dock_switches_keep_one_history_entry_and_back_lands_on_list(
             assert len(pushes) == 1, pushes
             assert bridge.state.selection == "home-mac:term-1"
 
-            await _fire(app, "terminal-agent-tab-home-mac:term-2")
-            await _fire(app, "terminal-agent-tab-home-mac:term-3")
+            for key in ("home-mac:term-2", "home-mac:term-3"):
+                await _fire(app, "agent-switcher-open")
+                await _fire(app, f"agent-switcher-row-{key}")
             assert len(pushes) == 1, pushes
             assert bridge.state.selection == "home-mac:term-3"
             assert pool.foreground is not None

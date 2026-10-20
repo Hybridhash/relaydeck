@@ -35,9 +35,6 @@ from relaydeck.client.features.terminal.layout_budget import (
 )
 from relaydeck.client.features.terminal.models import TerminalViewState
 from relaydeck.client.features.terminal.paste_policy import PasteReview
-from relaydeck.client.features.terminal.paste_review import (
-    PasteReviewSheet,
-)
 from relaydeck.client.theme import palette
 
 if TYPE_CHECKING:
@@ -55,6 +52,7 @@ from relaydeck.client.features.terminal.surfaces.agent_header import (
 from relaydeck.client.features.terminal.surfaces.agent_hooks import (
     use_open_hold,
     use_row_metric,
+    use_screen_overlay,
     use_staged_picture_reveal,
 )
 from relaydeck.client.features.terminal.surfaces.agent_panels import (
@@ -64,8 +62,6 @@ from relaydeck.client.features.terminal.surfaces.agent_panels import (
 from relaydeck.client.features.terminal.surfaces.common import (
     AGENT_DETAIL_KEY,
     AGENT_PASTE_ERROR_KEY,
-    AGENT_PASTE_FRAME_KEY,
-    _framed,
     agent_window_state,
 )
 from relaydeck.client.features.terminal.surfaces.direct_typing import (
@@ -79,12 +75,18 @@ from relaydeck.client.features.terminal.surfaces.phone_composer import use_compo
 from relaydeck.client.features.terminal.surfaces.phone_dock import (
     build_phone_dock,
 )
+from relaydeck.client.features.terminal.surfaces.screen_overlays import (
+    build_screen_overlays,
+    phone_tools,
+    review_sheet,
+)
 from relaydeck.client.features.terminal.surfaces.select_stack import (
     build_select_stack,
 )
 from relaydeck.client.features.terminal.surfaces.terminal_host import (
     build_terminal_host,
 )
+from relaydeck.client.features.terminal.switcher import SwitcherRow
 
 
 @ft.component
@@ -159,11 +161,9 @@ def AgentTerminalScreen(
     connection_text: str = "",
     connection_live: bool = True,
     on_connection_action: Callable[[], Any] | None = None,
-    agent_tabs: tuple[tuple[str, str, str], ...] = (),
-    dot_blink: bool = False,
     shown: bool = True,
-    selected_agent: str = "",
     on_agent_tab: Callable[[str], Any] | None = None,
+    switcher_rows: tuple[SwitcherRow, ...] = (),
     on_operations: Callable[[], Any] | None = None,
     on_mobile_item: Callable[[KeyBarItem, bool], Any] | None = None,
     modifier_states: dict[str, str] | None = None,
@@ -245,8 +245,10 @@ def AgentTerminalScreen(
         note_send,
     ) = use_composer_keyboard(
         enabled=phone
-        and mobile_mode == "compose"
-        and workflow == WORKFLOW_AGENT_COMPOSER
+        and (
+            (mobile_mode == "compose" and workflow == WORKFLOW_AGENT_COMPOSER)
+            or (mobile_mode == "reading" and workflow == WORKFLOW_AGENT_COMPOSER)
+        )
         and composer_focusable
         and not terminal.selection.open,
         binding=direct_binding,
@@ -337,6 +339,9 @@ def AgentTerminalScreen(
     dock_epoch_ref.current = (dock_open, dock_epoch)
     split_dock_top = split_top + max(split_ctl_height, 48.0) + 8.0 + split_comp_h + 8.0
     slim = phone or split
+    overlay, toggle_overlay, close_overlay = use_screen_overlay(
+        [mobile_mode, in_control, keys_enabled, terminal.selection.open, direct_binding, shown]
+    )
     controls: list[Any] = [
         build_agent_header(
             agent_status=agent_status,
@@ -358,6 +363,9 @@ def AgentTerminalScreen(
             window=window,
             window_size=window_size,
             workflow=workflow,
+            switcher=(switcher_rows, overlay == "switcher", toggle_overlay)
+            if on_agent_tab is not None
+            else None,
         )
     ]
     # Below 600px tall the input dock takes one flex share
@@ -423,6 +431,11 @@ def AgentTerminalScreen(
         set_mobile_mode("compose")
         on_workflow_change(WORKFLOW_AGENT_COMPOSER)
 
+    def focus_composer(value: bool) -> Any:
+        if value and mobile_mode == "reading":  # tapping the idle text box starts composing
+            composing()
+        return composer_focus_changed(value)
+
     use_staged_picture_reveal(
         pictures=pictures,
         draft_restore_marker=draft_restore_marker,
@@ -454,9 +467,8 @@ def AgentTerminalScreen(
             keys_enabled=keys_enabled,
             keyboard_shown=mobile_mode == "direct",
             on_close_selection=on_close_selection,
-            # Phone Direct input is the existing direct-typing field; the native
-            # terminal request is for the expanded (tablet) tier.
-            on_keyboard=toggle_keyboard if phone and touch and in_control else None,
+            on_tools=(lambda: toggle_overlay("tools")) if phone and in_control else None,
+            tools_open=overlay == "tools",
             on_copy_selection=on_copy_selection,
             on_input=on_input,
             on_jump_to_bottom=on_jump_to_bottom,
@@ -563,8 +575,6 @@ def AgentTerminalScreen(
     if phone:
         build_phone_dock(
             agent_status=agent_status,
-            agent_tabs=agent_tabs,
-            dot_blink=dot_blink,
             agent_title=agent_title,
             attach_enabled=attach_enabled,
             attached_output=attached_output,
@@ -597,11 +607,10 @@ def AgentTerminalScreen(
             markers=markers,
             mobile_mode=mobile_mode,
             modifier_states=modifier_states,
-            on_agent_tab=on_agent_tab,
             on_attach_picture=on_attach_picture,
             on_cancel_blocked=on_cancel_blocked,
             on_clear_error=on_clear_error,
-            on_composer_focus=composer_focus_changed,
+            on_composer_focus=focus_composer,
             on_confirm_blocked=on_confirm_blocked,
             on_direct_input=on_direct_input,
             on_draft_change=on_draft_change,
@@ -615,7 +624,6 @@ def AgentTerminalScreen(
             phone_lines=phone_lines,
             picture_action=picture_action,
             pictures=pictures,
-            selected_agent=selected_agent,
             send_then_leave=send_then_leave,
             set_comp_size=set_comp_size,
             show_key_row=show_key_row,
@@ -725,18 +733,7 @@ def AgentTerminalScreen(
             workflow=workflow,
         )
     controls.extend(bottom)
-    if paste_review is not None:
-        controls.append(
-            _framed(
-                tokens,
-                AGENT_PASTE_FRAME_KEY,
-                PasteReviewSheet(
-                    review=paste_review,
-                    on_confirm=on_confirm_paste,
-                    on_cancel=on_cancel_paste,
-                ),
-            )
-        )
+    paste_sheet = review_sheet(tokens, paste_review, on_confirm_paste, on_cancel_paste)
     if paste_error is not None:
         controls.append(ft.Text(paste_error, key=AGENT_PASTE_ERROR_KEY))
     frame = WindowFrame(controls, key="agent-detail-panel", phone=phone)
@@ -764,4 +761,27 @@ def AgentTerminalScreen(
         selection_text=selection_text,
         slot_children=slot_children,
         terminal=terminal,
+        overlays=build_screen_overlays(
+            opened=overlay,
+            close=close_overlay,
+            switcher_rows=switcher_rows,
+            on_pick=on_agent_tab,
+            paste=paste_sheet,
+            wide=not phone,
+            tools=phone_tools(
+                on_item=key_item,
+                modifier_states=modifier_states or {},
+                keys_enabled=keys_enabled and in_control and not terminal.selection.open,
+                show_keys=show_key_row and in_control,
+                mode=mobile_mode,
+                on_mode=lambda m: close_keyboard(composing) if m == "compose" else open_keyboard(),
+                on_paste=key_paste if in_control else None,
+                on_select=key_select if attached_output else None,
+                on_attach=on_attach_picture,
+                attach_enabled=attach_enabled,
+                picture_action=picture_action,
+            )
+            if phone
+            else None,
+        ),
     )

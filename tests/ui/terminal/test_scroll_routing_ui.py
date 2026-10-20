@@ -36,11 +36,14 @@ def test_all_widths_native_wheel_routing_local_normal_and_guarded_alt(
             shape = _shape(_ancestry(app, term))
             token = session._view_token
             overlay = app.find("terminal-scroll-overlay")
-            assert overlay.visible == (tier == "compact")
+            # A medium agent screen keeps the column for its tools button; the wheel still scrolls.
+            assert overlay.visible == (tier == "compact" or (tier == "medium" and not shell))
+            if tier == "medium" and not shell:
+                assert app.find("terminal-scroll-up-semantics").visible is False
             assert overlay.right == 8 and overlay.width == 32
             assert app.find("terminal-scroll-up").tooltip is None
             assert app.find("terminal-scroll-up-semantics").label == (
-                "Scroll up" if tier == "compact" else "Scroll up, unavailable"
+                "Scroll up" if overlay.visible else "Scroll up, unavailable"
             )
             assert not app.find("terminal-scroll-latest").visible
             # Normal xterm drag/wheel uses its ScrollController, not native INPUT.

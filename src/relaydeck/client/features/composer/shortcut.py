@@ -82,7 +82,8 @@ class SendShortcut:
         pending, self._pending = self._pending, None
         if pending is None or time.monotonic() - pending[1] > _SWALLOW_WINDOW_S:
             return False
-        return inserted_one_newline(pending[0], text)
+        # A send that already cleared the field leaves the newline on its own.
+        return text == "\n" or inserted_one_newline(pending[0], text)
 
 
 def use_send_shortcut(

@@ -82,6 +82,7 @@ from relaydeck.client.features.terminal.surfaces import (
     use_mobile_key_actions,
     use_paste_fallback,
 )
+from relaydeck.client.features.terminal.surfaces.screen_overlays import paste_layer
 from relaydeck.client.theme import palette
 
 SHELL_SCREEN_KEY = "shell-screen"
@@ -620,18 +621,20 @@ def ShellScreen(
                     content=ft.Column(tight=True, spacing=8, controls=input_controls),
                 )
             )
-    if review is not None:
-        controls.append(
+    paste = (
+        paste_layer(
             SurfaceFrame(
                 SHELL_PASTE_FRAME_KEY,
                 PasteReviewSheet(
-                    review=review,
-                    on_confirm=on_confirm_paste,
-                    on_cancel=on_cancel_paste,
+                    review=review, on_confirm=on_confirm_paste, on_cancel=on_cancel_paste
                 ),
                 tokens=tokens,
-            )
+            ),
+            wide=not phone,
         )
+        if review is not None
+        else None
+    )
     if paste_error is not None:
         controls.append(ft.Text(paste_error, key=SHELL_PASTE_ERROR_KEY))
     if view.confirm_close:
@@ -690,6 +693,7 @@ def ShellScreen(
                 dark=dark,
                 alt=bool(scroll_state and scroll_state.alt),
             ),
+            *([paste] if paste is not None else []),
         ],
     )
 

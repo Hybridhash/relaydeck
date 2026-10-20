@@ -138,7 +138,7 @@ def test_native_keyboard_shown_from_compose_switches_to_direct_and_keeps_the_dra
     run(scenario())
 
 
-def test_keyboard_button_is_shown_on_the_phone_tier_too(monkeypatch: Any) -> None:
+def test_tools_button_replaces_the_keyboard_button_on_the_phone_tier(monkeypatch: Any) -> None:
     async def scenario() -> None:
         session, _ops, _factory, _submitted = _agent_session()
         session.open()
@@ -146,7 +146,8 @@ def test_keyboard_button_is_shown_on_the_phone_tier_too(monkeypatch: Any) -> Non
         session.set_workflow(input_modes.WORKFLOW_AGENT_DIRECT)
         app = await render_component(_Screen, session, True, True)
         try:
-            assert _has(app, "terminal-keyboard-button")
+            assert _has(app, "terminal-tools-button")
+            assert not _has(app, "terminal-keyboard-button")
         finally:
             await session.dispose()
 

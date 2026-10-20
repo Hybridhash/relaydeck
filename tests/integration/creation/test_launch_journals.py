@@ -167,7 +167,7 @@ def test_creation_observes_returned_resource_and_never_replays_partial_launch(
                 controller.accept_snapshot(resource.host_id, resource.snapshot)
                 assert controller.state.connection is original_connection
                 if kind == "agent":
-                    assert next(iter(source._agents.values()))["name"] == "agent-a-3"
+                    assert not next(iter(source._agents.values()))["name"]
                     assert resource.resource_id in source._agents
                 else:
                     assert resource.resource_id in source._tabs

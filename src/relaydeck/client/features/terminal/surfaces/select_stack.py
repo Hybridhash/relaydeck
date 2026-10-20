@@ -36,6 +36,7 @@ def build_select_stack(
     selection_text: str,
     slot_children: list[Any],
     terminal: TerminalViewState,
+    overlays: list[Any] | None = None,
 ) -> Any:
     """The outer Stack: detail frame, overlay dock, input slots and the phone selection sheet."""
     return ft.Stack(
@@ -61,5 +62,7 @@ def build_select_stack(
                 dark=dark,
                 alt=bool(scroll_state and scroll_state.alt),
             ),
+            # Last, so opening or closing them never shifts the layers below.
+            *(overlays or []),
         ],
     )

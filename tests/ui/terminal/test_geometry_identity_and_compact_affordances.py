@@ -12,7 +12,13 @@ from relaydeck.client.features.terminal.key_bar import KEY_BAR
 from relaydeck.client.features.terminal.scrolling import MAX_ALT_PAGES
 from relaydeck.client.features.terminal.surfaces import direct_typing
 from tests.support.host_harness import run
-from tests.support.terminal.direct_typing import _change, _direct, _typing_key
+from tests.support.terminal.direct_typing import (
+    _change,
+    _direct,
+    _typing_key,
+    open_compose,
+    open_direct_input,
+)
 from tests.support.terminal.latch_text import _inputs
 from tests.support.terminal.scroll_ui import _app, _scroll_packets, _view
 from tests.support.ui.instant_inventory import navigate, valid_inventory
@@ -45,10 +51,15 @@ def test_typing_and_icons_share_stable_fixed_height_row(shell, tier, monkeypatch
             slot = app.find("shell-typing-slot" if shell else "agent-typing-slot")
             assert slot.expand and slot.height == 36
             if not shell:
-                assert app.find("agent-tabs").visible is False
+                assert app.find("agent-switcher-open")  # switching lives in the header
+            direct = True
             for _ in range(2):
                 now[0] += 0.5
-                await app.set_props_and_fire(keyboard_key, {}, "click")
+                if shell:
+                    await app.set_props_and_fire(keyboard_key, {}, "click")
+                else:  # the agent row's keyboard toggle moved into the tools popover
+                    direct = not direct
+                    await (open_direct_input if direct else open_compose)(app)
                 row = app.find(row_key)
                 assert (
                     row._i,
@@ -61,12 +72,12 @@ def test_typing_and_icons_share_stable_fixed_height_row(shell, tier, monkeypatch
                 )
                 assert _shape(_ancestry(app, term)) == shape
             if not shell:
-                await app.set_props_and_fire("agent-compose-toggle", {}, "click")
+                await open_compose(app)
                 assert not app.find(_typing_key(app)).visible
                 assert app.find(keyboard_key)._i == identity[1]
                 assert session.store.draft == "retained compose draft"
                 now[0] += 0.5
-                await app.set_props_and_fire(keyboard_key, {}, "click")
+                await open_direct_input(app)
                 assert app.find(_typing_key(app)).visible
                 assert app.find(keyboard_key)._i == identity[1]
             if tier == "compact":

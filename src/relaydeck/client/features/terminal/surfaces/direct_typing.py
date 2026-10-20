@@ -431,4 +431,6 @@ def DirectTypingField(
         on_change=change,
         on_submit=submit,
         on_selection_change=selection_change(acknowledge_reset),
+        # Like the composer: tapping a key or button keeps the keyboard up.
+        on_tap_outside=lambda _e: None,
     )

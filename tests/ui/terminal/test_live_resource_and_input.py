@@ -76,7 +76,7 @@ def test_integrated_agent_axes_preserve_draft_and_live_terminal(width: int, dark
         await app.set_props_and_fire(
             "composer-draft", {"value": "draft 中文 العربية"}, "change", "draft 中文 العربية"
         )
-        assert app.find("composer-draft").max_lines == (4 if width < 1024 else 5)
+        assert app.find("composer-draft").max_lines == (2 if width < 1024 else 3)
         if width < 1024:
             await app.set_props_and_fire("agent-workflow-toggle", {}, "click")
             assert app.find("mobile-keybar").visible
@@ -218,7 +218,7 @@ def test_read_only_selection_fences_input_and_keeps_engine() -> None:
         await app.set_props_and_fire("phone-select-done", {}, "click")
         assert terminal.input_enabled is True
         assert app.find("agent-input-dock").disabled is False
-        assert "agent-workflow-toggle" in focus_order(app.page)
+        assert "terminal-tools-button" in focus_order(app.page)
         assert app.find(SURFACE_KEY) is terminal
         assert len(sessions.streams.opened) == 1
 

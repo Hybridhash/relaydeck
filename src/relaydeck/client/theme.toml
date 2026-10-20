@@ -71,15 +71,20 @@ triples = [
 fallback_dark = "#A7A3C7"
 fallback_light = "#5B577A"
 light_ink_fallback = "#524E6E"
+# Space chips: soft tints, picked by a stable hash of the space name (same space, same colour).
+space_tints = ["#FFC48A", "#A9C7FF", "#B8E986", "#F2A7C3", "#E3D27A", "#C6B3FF"]
 
 [console]
 ground = "#130F26"
 dot = "#241D48"
 card = "#1F1840"
+card_selected = "#27204E"
 raised = "#2B2356"
 panel = "#191335"
 nav = "#1A1436"
 terminal_bg = "#0B0818"
+# The terminal engine's own canvas colour.
+terminal_canvas = "#1E1E1E"
 border = "#3B3270"
 border_dashed_offline = "#5A4F96"
 text = "#F5F2FF"
@@ -295,6 +300,7 @@ window = ["12-15", "01-02"]
 ground = "#0E1A14"
 dot = "#1D3A2A"
 card = "#15291F"
+card_selected = "#1B3327"
 raised = "#19302A"
 panel = "#12231A"
 nav = "#132419"

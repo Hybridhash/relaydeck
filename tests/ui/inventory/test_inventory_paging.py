@@ -86,8 +86,9 @@ def test_console_global_status_groups_across_unseen_host_pages() -> None:
             await pager.load_more()
             assert not pager.more and len(pager.visible_rows) == 69
             rows = metadata_rows(pager.visible_rows, 0)
-            assert [row.status.value for row in rows] == (
-                ["blocked"] * 61 + ["working"] * 2 + ["done"] * 2 + ["idle"] * 2 + ["unknown"] * 2
+            # Shown by name, so a status change never moves a card; paging stays status-grouped.
+            assert [(row.title, row.key) for row in rows] == sorted(
+                (row.title, row.key) for row in rows
             )
             assert len({row.key for row in rows}) == 69  # same bare IDs, two hosts
             await pager.refresh("acct-1", hosts, InventoryFilters(host_id="other-mac"))

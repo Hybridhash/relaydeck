@@ -123,7 +123,7 @@ def test_touch_normal_layout_uses_slots_with_a_spacer() -> None:
             assert _has(app, "agent-input-controls")
             assert app.find("terminal-flex-host").margin.right == 0
             field = app.find("composer-draft")
-            assert (field.min_lines, field.max_lines) == (1, 5)
+            assert (field.min_lines, field.max_lines) == (3, 3)
             assert _has(app, "agent-window-state")  # full header
         finally:
             await session.dispose()
@@ -247,7 +247,7 @@ def test_phone_portrait_is_unchanged() -> None:
         try:
             assert app.find("terminal-flex-host").margin.right == 0
             field = app.find("composer-draft")
-            assert (field.min_lines, field.max_lines) == (1, 4)
+            assert (field.min_lines, field.max_lines) == (2, 2)
         finally:
             await session.dispose()
 

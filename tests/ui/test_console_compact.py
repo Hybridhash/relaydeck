@@ -125,9 +125,11 @@ def test_the_agents_pane_stacks_its_header_above_the_list_with_no_overlay() -> N
         app = await _render(_state(), width=390)
         pane = app.find("agents-pane")
         overlays = [c for c in iter_controls([pane]) if isinstance(c, ft.Stack)]
-        assert overlays == [], "no Stack in the Console column: nothing can sit under the header"
+        # Only the list area stacks (its loading bar); nothing can sit under the header.
+        assert [c.key for c in overlays] == ["agents-list-area"]
         header = app.find("console-header")
         chips = app.find("console-filter-chips")
+        assert not {header, chips} & set(iter_controls([overlays[0]]))
         agents = app.find("agents-list")
         flow = [c for c in iter_controls([pane]) if c in (header, chips, agents)]
         assert flow.index(header) < flow.index(chips) < flow.index(agents)

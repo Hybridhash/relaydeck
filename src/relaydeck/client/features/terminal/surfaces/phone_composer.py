@@ -95,6 +95,28 @@ def _keep_focus(_event: Any) -> None:
     diagnostics_logger().info("composer_tap_outside action=keep_focus")
 
 
+def _with_working_label(footer: Any, working: bool, tokens: dict[str, str]) -> Any:
+    # Floats just above the box over the terminal: no layout change and never over Send.
+    # The Stack is always there so the text box keeps its identity (and focus).
+    shimmer = composer_ui.working_shimmer(
+        WORKING_LABEL, tokens, size=12, weight=ft.FontWeight.W_600
+    )
+    # The terminal's canvas colour, so the label blends into its last line.
+    label = ft.Container(
+        key="composer-working",
+        top=-WORKING_LABEL_RISE,
+        right=8,
+        padding=ft.Padding.symmetric(horizontal=6, vertical=1),
+        border_radius=4,
+        bgcolor=console_tokens.TERMINAL_CANVAS,
+        content=shimmer,
+    )
+    return ft.Stack(
+        clip_behavior=ft.ClipBehavior.NONE,
+        controls=[footer, *([label] if working else [])],
+    )
+
+
 def _suffix(send: Any, toggle: Any | None) -> Any:
     return send if toggle is None else ft.Row(tight=True, spacing=4, controls=[send, toggle])
 
@@ -172,6 +194,7 @@ def _PhoneComposerField(
     on_focus_change: Callable[[bool], Any] | None = None,
     keyboard: str = "",
     on_hide_keyboard: Callable[[], Any] | None = None,
+    hint: str = "Message the agent…",
 ) -> Any:
     """Keep native editing intact until the authoritative draft changes.
 
@@ -222,12 +245,13 @@ def _PhoneComposerField(
             expand=True,
             value=value,
             multiline=True,
-            min_lines=lines or 1,
-            max_lines=lines or 4,
+            # A fixed height: typing never resizes the terminal; longer text scrolls inside.
+            min_lines=lines or PHONE_DRAFT_LINES,
+            max_lines=lines or PHONE_DRAFT_LINES,
             # Flet has no blur(); canRequestFocus=false drops existing focus.
             can_request_focus=focusable,
             disabled=not focusable,
-            hint_text="Message the agent…",
+            hint_text=hint,
             tooltip=None if compact else "Agent draft",
             text_size=15,
             color=tokens["text"],
@@ -279,14 +303,27 @@ def _PhoneComposerField(
 
 
 STATUS_ROW_KEY = "phone-composer-status"
+WORKING_HINT = "Agent is working… type your next message"
+WORKING_NOTICE = "Agent is working on your message."
+WORKING_LABEL = "Agent is working"
+WORKING_LABEL_RISE = 18  # sits in the terminal's last line, just above the box
+PHONE_DRAFT_LINES = 2
 STATUS_ROW_HEIGHT = 16.0
+STATUS_ROW_EMPTY = 2.0  # keeps the text box clear of iOS Safari's input bar
 
 
-def _status_text(text: str, key: str) -> ft.Semantics:
+def _status_text(text: str, key: str, shown: bool = True) -> ft.Semantics:
     return ft.Semantics(
         live_region=True,
         expand=True,
-        content=ft.Text(text, key=key, size=12, max_lines=1, overflow=ft.TextOverflow.ELLIPSIS),
+        content=ft.Text(
+            text,
+            key=key,
+            size=12,
+            max_lines=1,
+            overflow=ft.TextOverflow.ELLIPSIS,
+            opacity=1 if shown else 0,
+        ),
     )
 
 
@@ -310,6 +347,7 @@ def _phone_composer(
     blocked: bool,
     visible: bool,
     focusable: bool,
+    working: bool = False,
     compact: bool = False,
     attachment: Any = None,
     chips: Any = None,
@@ -340,15 +378,15 @@ def _phone_composer(
             on_focus_change=on_focus_change,
             keyboard=keyboard if visible else "",
             on_hide_keyboard=on_hide_keyboard,
+            hint=WORKING_HINT if submission == SUBMISSION_PROGRESS else "Message the agent…",
         )
     )
     if attachment is not None:
         row.insert(1 if toggle is not None else 0, attachment)
-    controls: list[Any] = [ft.Row(key=composer_ui.FOOTER_KEY, spacing=6, controls=row)]
+    footer = ft.Row(key=composer_ui.FOOTER_KEY, spacing=6, controls=row)
+    controls: list[Any] = [_with_working_label(footer, working, palette(dark))]
     if chips is not None:
         controls.append(chips)
-    # Status lines share one fixed-height row: a notice arriving after send
-    # must not change the dock's height (that resizes the terminal again).
     status: list[Any] = []
     staged = composer_ui.markers_line(markers)
     if staged:
@@ -368,10 +406,13 @@ def _phone_composer(
     message = {
         SUBMISSION_UNKNOWN: composer_ui.UNKNOWN_NOTICE,
         SUBMISSION_BLOCKED_INSERTED: composer_ui.BLOCKED_NOTICE,
-        SUBMISSION_PROGRESS: "Agent is working on your message.",
     }.get(submission)
     if message:
         status.append(_status_text(message, composer_ui.NOTICE_KEY))
+    shown = bool(status)
+    if submission == SUBMISSION_PROGRESS:
+        # Read aloud by screen readers but not drawn: the header badge shows it on screen.
+        status.append(_status_text(WORKING_NOTICE, composer_ui.NOTICE_KEY, shown=False))
     if review is not None:
         controls.append(
             ft.Column(
@@ -416,10 +457,11 @@ def _phone_composer(
         )
     if input_mode == INPUT_MODE_TOOLS_KEYS:
         status.append(_status_text("Tools keys", composer_ui.MODE_KEY))
+    # Always present: a small gap when empty, full height only for the rare notices.
     controls.append(
         ft.Container(
             key=STATUS_ROW_KEY,
-            height=STATUS_ROW_HEIGHT,
+            height=STATUS_ROW_HEIGHT if shown else STATUS_ROW_EMPTY,
             content=ft.Row(spacing=8, controls=status),
         )
     )

@@ -15,7 +15,7 @@ export PATH
 EXIT_USAGE=2
 EXIT_NOT_READY=3
 REPO_URL="https://github.com/Hybridhash/relaydeck"
-TAG="v0.2.2"
+TAG="v0.2.3"
 
 FIND=/usr/bin/find
 READLINK=/usr/bin/readlink

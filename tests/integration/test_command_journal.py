@@ -909,6 +909,10 @@ class _ScriptAdapter:
             raise self.fail["agent.start"]
         return {"type": "agent_started", "agent": {"id": "ag-9"}, "argv": args or []}
 
+    async def agent_rename(self, target: str, name: str | None) -> dict[str, Any]:
+        self.calls.append(("agent.rename", target, repr(name)))
+        return {"type": "ok"}
+
     async def pane_close(self, pane_id: str) -> dict[str, Any]:
         self.calls.append(("pane.close", pane_id))
         if "pane.close" in self.fail:
@@ -922,7 +926,7 @@ def test_connector_executes_all_kinds(tmp_path: Path) -> None:
         try:
             adapter = _ScriptAdapter()
             dispatcher = ConnectorDispatch(journal, adapter, host_id="home-mac", clock=lambda: NOW)
-            # agent.start: a named tab, then agent.start on its root pane.
+            # agent.start: a named tab, agent.start on its root pane, then the agent name cleared.
             started = await dispatcher.dispatch(
                 _dispatch_msg(
                     "cx-1",
@@ -937,8 +941,9 @@ def test_connector_executes_all_kinds(tmp_path: Path) -> None:
             assert adapter.calls == [
                 ("tab.create", "w1", "web"),
                 ("agent.start", "web", "tool-a", "pane-1", "['--model', 'o3']"),
+                ("agent.rename", "ag-9", "None"),
             ]
-            assert dispatcher.herdr_calls == 2
+            assert dispatcher.herdr_calls == 3
             # shell.create passes the label through to tab.create.
             shelled = await dispatcher.dispatch(
                 _dispatch_msg("cx-2", "shell.create", {"workspace_id": "w1"}, {"label": "ops"})

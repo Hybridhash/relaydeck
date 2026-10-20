@@ -73,12 +73,27 @@ CANCEL_LABEL = "Cancel"
 REVIEW_TITLE = "Review blocked insertion"
 EMPTY_HINT = "Write a message to send."
 SPLIT_HINT_HEIGHT = 18.0  # one line of FONT_SIZE["small"] text
+PROGRESS_HINT = "Agent is working on your message."
 UNRESOLVED_HINT = "Waiting on staged content\u2026"
 BLOCKED_NOTICE = (
     "Inserted into the live terminal without submitting. "
     "Use the tools keyboard to press Enter or Esc yourself."
 )
 UNKNOWN_NOTICE = "Delivery is uncertain. The draft was kept and nothing was retried."
+
+
+WORKING_SHIMMER_MS = 1600
+
+
+def working_shimmer(text: str, tokens: dict[str, str], **style: Any) -> Any:
+    """Busy text with the theme's accent colours sweeping through it."""
+    return ft.Shimmer(
+        period=WORKING_SHIMMER_MS,
+        gradient=ft.LinearGradient(
+            colors=[tokens["muted"], tokens["accent_text"], tokens["success"], tokens["muted"]],
+        ),
+        content=ft.Text(text, **style),
+    )
 
 
 def _validation_hint(blockers: tuple[str, ...]) -> str:
@@ -121,6 +136,7 @@ def ComposerBox(
     chips: Any = None,
     on_focus_change: Callable[[bool], Any] | None = None,
     fill_lines: int | None = None,
+    working: bool = True,
 ) -> Any:
     """Presentation: reference `.composer` frame (draft field plus
     staged/validation/error notices) with a `.composer-footer` row
@@ -129,7 +145,8 @@ def ComposerBox(
     is unchanged. Optional props (both default off, defaults render exactly as before):
     `on_focus_change(bool)` reports the draft field gaining/losing focus;
     `fill_lines` fixes the field to that many visible lines (text scrolls
-    inside, the layout never grows). Only plain TextField props change, never
+    inside, the layout never grows); `working` is the agent's own status, so
+    the progress notice ends when the agent stops. Only plain TextField props change, never
     the widget structure or wrappers, so the field keeps its identity and its
     focus while the box moves between layouts."""
     tokens = palette(dark)
@@ -189,12 +206,11 @@ def ComposerBox(
         # not it has text, so the first keystroke (which clears the hint) does not
         # reflow the column.
         shown = hint if hint and can_send is False and error is None and review is None else ""
+        line = ft.Text(shown, size=FONT_SIZE["small"], max_lines=1)
+        if submission == SUBMISSION_PROGRESS and working:
+            line = working_shimmer(PROGRESS_HINT, tokens, size=FONT_SIZE["small"], max_lines=1)
         frame_controls.append(
-            ft.Container(
-                key=VALIDATION_KEY,
-                height=SPLIT_HINT_HEIGHT,
-                content=ft.Text(shown, size=FONT_SIZE["small"], max_lines=1),
-            )
+            ft.Container(key=VALIDATION_KEY, height=SPLIT_HINT_HEIGHT, content=line)
         )
     elif hint and can_send is False and error is None and review is None:
         frame_controls.append(ft.Text(hint, key=VALIDATION_KEY, size=FONT_SIZE["small"]))
@@ -217,12 +233,11 @@ def ComposerBox(
         frame_controls.append(ft.Text(UNKNOWN_NOTICE, key=NOTICE_KEY, size=FONT_SIZE["small"]))
     if submission == SUBMISSION_BLOCKED_INSERTED:
         frame_controls.append(ft.Text(BLOCKED_NOTICE, key=NOTICE_KEY, size=FONT_SIZE["small"]))
-    if submission == SUBMISSION_PROGRESS:
+    if submission == SUBMISSION_PROGRESS and working and fill_lines is None:
         frame_controls.append(
-            ft.Text(
-                "Agent is working on your message.",
+            ft.Container(
                 key="composer-progress",
-                size=FONT_SIZE["small"],
+                content=working_shimmer(PROGRESS_HINT, tokens, size=FONT_SIZE["small"]),
             )
         )
     # Keep the send action alongside the draft as in the supplied composer,

@@ -188,12 +188,7 @@ def test_compact_select_survives_keyboard_resize_and_live_output_until_done(
             assert app.find("phone-select-field").value == text
             # Model a user placing/dragging the native caret before the keyboard closes.
             await app.set_props_and_fire("phone-select-field", {}, "focus")
-            await app.set_props_and_fire(
-                "phone-select-field",
-                {"selection": {"base_offset": 0, "extent_offset": 9}},
-                "selection_change",
-                {"selected_text": "synthetic", "selection": {"base_offset": 0, "extent_offset": 9}},
-            )
+            await app.set_props_and_fire("phone-select-area", {}, "change", "synthetic")
             bridge.set_size(390, 544)
             await app.settle()
             channel._deliver(protocol.encode_size_report(40, 12))

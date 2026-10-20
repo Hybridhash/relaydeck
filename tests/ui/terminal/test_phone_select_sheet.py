@@ -7,10 +7,8 @@ from typing import Any
 
 import flet as ft
 import pytest
-from flet.controls.core.text import TextSelectionChangeEvent
 
 from relaydeck.client.features.terminal import surfaces
-from relaydeck.client.features.terminal.selection_model import str_to_utf16_offset
 from tests.support.host_harness import run
 from tests.support.terminal.select_sheet import _sheet
 from tests.support.terminal.selection import _open_with_snapshot
@@ -39,13 +37,13 @@ def test_phone_sheet_real_select_snapshot_native_range_copy_wrap_and_done(
             frame = app.find("phone-select-stack")
             assert frame.fit == ft.StackFit.EXPAND and frame.expand
             field = app.find("phone-select-field")
-            assert field.value == TEXT and field.read_only and field.multiline
-            assert not field.fit_parent_size and field.enable_interactive_selection
+            # Plain text in a selection area, never an input: no hidden browser field for iOS.
+            assert isinstance(field, ft.Text) and field.value == TEXT and not field.selectable
+            assert isinstance(app.find("phone-select-area"), ft.SelectionArea)
             assert field.expand is None and field.max_lines is None
             assert app.find("phone-select-text-scroll").scroll == ft.ScrollMode.AUTO
-            assert field.text_style.font_family == "JetBrains Mono"
-            assert field.text_style.size == term.font_size
-            assert field.on_change is None and field.on_blur is None and field.on_focus is None
+            assert field.style.font_family == "JetBrains Mono"
+            assert field.style.size == term.font_size
             assert app.find("phone-select-copy-visible").disabled
             assert "viewport" in app.find("phone-select-copy-visible").tooltip.lower()
             assert "unavailable" in app.find("phone-select-visible-unavailable").value
@@ -63,28 +61,11 @@ def test_phone_sheet_real_select_snapshot_native_range_copy_wrap_and_done(
                 assert session.term_state.selection.open
             start = TEXT.index("😀")
             end = start + len("😀 <script>literal</script>")
-            await app.set_props_and_fire(
-                "phone-select-field",
-                {},
-                "selection_change",
-                {
-                    "selected_text": TEXT[start:end],
-                    "selection": {
-                        "base_offset": str_to_utf16_offset(TEXT, start),
-                        "extent_offset": str_to_utf16_offset(TEXT, end),
-                    },
-                },
-            )
+            await app.set_props_and_fire("phone-select-area", {}, "change", TEXT[start:end])
             await app.set_props_and_fire("phone-select-copy-selection", {}, "click")
             assert session._clipboard.writes[-1] == TEXT[start:end]
-            # Focus loss can report an invalid native selection; it must not
-            # erase the last valid range before the copy action is dispatched.
-            await app.set_props_and_fire(
-                "phone-select-field",
-                {},
-                "selection_change",
-                {"selection": {"base_offset": -1, "extent_offset": -1}, "selected_text": ""},
-            )
+            # A cleared selection must not erase the last valid range before the copy.
+            await app.set_props_and_fire("phone-select-area", {}, "change", "")
             await app.set_props_and_fire("phone-select-copy-selection", {}, "click")
             assert session._clipboard.writes[-1] == TEXT[start:end]
             field_id = field._i
@@ -122,9 +103,9 @@ def test_stale_phone_copy_and_selection_leave_replacement_unchanged(
             term = session.current_term
             await _open_with_snapshot(app, term, channel.sent, TEXT)
             old_copy = app.find("phone-select-copy-all")
-            old_field = app.find("phone-select-field")
+            old_area = app.find("phone-select-area")
             copy_handler = old_copy.on_click
-            selection_handler = old_field.on_selection_change
+            selection_handler = old_area.on_change
             if stale == "native-reset":
                 term.reset(reason="epoch_changed")
             elif stale == "writer":
@@ -141,14 +122,7 @@ def test_stale_phone_copy_and_selection_leave_replacement_unchanged(
             before = list(session._clipboard.writes)
             # Exercise queued callbacks even if Flet has already detached their controls.
             await copy_handler(ft.ControlEvent(control=old_copy, name="click", data=None))
-            await selection_handler(
-                TextSelectionChangeEvent(
-                    control=old_field,
-                    name="selection_change",
-                    selection=ft.TextSelection(base_offset=0, extent_offset=1),
-                    selected_text="l",
-                )
-            )
+            await selection_handler(ft.ControlEvent(control=old_area, name="change", data="l"))
             assert session._clipboard.writes == before
             assert session.term_state is state and session.controller.state is projected
         finally:

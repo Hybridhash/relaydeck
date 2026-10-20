@@ -25,6 +25,31 @@ from relaydeck.client.features.terminal.events import event_text
 from relaydeck.client.theme import BANNER_TONES, FONT_SIZE, MIN_TOUCH, palette
 from relaydeck.domain.models import AppState
 
+LOADING_BAR_HEIGHT = 4
+LOADING_BAR_DELAY_S = 0.3  # a load that finishes sooner never shows the bar
+
+
+def use_slow_flag(busy: bool) -> bool:
+    """True once `busy` has lasted LOADING_BAR_DELAY_S; false again as soon as it ends."""
+    slow, set_slow = ft.use_state(False)
+    timer: Any = ft.use_ref(None)
+
+    def arm() -> None:
+        if busy:
+            timer.current = asyncio.get_running_loop().call_later(
+                LOADING_BAR_DELAY_S, lambda: set_slow(True)
+            )
+        else:
+            set_slow(False)
+
+    def disarm() -> None:
+        if timer.current is not None:
+            timer.current.cancel()
+            timer.current = None
+
+    ft.use_effect(arm, dependencies=[busy], cleanup=disarm)
+    return slow and busy
+
 
 @ft.component
 def ConnectionBanner(model: BannerModel, on_action: Callable[[], Any]) -> Any:
@@ -208,6 +233,7 @@ def AgentsList(
     on_pin: Callable[[str], Any] | None = None,
 ) -> Any:
     flow = use_rename_flow(rows)
+    show_loading = use_slow_flag(busy)
     renamable = command_transport is not None and state is not None
     tokens = palette(dark)
     # Cards whose inputs did not change keep their control instances, so a render caused by one
@@ -249,7 +275,7 @@ def AgentsList(
             renamable,
             phone,
             dark,
-            space_label(row, state) if renamable else "",
+            space_label(row, state),
         )
         cached = cards.current.get(row.key)
         if cached is not None and cached[0] == signature:
@@ -273,6 +299,7 @@ def AgentsList(
                 on_name_double_tap=rename_of(row, title) if renamable and not phone else None,
                 on_long_press=card_menu_of(row) if renamable else None,
                 pinned=row.key in pins,
+                space=space_label(row, state),
             )
             # Set identity on this freshly built presentation control. The live
             # terminal owner below is untouched; row callbacks keep scoped IDs.
@@ -348,12 +375,29 @@ def AgentsList(
                 else []
             ),
             ft.Text(error, key="inventory-page-error", color=tokens["muted"], visible=bool(error)),
-            ft.ProgressBar(key="inventory-page-loading", visible=busy),
-            InventoryScroll(
-                items=tiles,
-                control_key="agents-tiles",
-                spacing=10 if dark else 4,
-                positions=scroll_positions,
+            # The bar overlays the list's top edge and takes no space, so cards never move; it
+            # appears only when a load is slow enough to notice.
+            ft.Stack(
+                key="agents-list-area",
+                expand=True,
+                controls=[
+                    InventoryScroll(
+                        items=tiles,
+                        control_key="agents-tiles",
+                        spacing=10 if dark else 4,
+                        positions=scroll_positions,
+                    ),
+                    ft.Container(
+                        top=0,
+                        left=0,
+                        right=0,
+                        content=ft.ProgressBar(
+                            key="inventory-page-loading",
+                            visible=show_loading,
+                            bar_height=LOADING_BAR_HEIGHT,
+                        ),
+                    ),
+                ],
             ),
             ft.Row(
                 wrap=True,

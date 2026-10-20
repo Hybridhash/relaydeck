@@ -21,6 +21,8 @@ KINDS = {"agent.prompt", "agent.rename", "agent.start", "shell.create", "tab.cre
 # tab.create remains readable in legacy storage; gateway submissions use shell.create.
 OUTCOMES = {"pending", "accepted", "dispatched", "unknown", "succeeded", "failed", "rejected"}
 FINAL = {"succeeded", "failed", "rejected"}
+IN_FLIGHT = {"pending", "accepted", "dispatched"}
+REVIEW_GRACE_MS = 15_000  # an ordinary send confirms well within this; only a stuck one is shown
 IDENTITIES = {"workspace_id", "tab_id", "pane_id", "agent_id"}
 _LOCKS: weakref.WeakKeyDictionary[CredentialStore, dict[str, asyncio.Lock]] = (
     weakref.WeakKeyDictionary()
@@ -223,6 +225,13 @@ class PendingCommands:
         return bool(
             row["kind"] in ("agent.prompt", "agent.rename") and row["outcome"] == "succeeded"
         )
+
+    @staticmethod
+    def needs_review(row: dict[str, Any], now_ms: int) -> bool:
+        """Anything kept for review, or an operation still in flight after the grace period."""
+        if row["outcome"] not in IN_FLIGHT:
+            return True
+        return now_ms - int(row.get("created_ms", 0)) >= REVIEW_GRACE_MS
 
     @staticmethod
     def unresolved(row: dict[str, Any]) -> bool:

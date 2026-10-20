@@ -65,6 +65,7 @@ preflight check, not an invented atomic conditional upstream RPC.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 from asyncio import sleep
 from collections.abc import Callable
@@ -73,7 +74,7 @@ from typing import Any, Protocol
 
 from relaydeck.connector.herdr import HerdrError, HerdrProtocolError
 from relaydeck.contracts.canonical import canonical_json
-from relaydeck.contracts.launch import agent_slug, display_name_clean
+from relaydeck.contracts.launch import display_name_clean
 from relaydeck.journal import CommandJournal, JournalConflict, digest_for
 
 DISPATCH_KIND = "command.dispatch"
@@ -299,24 +300,8 @@ class ConnectorDispatch:
             await self._journal.run(
                 self._journal.note_progress, command_id, {"tab_id": rename_tab}, now=self._now()
             )
-            slug = agent_slug(tab_label)
-            if slug:  # a label with no usable letters renames the tab only
-                self.herdr_calls += 1
-                try:
-                    await self._adapter.agent_rename(agent_id, slug)
-                except HerdrError as exc:
-                    if exc.code != "agent_name_taken" or isinstance(exc, HerdrProtocolError):
-                        raise
-                    # Another agent already owns the slug. The tab carries the label, so clear
-                    # this agent's name and let the display fall back to the tab label.
-                    await self._journal.run(
-                        self._journal.note_progress,
-                        command_id,
-                        {"tab_id": rename_tab, "agent_id": agent_id},
-                        now=self._now(),
-                    )
-                    self.herdr_calls += 1
-                    await self._adapter.agent_rename(agent_id, None)
+            if agent.get("name"):
+                await self._clear_agent_name(agent_id)
             return {"type": "ok"}
         created_workspace = ""
         new_workspace = target == {"workspace_mode": "new"}
@@ -409,6 +394,7 @@ class ConnectorDispatch:
             identity = ""
             if isinstance(agent, dict):
                 identity = str(agent.get("terminal_id") or agent.get("id") or "")
+            await self._clear_agent_name(identity or pane_id)
             return {
                 "type": "agent_started",
                 "tab_id": tab_id,
@@ -430,6 +416,12 @@ class ConnectorDispatch:
             self.herdr_calls += 1
             out = await self._adapter.tab_close(terminal_id)
         return {"type": str(out.get("type", "ok"))}
+
+    async def _clear_agent_name(self, target: str) -> None:
+        """Herdr shows a set agent name in place of the CLI kind, so RelayDeck names only tabs."""
+        self.herdr_calls += 1
+        with contextlib.suppress(HerdrError, OSError, TimeoutError):
+            await self._adapter.agent_rename(target, None)
 
     async def _start_when_prompt_ready(
         self, command_id: str, payload: dict[str, Any], pane_id: str, args: list[str] | None

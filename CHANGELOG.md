@@ -3,6 +3,24 @@
 User-visible changes by release. Versions follow the package version
 (`relaydeck --version`).
 
+## 0.2.3
+
+- **Phone agent screen**: the header title opens the space's agents, with a count of working
+  ones. A tools button opens every terminal key, the Compose / Direct input switch, paste, Select
+  text and attach, floating over the terminal so it never resizes. The text box is a fixed two
+  lines, and the typing row shows only in Direct input.
+- **Working indicator**: "Agent is working" shimmers in the theme colours on phone and web while
+  the agent works, and stops when it finishes.
+- **Paste**: the paste review floats over the terminal on every layout instead of shrinking it.
+- **Select text on the phone**: the highlight follows the handles exactly, and Copy selection copies
+  what is highlighted.
+- **Console**: the selected card stands out, spaces show as coloured chips, cards keep their order
+  and height when an agent's status changes or it is read, and the loading bar no longer moves the
+  list.
+- **Renaming**: renaming an agent no longer changes its Herdr agent name.
+- **Usage**: Refresh reads the tool again, rows stay visible while they reload, and an idle tool
+  keeps its weekly limit.
+
 ## 0.2.2
 
 - **Agent names**: an agent keeps its name after its process exits. Rename an agent from its

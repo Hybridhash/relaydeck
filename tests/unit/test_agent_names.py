@@ -57,12 +57,16 @@ def test_start_name_labels_tab_and_survives_replacement(tmp_path: Path, new: boo
             assert result["status"] == "succeeded"
             tab_id = result["result"]["tab_id"]
             assert source.state()["tabs"][tab_id]["label"] == "qa"
+            assert source.calls[-1] == (
+                "agent.rename",
+                {"target": result["result"]["agent_id"], "name": None},
+            )
             methods = [method for method, _ in source.calls]
             if new:
-                assert methods == ["workspace.create", "tab.rename", "agent.start"]
+                assert methods == ["workspace.create", "tab.rename", "agent.start", "agent.rename"]
                 assert source.calls[1][1] == {"tab_id": tab_id, "label": "qa"}
             else:
-                assert methods == ["tab.create", "agent.start"]
+                assert methods == ["tab.create", "agent.start", "agent.rename"]
                 assert source.calls[0][1] == {"workspace_id": "w1", "label": "qa"}
             snapshot = snapshot_from_wire(source.snapshot_document("home-mac"))
             state = reducers.apply_snapshot(AppState(), snapshot)
@@ -260,9 +264,9 @@ def test_rename_policy_rejects_other_shapes(
 @pytest.mark.parametrize("failure", [False, True])
 def test_rename_current_agent_chain_and_uncertain_redelivery(tmp_path: Path, failure: bool) -> None:
     class Source(FixtureAdapter):
-        async def agent_rename(self, target: str, name: str) -> dict[str, Any]:
-            result = await super().agent_rename(target, name)
-            if failure:
+        async def tab_rename(self, tab_id: str, label: str) -> dict[str, Any]:
+            result = await super().tab_rename(tab_id, label)
+            if failure and label == "release-review":
                 raise TimeoutError("response lost")
             return result
 
@@ -280,10 +284,9 @@ def test_rename_current_agent_chain_and_uncertain_redelivery(tmp_path: Path, fai
             )
             result = await dispatch.dispatch(message)
             assert result["status"] == ("unknown" if failure else "succeeded")
-            assert source.calls[-3:] == (
+            assert source.calls[-2:] == (
                 ("agent.list", {}),
                 ("tab.rename", {"tab_id": started["tab_id"], "label": "release-review"}),
-                ("agent.rename", {"target": started["agent_id"], "name": "release-review"}),
             )
             state = reducers.apply_snapshot(
                 AppState(), snapshot_from_wire(source.snapshot_document("home-mac"))
@@ -399,23 +402,18 @@ def _renamed(tmp_path: Path, name: str) -> tuple[Any, dict[str, str]]:
     return run(scenario())
 
 
-def test_free_display_name_sets_the_tab_label_and_a_slug_for_the_agent(tmp_path: Path) -> None:
-    source, started = _renamed(tmp_path, "  Docs Writer ")
-    assert source.calls[-2:] == (
-        ("tab.rename", {"tab_id": started["tab_id"], "label": "Docs Writer"}),
-        ("agent.rename", {"target": started["agent_id"], "name": "docs-writer"}),
-    )
+@pytest.mark.parametrize(
+    "name,label", [("  Docs Writer ", "Docs Writer"), ("8", "8"), ("🚀", "🚀"), ("42 !", "42 !")]
+)
+def test_rename_sets_only_the_tab_label(tmp_path: Path, name: str, label: str) -> None:
+    source, started = _renamed(tmp_path, name)
+    assert source.calls[-1] == ("tab.rename", {"tab_id": started["tab_id"], "label": label})
+    renames = [call for kind, call in source.calls if kind == "agent.rename"]
+    assert renames == [{"target": started["agent_id"], "name": None}]
     state = reducers.apply_snapshot(
         AppState(), snapshot_from_wire(source.snapshot_document("home-mac"))
     )
-    assert list(agent_names(state).values()) == ["Docs Writer"]
-
-
-@pytest.mark.parametrize("name", ["8", "🚀", "42 !"])
-def test_a_label_without_a_usable_slug_renames_the_tab_only(tmp_path: Path, name: str) -> None:
-    source, started = _renamed(tmp_path, name)
-    assert source.calls[-1] == ("tab.rename", {"tab_id": started["tab_id"], "label": name})
-    assert not any(kind == "agent.rename" for kind, _ in source.calls)
+    assert list(agent_names(state).values()) == [label]
 
 
 def test_the_fixture_enforces_the_upstream_agent_name_rule() -> None:
@@ -445,61 +443,58 @@ def test_display_prefers_the_tab_label_when_the_agent_name_is_its_slug() -> None
     assert other == "docs-writer"
 
 
-def test_a_slug_another_agent_holds_clears_this_agents_name_and_still_succeeds(
-    tmp_path: Path,
-) -> None:
+async def _legacy_named(source: FixtureAdapter) -> tuple[dict[str, Any], dict[str, Any]]:
+    created = await source.tab_create("w1", label="Old")
+    started = await source.agent_start("docs-writer", "agent-a", created["root_pane"]["pane_id"])
+    return created, started["agent"]
+
+
+def test_rename_clears_a_herdr_agent_name_set_by_an_older_release(tmp_path: Path) -> None:
     async def scenario() -> None:
         source = FixtureAdapter()
-        first = await source.tab_create("w1", label="Old")
-        await source.agent_start("docs-writer", "agent-a", first["root_pane"]["pane_id"])
-        second = await source.tab_create("w1", label="Other")
-        agent = (await source.agent_start("other", "agent-a", second["root_pane"]["pane_id"]))[
-            "agent"
-        ]
+        created, agent = await _legacy_named(source)
         journal = CommandJournal(tmp_path / "commands.db", clock=lambda: NOW)
         try:
             dispatch = ConnectorDispatch(journal, source, host_id="home-mac", clock=lambda: NOW)
             message = _dispatch_msg(
-                "rename-taken",
+                "rename-legacy",
                 "agent.rename",
                 {"agent_id": agent["terminal_id"]},
                 {"name": "Docs Writer"},
             )
             result = await dispatch.dispatch(message)
             assert result["status"] == "succeeded", result
-            assert source.calls[-3:] == (
-                ("tab.rename", {"tab_id": second["tab"]["tab_id"], "label": "Docs Writer"}),
-                ("agent.rename", {"target": agent["terminal_id"], "name": "docs-writer"}),
+            assert source.calls[-2:] == (
+                ("tab.rename", {"tab_id": created["tab"]["tab_id"], "label": "Docs Writer"}),
                 ("agent.rename", {"target": agent["terminal_id"], "name": None}),
             )
-            progress = journal.record("rename-taken")["progress"]
-            assert progress == {"tab_id": second["tab"]["tab_id"], "agent_id": agent["terminal_id"]}
             state = reducers.apply_snapshot(
                 AppState(), snapshot_from_wire(source.snapshot_document("home-mac"))
             )
-            assert sorted(agent_names(state).values()) == ["Docs Writer", "docs-writer"]
+            assert list(agent_names(state).values()) == ["Docs Writer"]
         finally:
             journal.close()
 
     run(scenario())
 
 
-def test_other_refusals_of_the_agent_step_still_fail_the_command(tmp_path: Path) -> None:
+def test_a_refused_name_clear_never_fails_start_or_rename(tmp_path: Path) -> None:
     class Source(FixtureAdapter):
         async def agent_rename(self, target: str, name: str | None) -> dict[str, Any]:
             raise HerdrError("invalid_agent_name", "refused")
 
     async def scenario() -> None:
         source = Source()
+        created, agent = await _legacy_named(source)
         journal = CommandJournal(tmp_path / "commands.db", clock=lambda: NOW)
         try:
             dispatch = ConnectorDispatch(journal, source, host_id="home-mac", clock=lambda: NOW)
-            started = (await dispatch.dispatch(_message()))["result"]
+            assert (await dispatch.dispatch(_message()))["status"] == "succeeded"
             message = _dispatch_msg(
-                "rename-refused", "agent.rename", {"agent_id": started["agent_id"]}, {"name": "Ok"}
+                "rename-refused", "agent.rename", {"agent_id": agent["terminal_id"]}, {"name": "Ok"}
             )
-            result = await dispatch.dispatch(message)
-            assert result["status"] == "failed" and result["error_code"] == "invalid_agent_name"
+            assert (await dispatch.dispatch(message))["status"] == "succeeded"
+            assert source.state()["tabs"][created["tab"]["tab_id"]]["label"] == "Ok"
         finally:
             journal.close()
 

@@ -15,6 +15,7 @@ from dataclasses import replace
 import flet as ft
 
 from relaydeck.client.components import CompactRail, HostContextHeader
+from relaydeck.client.components.design_system import tokens as T
 from relaydeck.client.features.a11y.focus import (
     FOCUS_ORDER,
     check_focus_order,
@@ -141,7 +142,7 @@ def test_shell_lists_are_bounded_and_active_row_marked() -> None:
         assert tiles.scroll == ft.ScrollMode.AUTO
         assert tiles.expand is True
         active = app.find(f"agent-{scope_key('home-mac', 'term-1')}")
-        assert active.content.shadow is not None
+        assert active.content.bgcolor == T.CARD_SELECTED and active.content.border.left.width == 6
         assert active.tooltip == "Tool-a agent, Working, web"
         # Real card content and scoped callbacks survive presentation changes.
         assert {"web", "WORKING"} <= {

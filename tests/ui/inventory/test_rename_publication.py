@@ -66,6 +66,7 @@ def test_rename_publishes_fresh_names_and_updates_two_subscribed_roots(tmp_path:
         tab = await adapter.tab_create("w1", label="8")
         tab_id = tab["tab"]["tab_id"]
         started = await adapter.agent_start("8", "tool-a", tab["root_pane"]["pane_id"])
+        await adapter.agent_rename(tab["root_pane"]["pane_id"], None)
         terminal_id = started["agent"]["terminal_id"]
         key = scope_key("home-mac", terminal_id)
         source = Source(cast(HerdrAdapter, adapter))
@@ -162,7 +163,7 @@ def test_rename_publishes_fresh_names_and_updates_two_subscribed_roots(tmp_path:
             assert adapter.snapshot_reads == 2
             snapshot = backend.snapshot("home-mac")
             assert snapshot["tabs"][0]["label"] == "new-name"
-            assert snapshot["agents"][0]["name"] == "new-name"
+            assert not snapshot["agents"][0]["name"]
             assert sum(json.loads(text)["kind"] == "snapshot" for text in tunnel.sent) == 1
             await link._push_live(tunnel, outputs=False)
             await asyncio.wait_for(changed.wait(), 1)

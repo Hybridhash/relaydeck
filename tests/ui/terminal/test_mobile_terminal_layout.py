@@ -26,6 +26,7 @@ from relaydeck.domain import reducers
 from relaydeck.domain.models import ConnectionState
 from relaydeck.gateway import terminal_wire
 from tests.support.host_harness import render_component, run
+from tests.support.terminal.direct_typing import open_compose, open_direct_input
 from tests.support.terminal.sessions import _agent_session, _session
 from tests.support.ui.phone_terminal import _ancestry, _shape
 from tests.support.ui.retained_root import _active, _render
@@ -90,11 +91,11 @@ def test_mobile_states_retain_root_engine_draft_and_width_specific_chrome(
                 with pytest.raises(KeyError):
                     app.find("terminal-toolbar")
                 assert app.find("agent-tab-row").height == 40
-                assert app.find("agent-tab-row").visible is True
-                assert app.find("composer-box").visible is False
-                assert app.find("composer-draft").can_request_focus is False
-                assert app.find("composer-draft").disabled is True
-                assert app.find("mobile-keybar").visible is True
+                assert app.find("agent-tab-row").visible is False  # shown in Direct input only
+                # In control, the idle text box shows and the keys live in the tools popover.
+                assert app.find("composer-box").visible is True
+                assert app.find("composer-draft").can_request_focus is True
+                assert app.find("mobile-keybar").visible is False
                 assert app.find("terminal-key-row").wrap == (width >= 600)
                 assert app.find("mobile-keybar").height == (80 if width >= 600 else 40)
                 assert _missing(app, "agent-keyboard-keys") and _missing(app, "agent-keys-scroll")
@@ -106,12 +107,9 @@ def test_mobile_states_retain_root_engine_draft_and_width_specific_chrome(
                         assert button.content.content.size == (
                             16 if isinstance(button.content.content, ft.Icon) else 13
                         )
-                assert (
-                    app.find("agent-tabs").controls[0].key == "terminal-agent-tab-home-mac:term-1"
-                )
-                assert all("other-mac" not in tab.key for tab in app.find("agent-tabs").controls)
+                assert app.find("agent-switcher-open")  # switching lives in the header title
                 # B: production resize carrier updates the RouteBridge, not a fake typed event.
-                await app.set_props_and_fire("agent-workflow-toggle", {}, "click")
+                await open_direct_input(app)
                 assert session.view().workflow == WORKFLOW_AGENT_DIRECT
                 app.page.on_resize = lambda e: bridge.set_size(app.page.width, app.page.height)
                 app.session.apply_patch(app.page._i, {"width": width, "height": height - 300})
@@ -130,19 +128,19 @@ def test_mobile_states_retain_root_engine_draft_and_width_specific_chrome(
                 await app.settle()
                 assert app.find("agent-tab-row").visible is True
                 # C: explicit compose; suffix send is inside the growable field.
-                await app.set_props_and_fire("agent-compose-toggle", {}, "click")
+                await open_compose(app)
                 assert session.view().workflow == WORKFLOW_AGENT_COMPOSER
                 field = app.find("composer-draft")
-                assert field.value == draft and field.max_lines == 4 and field.min_lines == 1
+                assert field.value == draft and field.max_lines == 2 and field.min_lines == 2
                 assert field.size_constraints.min_height == 36 and field.text_size == 15
                 assert field.suffix_icon.key == "composer-send" and field.suffix_icon.height == 28
                 assert field.on_submit is None
                 assert app.find("mobile-keybar").visible is False
                 assert _missing(app, "agent-keys-scroll")
-                assert app.find("agent-tab-row").visible
+                assert not app.find("agent-tab-row").visible  # Direct input only
                 assert app.find("agent-workflow-toggle").key == "agent-workflow-toggle"
                 assert _shape(_ancestry(app, term)) == ancestry
-                await app.set_props_and_fire("agent-workflow-toggle", {}, "click")
+                await open_direct_input(app)
                 assert session.store.draft == draft
                 assert app.find("mobile-keybar").visible is True
                 assert _shape(_ancestry(app, term)) == ancestry
@@ -531,6 +529,14 @@ def test_shell_width_states_preserve_channel_without_composer(width: int) -> Non
     run(scenario())
 
 
+async def _switch_to(app: Any, key: str) -> None:
+    """Header title, then the agent's row in the switcher list."""
+    await app.set_props_and_fire("agent-switcher-open", {}, "click")
+    row = _active(app, f"agent-switcher-row-{key}")
+    await app.session.dispatch_event(row._i, "click", "")
+    await app.settle()
+
+
 def test_agent_tab_clicks_keep_retained_draft_and_never_take_over_another_agent() -> None:
     async def scenario() -> None:
         app, _controller, sessions, pool, _now = await _render(
@@ -543,19 +549,12 @@ def test_agent_tab_clicks_keep_retained_draft_and_never_take_over_another_agent(
             first.on_draft_change("tab draft")
             await app.settle()
             before = len(sessions.ops.attaches)
-            # Direct typing uses the tabs' slot; Compose exposes the real
-            # tab row without taking ownership or discarding the draft.
-            await app.set_props_and_fire("agent-compose-toggle", {}, "click")
-            tab = _active(app, "terminal-agent-tab-home-mac:term-2")
-            await app.session.dispatch_event(tab._i, "click", "")
-            await app.settle()
+            # Switch through the header list, without taking ownership or discarding the draft.
+            await _switch_to(app, "home-mac:term-2")
             assert pool.foreground.session is not first
             assert first.current_term is term and first.store.draft == "tab draft"
             assert len(sessions.ops.attaches) == before
-            await app.set_props_and_fire("agent-compose-toggle", {}, "click")
-            tab = _active(app, "terminal-agent-tab-home-mac:term-1")
-            await app.session.dispatch_event(tab._i, "click", "")
-            await app.settle()
+            await _switch_to(app, "home-mac:term-1")
             assert pool.foreground.session is first and first.current_term is term
             assert first.store.draft == "tab draft" and len(sessions.ops.attaches) == before
         finally:

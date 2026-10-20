@@ -426,13 +426,15 @@ def ScrollButtons(
     on_keyboard: Callable[[], Any] | None = None,
     keyboard_shown: bool = False,
     jump_only: bool = False,
+    on_tools: Callable[[], Any] | None = None,
+    tools_open: bool = False,
 ) -> Any:
     """A narrow, always-mounted Stack sibling; no wrapper around the engine.
 
     `jump_only` keeps just "Jump to latest" (mouse clients scroll with the wheel).
 
     `on_keyboard` adds the keyboard toggle below the scroll buttons
-    (touch devices in control only); it is the only way the soft keyboard opens."""
+    (touch devices in control only). `on_tools` adds the phone's tools button instead."""
     current = ft.use_ref((binding, visible))
     current.current = (binding, visible)
     holding: Any = ft.use_ref(None)
@@ -534,7 +536,7 @@ def ScrollButtons(
     # Flet Containers hit-test their whole rectangle and cover the native keyboard button.
     return ft.Column(
         key="terminal-scroll-overlay",
-        visible=visible,
+        visible=visible and not tools_open,
         right=8,
         top=0,
         bottom=0,
@@ -580,6 +582,31 @@ def ScrollButtons(
                             )
                         ]
                         if on_keyboard is not None
+                        else []
+                    ),
+                    *(
+                        [
+                            ft.Semantics(
+                                label="Keys and actions",
+                                button=True,
+                                expanded=tools_open,
+                                content=ft.IconButton(
+                                    key="terminal-tools-button",
+                                    icon=ft.Icons.KEYBOARD_COMMAND_KEY,
+                                    icon_size=18,
+                                    width=32,
+                                    height=32,
+                                    padding=0,
+                                    style=ft.ButtonStyle(
+                                        bgcolor=console_tokens.PRIMARY_FILL,
+                                        color=console_tokens.ON_PRIMARY,
+                                        shape=ft.CircleBorder(),
+                                    ),
+                                    on_click=click(on_tools),
+                                ),
+                            )
+                        ]
+                        if on_tools is not None
                         else []
                     ),
                 ],

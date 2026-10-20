@@ -330,6 +330,11 @@ def _live_pane(workspace: str, kind: str, cwd: str) -> dict[str, Any]:
     return {"agent": kind, "workspace_id": workspace, "cwd": cwd, "agent_status": "idle"}
 
 
+@pytest.fixture(autouse=True)
+def _no_typing_pause(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(tui_usage_pane, "_TYPED_SETTLE_S", 0.0)
+
+
 # -- provider happy paths --------------------------------------------------------
 
 
@@ -652,6 +657,52 @@ def test_foreground_takeover_mid_run_sends_no_quit_text(tmp_path: Path) -> None:
     assert all(payload != "/quit" for _, _, payload in fake.sent)
 
 
+def test_a_panel_printed_before_the_tool_loaded_is_run_again(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class Loading(FakeHerdr):
+        runs = 0
+
+        def _send_keys(self, pane_id: str, keys: list[str]) -> bytes:
+            pane = self.panes[pane_id]
+            if pane["typed"] == "/usage" and self.runs == 0:
+                self.runs += 1
+                pane["typed"] = ""
+                pane["screen"] = ["SESSION ONLY", self.prompt]  # no marker yet
+                return b""
+            return super()._send_keys(pane_id, keys)
+
+    monkeypatch.setattr(tui_usage_pane, "_ENTER_WAIT_MS", 1)
+    fake = Loading()
+    fake.inventory = [_live_pane("w9", KIND, str(tmp_path))]
+    result = TuiUsagePaneProvider().fetch(_ctx(tmp_path, fake))
+    assert result.error is None and result.snapshots[0].windows
+    assert [payload for _, kind, payload in fake.sent if kind == "text"].count("/usage") == 2
+
+
+def test_a_tool_that_ignores_quit_keeps_the_complete_reading(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class Stubborn(FakeHerdr):
+        def _send_keys(self, pane_id: str, keys: list[str]) -> bytes:
+            if self.panes[pane_id]["typed"] == "/quit":
+                self.panes[pane_id]["typed"] = ""
+                return b""
+            return super()._send_keys(pane_id, keys)
+
+    monkeypatch.setattr(tui_usage_pane.time, "sleep", lambda _s: None)
+    monkeypatch.setattr(tui_usage_pane, "_ENTER_WAIT_MS", 1)
+    monkeypatch.setattr(tui_usage_pane, "_QUIT_S", 0.01)
+    fake = Stubborn()
+    fake.inventory = [_live_pane("w9", KIND, str(tmp_path))]
+    ctx = _ctx(tmp_path, fake)
+    result = TuiUsagePaneProvider().fetch(ctx)
+    assert result.error is None
+    (snapshot,) = result.snapshots
+    assert snapshot.windows
+    assert fake.tabs == {}  # closing the tab ends the tool
+
+
 def test_parse_miss_quits_cleanly_and_reports_parse(tmp_path: Path) -> None:
     fake = FakeHerdr(usage=("ALLOWANCE", "nothing shaped like numbers here"))
     fake.inventory = [_live_pane("w9", KIND, str(tmp_path))]
@@ -744,6 +795,36 @@ def test_a_transient_failure_keeps_the_last_good_pane_reading(tmp_path: Path) ->
         day = _utc_day(NOW)
         (snapshot,) = store.query(UsageQuery("h1", day, day), NOW).limits
         assert snapshot.error is None and snapshot.windows[0].used_amount == 3.0
+    finally:
+        store.close()
+
+
+def test_an_idle_reading_keeps_the_other_windows_last_reading(tmp_path: Path) -> None:
+    store = SqliteUsageStore(tmp_path / "usage.db", "UTC")
+    try:
+        full = LimitSnapshot(
+            KIND,
+            "plan",
+            NOW,
+            (LimitWindow("current", 40.0, 300), LimitWindow("weekly", 30.0, 10080)),
+            LimitStatus.FRESH,
+            FORMAT_ID,
+            "acct",
+            None,
+            "P",
+        )
+        store.apply_limits(KIND, PROVIDER_KEY, (full,), NOW)
+        idle = replace(
+            full, observed_ms=NOW + 60_000, windows=(LimitWindow("current", 0.0, 300, idle=True),)
+        )
+        store.apply_limits(KIND, PROVIDER_KEY, (idle,), NOW + 60_000)
+        day = _utc_day(NOW)
+        (snapshot,) = store.query(UsageQuery("h1", day, day), NOW + 60_000).limits
+        shown = {
+            window.window_key: (window.used_percent, window.status) for window in snapshot.windows
+        }
+        assert shown == {"current": (0.0, "fresh"), "weekly": (30.0, "stale")}
+        assert snapshot.status == "fresh"  # the stale carry-over never makes the reading stale
     finally:
         store.close()
 

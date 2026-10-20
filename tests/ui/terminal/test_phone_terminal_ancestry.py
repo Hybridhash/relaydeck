@@ -77,7 +77,7 @@ def test_phone_focus_mode_and_keyboard_keep_confirmed_native_channel_and_output(
             assert app.find("terminal-flex-host").expand is True
             assert app.find("agent-input-dock").expand is None
             await app.set_props_and_fire("agent-compose-toggle", {}, "click")
-            assert app.find("composer-draft").max_lines == 4
+            assert app.find("composer-draft").max_lines == 2
             assert app.find("composer-draft").multiline is True
             assert app.find("composer-draft").on_submit is None
             assert app.find("terminal-key-row").scroll is ft.ScrollMode.HIDDEN

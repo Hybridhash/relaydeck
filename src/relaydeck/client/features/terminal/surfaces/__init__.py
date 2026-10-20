@@ -1,13 +1,15 @@
 """Agent detail presentation and session-bound mounts.
 
 `agent_screen` owns layout state and `agent_hooks` its hooks; the builders
-`agent_dock`, `agent_header`, `agent_panels`, `agent_tab_row`, `input_area`,
+`agent_dock`, `agent_header`, `agent_panels`, `input_area`,
 `phone_dock`, `select_stack` and `terminal_host` receive props and callbacks.
 Keeping builders as plain functions preserves terminal ancestry between layouts.
 `mount` binds callbacks to a live session and writer token; `actions` holds the
 selection, keyboard and mobile key callbacks; `common` the shared keys.
 `direct_typing`, `phone_composer` and `sessions` keep editor and input lifetimes
-independent of presentation. Public exports are centralized here."""
+independent of presentation. `agent_switcher` holds the phone header's agent switcher,
+`tools_popover` the phone keys and actions, and `screen_overlays` places either one.
+Public exports are centralized here."""
 
 from __future__ import annotations
 

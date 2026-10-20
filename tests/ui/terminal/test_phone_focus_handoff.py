@@ -13,6 +13,7 @@ from relaydeck_terminal import protocol
 from relaydeck.client.features.inventory.routing import RouteBridge
 from relaydeck.client.features.terminal.surfaces import direct_typing
 from tests.support.host_harness import run
+from tests.support.terminal.direct_typing import open_compose, open_direct_input
 from tests.support.ui.phone_terminal import _ancestry, _shape
 from tests.support.ui.retained_root import _active, _render
 
@@ -28,7 +29,7 @@ def test_compose_focus_is_released_and_hidden_field_cannot_request_focus(exit_mo
             await app.set_props_and_fire("agent-takeover-confirm", {}, "click")
             session = pool.foreground.session
             session.on_draft_change("kept multiline\nphone draft")
-            await app.set_props_and_fire("agent-compose-toggle", {}, "click")
+            await open_compose(app)
             field = _active(app, "composer-draft")
             assert field.can_request_focus and not field.disabled and not field.autofocus
             term, writer, binding = (
@@ -39,9 +40,10 @@ def test_compose_focus_is_released_and_hidden_field_cannot_request_focus(exit_mo
             ancestry = _shape(_ancestry(app, term))
             await app.set_props_and_fire("composer-draft", {}, "focus")
             start = len(app.conn.sent)
-            await app.set_props_and_fire(
-                "agent-workflow-toggle" if exit_mode == "direct" else "terminal-back", {}, "click"
-            )
+            if exit_mode == "direct":
+                await open_direct_input(app)
+            else:
+                await app.set_props_and_fire("terminal-back", {}, "click")
             hidden = app.find("composer-draft")
             assert hidden._i == field._i
             # can_request_focus is a real Flet property; disabled additionally
@@ -79,7 +81,7 @@ def test_compose_focus_is_released_and_hidden_field_cannot_request_focus(exit_mo
                 await app.set_props_and_fire("agent-takeover", {}, "click")
                 await app.set_props_and_fire("agent-takeover-confirm", {}, "click")
             else:
-                await app.set_props_and_fire("agent-compose-toggle", {}, "click")
+                await open_compose(app)
             restored = _active(app, "composer-draft")
             assert restored._i == field._i and restored.can_request_focus and not restored.disabled
             assert restored.value == "kept multiline\nphone draft"
@@ -167,7 +169,7 @@ def test_touch_phone_direct_dock_has_reserved_space_below_terminal() -> None:
         try:
             await app.set_props_and_fire("agent-home-mac:term-1", {}, "click")
             await app.set_props_and_fire("agent-takeover-confirm", {}, "click")
-            await app.set_props_and_fire("agent-workflow-toggle", {}, "click")
+            await open_direct_input(app)
             spacer = app.find("agent-input-spacer")
             dock = app.find("agent-input-dock")
             assert spacer.height is not None and spacer.height > 0
@@ -206,7 +208,7 @@ def test_direct_field_is_outside_clear_retained_viewport_across_native_input_and
             channel._deliver(protocol.encode_input(b"draft only", protocol.ORIGIN_TEXT))
             await app.settle()
             now[0] += 1.0
-            await app.set_props_and_fire("agent-workflow-toggle", {}, "click")
+            await open_direct_input(app)
             _assert_unobstructed_viewport(app, term)
             assert [c.key for c in app.find("terminal-viewport-stack").controls] == [
                 "terminal-engine-slot",
@@ -244,16 +246,16 @@ def test_direct_field_is_outside_clear_retained_viewport_across_native_input_and
             # explicit takeover, preserving the native tree and field instance.
             await app.set_props_and_fire("agent-takeover", {}, "click")
             await app.set_props_and_fire("agent-takeover-confirm", {}, "click")
-            # The keyboard button, not a tap, opens phone Direct input.
+            # The tools popover's Direct mode, not a tap, opens phone Direct input.
             now[0] += 1.0
-            await app.set_props_and_fire("terminal-keyboard-button", {}, "click")
+            await open_direct_input(app)
             assert _active(app, "agent-workflow-direct-typing")._i == field._i
-            await app.set_props_and_fire("agent-compose-toggle", {}, "click")
+            await open_compose(app)
             await app.settle()
             await asyncio.sleep(0.06)
             await app.settle()
             now[0] += 1.0
-            await app.set_props_and_fire("agent-workflow-toggle", {}, "click")
+            await open_direct_input(app)
             assert _active(app, "agent-workflow-direct-typing")._i == field._i
             assert session.current_term is term and _shape(_ancestry(app, term)) == ancestry
         finally:

@@ -56,6 +56,18 @@ async def _resize_viewport(app: Any, bridge: RouteBridge, width: int, height: in
     await app.settle(rounds=2)
 
 
+async def _choose_mode(app: Any, layout: Layout, mode: str) -> None:
+    """Phone tier: tools button, then the mode segment. Wider tiers keep their toggles."""
+    if layout.width < 600:
+        await app.session.dispatch_event(_active(app, "terminal-tools-button")._i, "click", "")
+        await app.settle(rounds=1)
+        await app.session.dispatch_event(_active(app, f"tools-mode-{mode}")._i, "click", "")
+    else:
+        toggle = "agent-compose-toggle" if mode == "compose" else "agent-workflow-toggle"
+        await app.session.dispatch_event(_active(app, toggle)._i, "click", "")
+    await app.settle(rounds=1)
+
+
 async def _keyboard_layout(app: Any, layout: Layout, workflow: str) -> None:
     if layout.keyboard_height is None:
         return
@@ -63,8 +75,7 @@ async def _keyboard_layout(app: Any, layout: Layout, workflow: str) -> None:
         try:
             _active(app, "composer-draft")
         except KeyError:
-            await app.session.dispatch_event(_active(app, "agent-compose-toggle")._i, "click", "")
-            await app.settle(rounds=1)
+            await _choose_mode(app, layout, "compose")
         field = _active(app, "composer-draft")
         assert field.can_request_focus and not field.disabled
         await app.session.dispatch_event(field._i, "focus", "")
@@ -73,8 +84,7 @@ async def _keyboard_layout(app: Any, layout: Layout, workflow: str) -> None:
         try:
             _active(app, "agent-workflow-direct-typing")
         except KeyError:
-            await app.session.dispatch_event(_active(app, "agent-workflow-toggle")._i, "click", "")
-            await app.settle(rounds=1)
+            await _choose_mode(app, layout, "direct")
         assert _active(app, "agent-workflow-direct-typing").can_request_focus
         assert _active(app, "agent-workflow-toggle").selected
     if layout.name == "ipad-typing-split":
