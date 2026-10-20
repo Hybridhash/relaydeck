@@ -65,15 +65,18 @@ def _batches_close_only_at_quiet_or_cap(
     reads: list[tuple[float, int]], flushed: list[float], sizes: list[int]
 ) -> None:
     """A repaint ships as one batch unless its pieces fell silent for the quiet gap or kept
-    arriving past the cap. Reads are stamped before they wake the forwarder and flushes after
-    its timer, so both margins are strictly on the product's side; the slack covers the loop's
-    timer resolution only. The scheduler's pace never decides a batch boundary."""
+    arriving past the cap. Reads are stamped before they wake the forwarder and batches at its
+    close decision; a piece read after that decision joins the batch late and is not part of
+    the gap. The slack covers the loop's timer resolution only."""
     ends = list(itertools.accumulate(size for _, size in reads))
     end = 0
     for flush, size in zip(flushed[:-1], sizes[:-1], strict=True):
         start, end = end, end + size
-        window = [at for (at, _), total in zip(reads, ends, strict=True) if start < total <= end]
-        assert window, (reads, sizes)
+        pieces = [at for (at, _), total in zip(reads, ends, strict=True) if start < total <= end]
+        assert pieces, (reads, sizes)
+        window = [at for at in pieces if at <= flush]
+        if not window:
+            continue
         quiet = flush - window[-1]
         held = flush - window[0]
         assert quiet >= OUTPUT_COALESCE_S - 0.001 or held >= OUTPUT_COALESCE_MAX_S - 0.001, (
@@ -120,6 +123,7 @@ def test_real_pty_repaint_forwarded_without_idle_staircase(
         frames: list[bytes] = []
         timings: list[float] = []
         flushed: list[float] = []
+        decided: list[float] = []
         reads: list[tuple[float, int]] = []
         done = asyncio.Event()
         start = time.monotonic()
@@ -141,8 +145,8 @@ def test_real_pty_repaint_forwarded_without_idle_staircase(
                 if doc["kind"] == "terminal.output":
                     assert (doc["terminal_id"], doc["epoch"]) == ("t1", "e1")
                     frames.append(base64.b64decode(doc["data_b64"]))
-                    flushed.append(time.monotonic())
-                    timings.append((flushed[-1] - start) * 1000)
+                    flushed.append(decided[-1])
+                    timings.append((time.monotonic() - start) * 1000)
                     if sum(map(len, frames)) >= len(repaint):
                         done.set()
                         stop.set()
@@ -159,6 +163,13 @@ def test_real_pty_repaint_forwarded_without_idle_staircase(
             source,
         )
         link._last_epochs = {"t1": "e1"}
+        push_updates = link._push_terminal_updates
+
+        async def push_decided(port: Any) -> None:
+            decided.append(time.monotonic())
+            await push_updates(port)
+
+        link._push_terminal_updates = push_decided
         metadata_started = asyncio.Event()
         metadata_release = asyncio.Event()
         if slow_metadata:
