@@ -6,6 +6,7 @@ renderer, renewal, key, paste and selection collaborators without lifecycle logi
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
+from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
 from relaydeck.client import open_timing
@@ -124,6 +125,13 @@ class SessionFacade:
         if self._bracketed != enabled:
             self._bracketed = enabled
             self._notify()
+
+    def dismiss_notice(self, notice: Any) -> None:
+        """Clear a dismissed notice; never touches input, focus or the draft."""
+        if self._controller is not None:
+            self._controller.dismiss_notice(notice)
+        elif self._term_state.notice is notice:
+            self.update_term_state(replace(self._term_state, notice=None))
 
     def update_term_state(self, state: TerminalViewState) -> None:
         previous = self._term_state.status

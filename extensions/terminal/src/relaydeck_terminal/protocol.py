@@ -52,6 +52,9 @@ Dart -> Python:
        the capability advertisement and releases nothing.)
   0x89 KEYBOARD_TRACE event u8 + flags u8 + visual viewport height u16be
        (touch only; fixed keyboard metadata, 0xFFFF = unavailable)
+  0x8B PAGE_METRICS reset u8 + page scroll i16be + visual viewport offset
+       i16be + visual viewport height u16be + window height u16be (touch web
+       only; reset 1 = the page had scrolled and was pinned back to the top)
   0xFF ACK u64be cumulative applied output bytes (backpressure)
 
 Snapshot trust boundary: the declared total/offset arrive from the
@@ -100,6 +103,8 @@ VIEW_REPORT = 0x86
 KEYBOARD_STATE = 0x88
 KEYBOARD_TRACE = 0x89
 SCROLL_CANCELLED = 0x8A
+PAGE_METRICS = 0x8B
+PAGE_METRICS_LEN = 9
 RESUME_REPORT = 0x87
 ACK = 0xFF
 
@@ -171,6 +176,16 @@ def decode_keyboard_trace(payload: bytes) -> tuple[int, int, int]:
     if event not in range(1, 10) or flags & ~0x1F:
         raise ValueError("bad keyboard trace flags or event")
     return event, flags, viewport
+
+
+def decode_page_metrics(payload: bytes) -> tuple[int, int, int, int, int]:
+    """Decode page geometry only: scroll and viewport sizes, never content."""
+    if len(payload) != PAGE_METRICS_LEN:
+        raise ValueError("bad page metrics length")
+    reset, scroll, offset, height, window = struct.unpack(">BhhHH", payload)
+    if reset not in (0, 1):
+        raise ValueError("bad page metrics reset flag")
+    return reset, scroll, offset, height, window
 
 
 def encode_reset() -> bytes:
@@ -434,6 +449,12 @@ def decode_packets(buffer: bytearray) -> list[DecodedPacket]:
                 break
             out.append(DecodedPacket(kind, bytes(view[offset + 1 : offset + 5])))
             offset += 5
+        elif kind == PAGE_METRICS:
+            if len(view) - offset < 1 + PAGE_METRICS_LEN:
+                break
+            end = offset + 1 + PAGE_METRICS_LEN
+            out.append(DecodedPacket(kind, bytes(view[offset + 1 : end])))
+            offset = end
         elif kind == RESUME_REPORT:
             if len(view) - offset < 1 + RESUME_REPORT_LEN:
                 break

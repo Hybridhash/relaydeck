@@ -262,11 +262,8 @@ def test_dart_denies_untrusted_output_powers() -> None:
     assert re.search(r"onClipboardStore\s*[:=,)]", src) is None
     assert re.search(r"onOpenUrl\s*[:=,)]", src) is None
     assert re.search(r"onHyperlinkTap\s*:", src) is None
-    # The only local paste is the browser paste-event handoff, which replaces xterm's own
-    # shortcut with the same call; its output still crosses Python policy as INPUT.
-    pastes = list(re.finditer(r"\.paste\s*\(", src))
-    assert len(pastes) == 1
-    handler = src.index("bool _pasteFromBrowser(")
-    assert handler < pastes[0].start() < src.index("}", handler)
+    # No local paste at all: browser paste text goes to Python's reviewed paste.
+    for forbidden in (r"\.paste\s*\(", r"Clipboard\.getData", r"\bpasteText\b"):
+        assert re.search(forbidden, src) is None, forbidden
     assert "readOnly: !_inputEnabled" in src
     assert "onKeyEvent: _onKeyEvent" in src

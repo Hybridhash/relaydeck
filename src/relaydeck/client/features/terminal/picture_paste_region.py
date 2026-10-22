@@ -1,11 +1,14 @@
-"""Browser picture paste: the upload source backed by the paste region, and the region itself.
+"""Browser paste: the upload source backed by the paste region, and the region itself.
 
 The browser keeps the clipboard Blob; this module only turns an offer (request id and metadata)
 into an `UploadSource` for the shared operation and asks the region to upload to the grant URL.
+Text pasted while the terminal has focus arrives as a `text` event and goes through the session's
+reviewed paste; the text is never logged.
 """
 
 from __future__ import annotations
 
+import inspect
 import time
 from collections.abc import Callable
 from typing import Any
@@ -73,6 +76,7 @@ _SOURCE_KEYS = (
     "picture_paste_available",
     "picture_paste_binding",
     "picture_paste_binding_now",
+    "browser_paste_text",
 )
 
 
@@ -82,9 +86,7 @@ def take_paste_props(picture_props: dict[str, Any]) -> dict[str, Any]:
 
 
 def wrap_with_paste_region(screen: Any, paste: dict[str, Any], *, key: str) -> Any:
-    """The screen inside a paste region, or the screen itself when pictures are unavailable."""
-    if not paste.get("picture_paste_available"):
-        return screen
+    """The screen inside a paste region; pictures are offered only while they are available."""
     return picture_paste_region(
         screen,
         capture=paste["capture_picture_activation"],
@@ -93,6 +95,8 @@ def wrap_with_paste_region(screen: Any, paste: dict[str, Any], *, key: str) -> A
         binding=paste["picture_paste_binding"],
         current_binding=paste["picture_paste_binding_now"],
         key=key,
+        pictures=bool(paste.get("picture_paste_available")),
+        on_text=paste["browser_paste_text"],
     )
 
 
@@ -105,8 +109,11 @@ def picture_paste_region(
     binding: str,
     current_binding: Callable[[], str],
     key: str,
+    pictures: bool = True,
+    on_text: Callable[[str], Any] | None = None,
 ) -> Any:
-    """Wrap `content` so a browser paste with a picture attaches through the shared operation."""
+    """Wrap `content` so a browser paste attaches its picture through the shared operation, or
+    hands its text to the focused terminal's reviewed paste."""
 
     async def on_offer(event: Any) -> None:
         if not valid_request_id(event.request_id):
@@ -124,11 +131,26 @@ def picture_paste_region(
     def on_reject(event: Any) -> None:
         reject(str(event.reason))
 
+    async def on_paste_text(event: Any) -> None:
+        text = getattr(event, "text", "")
+        if on_text is None or not isinstance(text, str) or not text:
+            return
+        # Same rule as picture offers: if the writer, workflow or session moved since the
+        # gesture, the text is refused, never re-targeted at the new facts.
+        if getattr(event, "binding", "") != current_binding():
+            reject("stale_text")
+            return
+        result = on_text(text)
+        if inspect.isawaitable(result):
+            await result
+
     return RelayDeckPicturePaste(
         key=key,
         expand=True,
         content=content,
         binding=binding,
+        pictures=pictures,
         on_offer=on_offer,
         on_reject=on_reject,
+        on_text=on_paste_text,
     )

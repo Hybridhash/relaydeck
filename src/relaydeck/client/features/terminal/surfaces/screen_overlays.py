@@ -1,4 +1,4 @@
-"""The phone agent screen's floating layer: a paste review, the agent list or the tools popover."""
+"""The agent screen's floating layers: the agent list, the tools popover and the paste panels."""
 
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ from relaydeck.client.features.terminal.paste_policy import PasteReview
 from relaydeck.client.features.terminal.paste_review import PasteReviewSheet
 from relaydeck.client.features.terminal.surfaces.agent_switcher import SwitcherList
 from relaydeck.client.features.terminal.surfaces.common import AGENT_PASTE_FRAME_KEY, _framed
+from relaydeck.client.features.terminal.surfaces.paste_entry import PasteEntry, PasteEntrySheet
 from relaydeck.client.features.terminal.surfaces.tools_popover import ToolAction, ToolsPopover
 from relaydeck.client.features.terminal.switcher import SwitcherRow
 
@@ -99,7 +100,10 @@ def build_screen_overlays(
     on_pick: Callable[[str], Any] | None,
     tools: dict[str, Any] | None,
     paste: Any = None,
+    paste_entry: PasteEntry | None = None,
+    tokens: dict[str, str] | None = None,
     wide: bool = False,
+    tools_top: float = OVERLAY_TOP,
 ) -> list[Any]:
     # The list and the popover stay mounted and only hide: a removed layer kept the
     # screen's callbacks, and with them its file pickers, alive after every opening.
@@ -121,7 +125,19 @@ def build_screen_overlays(
         )
     if tools is not None:
         layers.append(
-            ToolsPopover(top=OVERLAY_TOP, on_close=close, visible=opened == "tools", **tools)
+            ToolsPopover(top=tools_top, on_close=close, visible=opened == "tools", **tools)
+        )
+    if paste_entry is not None and tokens is not None:
+        layers.append(
+            PasteEntrySheet(
+                visible=paste_entry.visible,
+                on_submit=paste_entry.on_submit,
+                on_close=paste_entry.on_close,
+                tokens=tokens,
+                top=WIDE_PASTE_TOP if wide else OVERLAY_TOP,
+                wide=wide,
+                width=WIDE_PASTE_WIDTH,
+            )
         )
     if paste is not None:
         layers.append(paste_layer(paste, wide=wide))

@@ -176,6 +176,8 @@ def _run_link(args: Any) -> int:
     import os
     import signal
 
+    from relaydeck.logging_setup import logging_config
+
     if bool(args.fixture) == bool(args.live_herdr):
         print("refusing to run: pass exactly one of --fixture or --live-herdr")
         return 2
@@ -198,7 +200,10 @@ def _run_link(args: Any) -> int:
             print(f"bad --log-config: {exc}")
             return 2
     else:
-        logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+        config = logging_config()
+        config["loggers"] = {}  # the connector only needs the shared handler and format
+        config["root"] = {"level": "INFO", "handlers": ["default"]}
+        logging.config.dictConfig(config)
 
     from relaydeck.connector.enrollment import (
         ConnectorCreds,

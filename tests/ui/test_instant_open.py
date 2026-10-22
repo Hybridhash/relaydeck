@@ -8,11 +8,12 @@ import pytest
 from flet.data_channel import _ProtocolMuxedDataChannel
 from relaydeck_terminal import protocol
 
-from relaydeck.client.adapters.fake import FakeCredentialStore
 from relaydeck.client.features.inventory.routing import RouteBridge
-from relaydeck.gateway import terminal_wire
+from relaydeck.contracts.wire import terminal as terminal_wire
+from tests.support.fakes import FakeCredentialStore
 from tests.support.host_harness import run
 from tests.support.sync.transport_fixtures import _wait
+from tests.support.terminal.direct_typing import open_compose
 from tests.support.ui.instant_open import jobs
 from tests.support.ui.retained_root import _active, _open, _render
 
@@ -130,7 +131,7 @@ def test_terminal_publishes_before_secure_draft_restore_input_stays_gated(width:
             await _wait(lambda: not session.draft_loading)
             await app.set_props_and_fire("agent-takeover-confirm", {}, "click")
             if width == 390:
-                await app.set_props_and_fire("agent-compose-toggle", {}, "click")
+                await open_compose(app)
             await app.settle()
             assert _active(app, "composer-draft").can_request_focus
         finally:

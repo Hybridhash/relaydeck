@@ -105,6 +105,13 @@ class TuiRecipe:
     plan_pattern: str | None  # one named group: `plan`
     windows: tuple[TuiWindowSpec, ...]
     max_lines: int = 60
+    warmup_prompt: str | None = None  # one cheap message sent at launch, before /usage
+    warmup_marker: str | None = None  # the reply that proves the message was answered
+    usage_enters: int = 1  # Enters after the usage command (a slash menu may eat the first)
+    untrusted: tuple[str, ...] = ()  # a trust question on screen: never answered, the read aborts
+    session_entry: str = "{id}.json"  # where a session lives under session_root
+    trust_store: str | None = None  # the tool's own JSON trust file, read only
+    probe_dir: str | None = None  # "{state_dir}/name": an empty folder the read starts in
 
 
 @dataclass(frozen=True)
@@ -238,6 +245,49 @@ def tui_recipe_from(data: Any) -> TuiRecipe:
     raw_refuse = data.get("refuse", [])
     if not isinstance(raw_refuse, list):
         raise ValueError("tui recipe: bad refuse")
+    warmup_prompt = data.get("warmup_prompt")
+    warmup_marker = data.get("warmup_marker")
+    if (warmup_prompt is None) != (warmup_marker is None):
+        raise ValueError("tui recipe: warmup prompt and marker go together")
+    if warmup_prompt is not None:
+        _argv([warmup_prompt], "warmup_prompt", placeholder=False)
+        if warmup_prompt.startswith("-"):
+            raise ValueError("tui recipe: bad warmup_prompt")
+    usage_enters = data.get("usage_enters", 1)
+    if type(usage_enters) is not int or not 1 <= usage_enters <= 3:
+        raise ValueError("tui recipe: bad usage_enters")
+    entry = data.get("session_entry", "{id}.json")
+    if (
+        not isinstance(entry, str)
+        or not 0 < len(entry) <= 128
+        or entry.count(_ID_PLACEHOLDER) != 1
+        or ".." in entry
+        or entry.startswith("/")
+        or any(ord(c) < 32 for c in entry)
+    ):
+        raise ValueError("tui recipe: bad session_entry")
+    trust_store = data.get("trust_store")
+    if trust_store is not None and (
+        not isinstance(trust_store, str)
+        or not 0 < len(trust_store) <= 256
+        or ".." in trust_store
+        or not (trust_store.startswith("~/") or trust_store.startswith("/"))
+        or any(ord(c) < 32 for c in trust_store)
+    ):
+        raise ValueError("tui recipe: bad trust_store")
+    probe_dir = data.get("probe_dir")
+    if probe_dir is not None and (
+        not isinstance(probe_dir, str)
+        or not 0 < len(probe_dir) <= 128
+        or not probe_dir.startswith("{state_dir}/")
+        or probe_dir.count("{state_dir}") != 1
+        or ".." in probe_dir
+        or any(ord(c) < 32 for c in probe_dir)
+    ):
+        raise ValueError("tui recipe: bad probe_dir")
+    raw_untrusted = data.get("untrusted", [])
+    if not isinstance(raw_untrusted, list):
+        raise ValueError("tui recipe: bad untrusted")
     return TuiRecipe(
         launch_new=_argv(data.get("launch_new"), "launch_new", placeholder=False),
         launch_resume=_argv(resume, "launch_resume", placeholder=True) if resume else None,
@@ -261,6 +311,15 @@ def tui_recipe_from(data: Any) -> TuiRecipe:
         else None,
         windows=tuple(windows),
         max_lines=max_lines,
+        warmup_prompt=warmup_prompt,
+        warmup_marker=_pattern(warmup_marker, "warmup marker")
+        if warmup_marker is not None
+        else None,
+        usage_enters=usage_enters,
+        untrusted=tuple(_pattern(item, "untrusted") for item in raw_untrusted),
+        session_entry=entry,
+        trust_store=trust_store,
+        probe_dir=probe_dir,
     )
 
 

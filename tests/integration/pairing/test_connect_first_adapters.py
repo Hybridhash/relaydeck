@@ -8,9 +8,9 @@ from typing import Any
 
 import pytest
 
-from relaydeck.client.adapters.fake import FakeCredentialStore
 from relaydeck.client.features.pairing.service import PENDING_KEY, discard_pending
 from tests.support.companion.pairing_harness import Harness
+from tests.support.fakes import FakeCredentialStore
 from tests.support.pairing import ORIGIN
 
 

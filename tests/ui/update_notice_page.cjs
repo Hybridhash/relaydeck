@@ -13,7 +13,7 @@ const PAGE_BUILD = 'aaaaaaaaaaaaaaaa';
 const NEW_BUILD = 'bbbbbbbbbbbbbbbb';
 const NEWER_BUILD = 'cccccccccccccccc';
 
-function makeEnv({ storage = { session: new Map(), local: new Map() } } = {}) {
+function makeEnv({ storage = { session: new Map(), local: new Map() }, fetchImpl = null } = {}) {
   let now = 1700000000000;
   const timers = [];
   let timerId = 0;
@@ -107,6 +107,13 @@ function makeEnv({ storage = { session: new Map(), local: new Map() } } = {}) {
     MessageChannel, MutationObserver: windowObj.MutationObserver, crypto: webcrypto, Date: FakeDate,
     Uint8Array, Promise, Math, String, Number,
   };
+  if (fetchImpl) {
+    // Web push is supported and undecided, so the key reply decides what the bar shows.
+    context.fetch = fetchImpl;
+    context.Notification = { permission: 'default' };
+    windowObj.Notification = context.Notification;
+    windowObj.PushManager = function PushManager() {};
+  }
   vm.createContext(context);
   vm.runInContext(clientSource, context);
 
@@ -405,6 +412,70 @@ async function scenarios() {
     await boot(env, makeRegistration({ waiting: bad, active: controller }), controller);
     assert.equal(shown(env), false);
     console.log('PASS: a malformed build reply does not show the update');
+  }
+
+  // 15. The web-push check backs off while unpaired and resets on foreground or online.
+  {
+    let calls = 0;
+    const env = makeEnv({ fetchImpl: () => { calls += 1; return Promise.resolve({ ok: false }); } });
+    const controller = makeWorker(PAGE_BUILD);
+    await boot(env, makeRegistration({ active: controller }), controller);
+    assert.equal(calls, 1);
+    for (const [wait, want] of [[60000, 2], [120000, 3], [300000, 4], [300000, 5]]) {
+      env.advance(wait - 1);
+      await env.tick();
+      assert.equal(calls, want - 1, `no check before ${wait} ms`);
+      env.advance(1);
+      await env.tick();
+      assert.equal(calls, want, `check after ${wait} ms`);
+    }
+    env.docFire('visibilitychange');
+    await env.tick();
+    assert.equal(calls, 6, 'a foreground checks at once');
+    env.advance(60000);
+    await env.tick();
+    assert.equal(calls, 7, 'and the wait starts again at 60 s');
+    env.advance(120000);
+    await env.tick();
+    assert.equal(calls, 8);
+    env.fire('online');
+    await env.tick();
+    assert.equal(calls, 9, 'coming online checks at once');
+    env.advance(60000);
+    await env.tick();
+    assert.equal(calls, 10, 'and also restarts the wait at 60 s');
+    console.log('PASS: the unpaired push check backs off 60 s, 2 min, 5 min and resets');
+  }
+
+  // 16. The 15 s push check runs only while the bar is open.
+  {
+    let calls = 0;
+    const answer = { publicKey: 'k', csrf: 'c', subscribed: false, choice: ['blocked'] };
+    const env = makeEnv({ fetchImpl: () => { calls += 1; return Promise.resolve({ ok: true, json: () => Promise.resolve(answer) }); } });
+    const controller = makeWorker(PAGE_BUILD);
+    await boot(env, makeRegistration({ active: controller }), controller);
+    const pushBar = () => env.doc.getElementById('rd-push-bar');
+    assert.equal(pushBar().style.display, 'flex');
+    env.advance(15000);
+    await env.tick();
+    assert.equal(calls, 2, 'checks every 15 s while the bar is open');
+    pushBar().children.find((c) => c.textContent === '×').click();
+    assert.equal(pushBar().style.display, 'none');
+    env.advance(15000);
+    await env.tick();
+    assert.equal(calls, 3, 'the check already scheduled still runs once');
+    env.advance(10 * 60 * 1000);
+    await env.tick();
+    assert.equal(calls, 3, 'then no timed check while closed');
+    env.docFire('visibilitychange');
+    await env.tick();
+    assert.equal(calls, 4, 'a foreground checks as before');
+    assert.equal(pushBar().style.display, 'none');
+    answer.choice = ['blocked', 'done'];
+    env.docFire('visibilitychange');
+    await env.tick();
+    assert.equal(pushBar().style.display, 'flex', 'a new choice offers the bar again');
+    console.log('PASS: the 15 s push check stops once the bar is closed');
   }
 
   console.log('ALL PASS');

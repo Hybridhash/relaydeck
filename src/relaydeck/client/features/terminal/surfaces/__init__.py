@@ -8,7 +8,8 @@ Keeping builders as plain functions preserves terminal ancestry between layouts.
 selection, keyboard and mobile key callbacks; `common` the shared keys.
 `direct_typing`, `phone_composer` and `sessions` keep editor and input lifetimes
 independent of presentation. `agent_switcher` holds the phone header's agent switcher,
-`tools_popover` the phone keys and actions, and `screen_overlays` places either one.
+`tools_popover` the phone keys and actions, `paste_entry` the paste panel for browsers that
+block clipboard reads, and `screen_overlays` places these floating layers.
 Public exports are centralized here."""
 
 from __future__ import annotations

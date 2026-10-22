@@ -14,6 +14,7 @@ from relaydeck.client.features.inventory.routing import RouteBridge
 from relaydeck.client.features.terminal.diagnostics import diagnostics_logger
 from relaydeck.client.hooks.typing_focus import TYPING_EXIT_REASONS, use_typing_focus
 from tests.support.host_harness import render_component, run
+from tests.support.terminal.direct_typing import open_compose
 from tests.support.ui.phone_terminal import _ancestry, _shape
 from tests.support.ui.retained_root import _active, _render
 
@@ -47,7 +48,8 @@ def _assert_show(app: Any) -> None:
 
 
 @pytest.mark.parametrize("width", [390, 768])
-@pytest.mark.parametrize("action", ["agent-compose-toggle", "composer-hide-keyboard"])
+# The pencil that also dismissed a focused composer is gone; Hide keyboard is the explicit action.
+@pytest.mark.parametrize("action", ["composer-hide-keyboard"])
 def test_explicit_dismiss_pulses_focus_gate_without_changing_draft_or_terminal(
     width: int, action: str
 ) -> None:
@@ -61,7 +63,7 @@ def test_explicit_dismiss_pulses_focus_gate_without_changing_draft_or_terminal(
             session = pool.foreground.session
             draft = "untouched\nmultiline draft"
             session.on_draft_change(draft)
-            await app.set_props_and_fire("agent-compose-toggle", {}, "click")
+            await open_compose(app)
             _assert_show(app)
             await app.set_props_and_fire("composer-draft", {}, "focus")
             field = _active(app, "composer-draft")
@@ -133,7 +135,7 @@ def test_terminal_tap_keeps_phone_composer_focused(width: int) -> None:
             await app.set_props_and_fire("agent-takeover-confirm", {}, "click")
             session = pool.foreground.session
             session.on_draft_change("kept draft")
-            await app.set_props_and_fire("agent-compose-toggle", {}, "click")
+            await open_compose(app)
             await app.set_props_and_fire("composer-draft", {}, "focus")
             field = _active(app, "composer-draft")
             hide = _toggle(app, "composer-hide-keyboard")
@@ -211,7 +213,7 @@ def test_send_and_outside_scroll_keep_phone_composer_editable(
             await app.set_props_and_fire("agent-takeover-confirm", {}, "click")
             session = pool.foreground.session
             session.on_draft_change("send this once")
-            await app.set_props_and_fire("agent-compose-toggle", {}, "click")
+            await open_compose(app)
             await app.set_props_and_fire("composer-draft", {}, "focus")
             field = _active(app, "composer-draft")
             caplog.clear()
@@ -258,7 +260,7 @@ def test_show_keyboard_asks_the_field_for_focus_for_screen_readers_and_keeps_the
             await app.set_props_and_fire("agent-takeover-confirm", {}, "click")
             session = pool.foreground.session
             session.on_draft_change("kept draft")
-            await app.set_props_and_fire("agent-compose-toggle", {}, "click")
+            await open_compose(app)
             _assert_show(app)
             field = _active(app, "composer-draft")
             attaches = list(sessions.ops.attaches)

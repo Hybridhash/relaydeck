@@ -14,6 +14,7 @@ from urllib.parse import quote
 import httpx
 
 from relaydeck.client.open_timing import mark_current
+from relaydeck.contracts import paths
 
 
 class ShellOpError(Exception):
@@ -217,7 +218,7 @@ class HttpxShellGatewayOps(ShellGatewayOps):
     ) -> AttachmentInfo:
         try:
             response = await self.client.post(
-                f"{self.base_url}/v1/hosts/{host_id}/terminals/{terminal_id}/attachments",
+                self.base_url + paths.terminal_attachments(host_id, terminal_id),
                 headers=await self._auth(),
                 json={
                     "kind": kind,
@@ -241,7 +242,7 @@ class HttpxShellGatewayOps(ShellGatewayOps):
     async def control_holder(self, host_id: str, terminal_id: str) -> dict[str, Any]:
         try:
             response = await self.client.get(
-                f"{self.base_url}/v1/hosts/{host_id}/terminals/{terminal_id}/control",
+                self.base_url + paths.terminal_control(host_id, terminal_id),
                 headers=await self._auth(),
                 timeout=self.timeout,
             )
@@ -258,7 +259,7 @@ class HttpxShellGatewayOps(ShellGatewayOps):
     ) -> LeaseInfo:
         try:
             response = await self.client.post(
-                f"{self.base_url}/v1/terminal-attachments/{attachment_id}/leases",
+                self.base_url + paths.attachment_leases(attachment_id),
                 headers=await self._auth(),
                 json={
                     "mode": mode,
@@ -279,7 +280,7 @@ class HttpxShellGatewayOps(ShellGatewayOps):
     async def terminal_ticket(self, lease_id: str) -> str:
         try:
             response = await self.client.post(
-                f"{self.base_url}/v1/terminal-tickets",
+                self.base_url + paths.TERMINAL_TICKETS,
                 headers=await self._auth(),
                 json={"lease_id": lease_id},
                 timeout=self.timeout,
@@ -296,7 +297,7 @@ class HttpxShellGatewayOps(ShellGatewayOps):
     async def release_lease(self, lease_id: str) -> None:
         try:
             response = await self.client.delete(
-                f"{self.base_url}/v1/terminal-leases/{lease_id}",
+                self.base_url + paths.lease(lease_id),
                 headers=await self._auth(),
                 timeout=self.timeout,
             )
@@ -307,7 +308,7 @@ class HttpxShellGatewayOps(ShellGatewayOps):
     async def close_attachment(self, attachment_id: str) -> None:
         try:
             response = await self.client.delete(
-                f"{self.base_url}/v1/terminal-attachments/{attachment_id}",
+                self.base_url + paths.attachment(attachment_id),
                 headers=await self._auth(),
                 timeout=self.timeout,
             )
@@ -318,7 +319,7 @@ class HttpxShellGatewayOps(ShellGatewayOps):
     async def close_terminal(self, command: dict[str, Any]) -> dict[str, Any]:
         try:
             response = await self.client.post(
-                f"{self.base_url}/v1/hosts/{quote(command['host_id'], safe='')}/commands",
+                self.base_url + paths.host_commands(quote(command["host_id"], safe="")),
                 headers=await self._auth(),
                 json=command,
                 timeout=self.timeout,

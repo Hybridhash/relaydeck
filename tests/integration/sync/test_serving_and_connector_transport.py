@@ -22,7 +22,7 @@ from relaydeck.connector.attach import AttachSession
 from relaydeck.connector.link import ConnectorLink, LinkConfig, TunnelTransport
 from relaydeck.connector.source import TerminalRelay
 from relaydeck.contracts.tunnel import SnapshotIntake, parse_terminal_input
-from relaydeck.gateway import terminal_wire
+from relaydeck.contracts.wire import terminal as terminal_wire
 from relaydeck.gateway.app import create_app
 from relaydeck.gateway.hosts import write_revoke_request
 from relaydeck.gateway.identity import TicketGrant

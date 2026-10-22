@@ -9,7 +9,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
-from urllib.parse import parse_qsl, quote, urlencode
+from urllib.parse import parse_qsl, urlencode
 
 from relaydeck.client.adapters.ports import ClipboardPort, CredentialStore
 from relaydeck.client.features.shell import ShellSession
@@ -17,6 +17,7 @@ from relaydeck.client.features.shell.ops import ShellGatewayOps
 from relaydeck.client.features.shell.session import SHELL_LIVE
 from relaydeck.client.features.sync.transport import TerminalSocket, WebsocketTerminalSocket
 from relaydeck.client.features.terminal.agent_session import AGENT_LIVE, AgentSession
+from relaydeck.contracts import paths
 
 
 def ws_base_for(base_url: str) -> str:
@@ -40,7 +41,7 @@ def production_stream_factory(ws_base: str) -> Callable[..., TerminalSocket]:
             for key, value in parse_qsl(resume, keep_blank_values=True)
             if key not in ("ticket", "output_reset")
         )
-        url = f"{ws_base}/v1/terminal/{quote(lease_id, safe='')}?{urlencode(params)}"
+        url = f"{ws_base}{paths.terminal_socket(lease_id)}?{urlencode(params)}"
         return WebsocketTerminalSocket(url)
 
     return open_stream

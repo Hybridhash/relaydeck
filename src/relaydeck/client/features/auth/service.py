@@ -17,7 +17,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any
+from typing import Any, cast
 from urllib.parse import urlencode
 
 import httpx
@@ -28,8 +28,9 @@ from relaydeck.client.features.auth.callback import (
     parse_callback,
     state_matches,
 )
+from relaydeck.contracts import paths
 from relaydeck.contracts.endpoints import is_trusted_endpoint
-from relaydeck.contracts.schemas import SchemaError, validate
+from relaydeck.contracts.schemas import AuthorizationRequest, SchemaError, TokenResponse, validate
 
 VERIFIER_KEY = "oauth_verifier"
 STATE_KEY = "oauth_state"
@@ -160,7 +161,7 @@ class AuthService:
         state = secrets.token_urlsafe(24)
         await self.credentials.set(VERIFIER_KEY, verifier)
         await self.credentials.set(STATE_KEY, state)
-        request = {
+        request: AuthorizationRequest = {
             "response_type": "code",
             "code_challenge": self._challenge(verifier),
             "code_challenge_method": "S256",
@@ -169,7 +170,7 @@ class AuthService:
         }
         validate("relaydeck/gateway/v1/authorization-request", request)
         query = urlencode(request)
-        url = f"{base}/v1/authorize?{query}"
+        url = f"{base}{paths.AUTHORIZE}?{query}"
         self._emit(AuthSnapshot(AuthState.WAITING_CALLBACK))
         await self.open_url(url)
         return url
@@ -213,7 +214,7 @@ class AuthService:
         await self.credentials.delete(VERIFIER_KEY)
         await self.credentials.delete(STATE_KEY)
         status, payload = await self.post_json(
-            f"{self._base()}/v1/token",
+            self._base() + paths.TOKEN,
             {"grant": "authorization_code", "code": parsed.code, "verifier": verifier or ""},
         )
         await self.credentials.delete(VERIFIER_KEY)
@@ -250,7 +251,7 @@ class AuthService:
             return snapshot
         self._emit(AuthSnapshot(AuthState.REFRESHING))
         status, payload = await self.post_json(
-            f"{self._base()}/v1/token",
+            self._base() + paths.TOKEN,
             {"grant": "refresh_token", "refresh_token": refresh},
         )
         if status != 200 or not isinstance(payload, dict):
@@ -292,7 +293,7 @@ class AuthService:
                 body = {"device_ref": ref}
             try:
                 status, _ = await self.post_json(
-                    f"{self._base()}/v1/logout",
+                    self._base() + paths.LOGOUT,
                     body,
                     {"Authorization": f"Bearer {access}"},
                 )
@@ -349,14 +350,15 @@ class AuthService:
     async def _save_pair(self, payload: dict[str, Any]) -> bool:
         try:
             validate("relaydeck/gateway/v1/token-response", payload)
+            pair = cast(TokenResponse, payload)
         except SchemaError:
             await self.credentials.clear_account()
             self._emit(
                 AuthSnapshot(AuthState.ERROR, error="Invalid token response", can_retry=True)
             )
             return False
-        await self.credentials.set(ACCESS_KEY, payload["access_token"])
-        await self.credentials.set(REFRESH_KEY, payload["refresh_token"])
+        await self.credentials.set(ACCESS_KEY, pair["access_token"])
+        await self.credentials.set(REFRESH_KEY, pair["refresh_token"])
         await self.credentials.set(EXPIRES_KEY, str(self.now_ms() + payload["expires_in"] * 1000))
         return True
 

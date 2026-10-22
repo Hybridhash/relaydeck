@@ -17,12 +17,7 @@ from relaydeck.client.features.terminal.input_modes import (
 from relaydeck.client.features.terminal.keys import (
     ToolsKeysDock,
 )
-from relaydeck.client.features.terminal.layout_budget import (
-    DOCK_CONTENT_HEIGHT,
-    PICTURE_HEIGHT,
-    TYPING_SPLIT_DOCK_FRACTION,
-    DetailBudget,
-)
+from relaydeck.client.features.terminal.layout_budget import PICTURE_HEIGHT, DetailBudget
 from relaydeck.client.features.terminal.models import TerminalViewState
 
 if TYPE_CHECKING:
@@ -41,48 +36,27 @@ def build_agent_dock(
     collapse_keys: bool,
     composer_focusable: bool,
     dark: bool,
-    detail_height: float,
-    dock_epoch: int,
     in_control: bool,
     keyboard: str,
     keys_enabled: bool,
     on_dismiss_keys: Callable[[], Any],
     on_key: Callable[[str], Any],
     on_toggle_modifier: Callable[[str], Any],
-    pad: float,
     phone: bool,
     picture_progress: Any,
     show_key_row: bool,
     split: bool,
-    split_ctl_height: float,
-    split_dock_top: float,
-    split_side_width: float,
-    split_top: float,
     terminal: TerminalViewState,
     tokens: dict[str, str],
 ) -> Any:
-    """The tools-key dock (inline, overlay or typing-column slot) and picture progress.
-
-    Appends to `bottom`; returns `(dock_overlay, split_dock)`."""
+    """Append the inline keys and picture progress; return the floating key dock."""
     # The open dock sits under the key row, above the picture/status line and composer. This desktop
     # branch is always expanded, so the dock dedupes against the visible inline row; a hidden row
     # keeps the full grid so no key is unreachable.
     dock_overlay: Any = None
-    split_dock: Any = None
-    if in_control and not phone and keyboard == KEYBOARD_KEYS:
+    if in_control and not phone and not split and keyboard == KEYBOARD_KEYS:
         picture_room = PICTURE_HEIGHT + 6 if collapse_keys and picture_progress is not None else 0
         dock_height = budget.dock_inline or max(0.0, budget.dock_overlay - picture_room)
-        if split:
-            # The dock starts under the composer and never runs past the
-            # bottom padding; its own scroll is only needed when the keys exceed that.
-            dock_height = max(
-                0.0,
-                min(
-                    DOCK_CONTENT_HEIGHT,
-                    TYPING_SPLIT_DOCK_FRACTION * detail_height,
-                    detail_height - split_dock_top - pad,
-                ),
-            )
         dock = ft.Container(
             key=AGENT_KEYS_SCROLL_KEY,
             disabled=terminal.selection.open or not composer_focusable,
@@ -99,23 +73,7 @@ def build_agent_dock(
                 compact=collapse_keys,
             ),
         )
-        if split:
-            # Top-anchored directly under the composer frame. A new
-            # scroll key per open remounts the column, so the keys open at the top.
-            split_dock = ft.Container(
-                key="agent-split-dock",
-                right=pad,
-                top=split_dock_top,
-                width=split_side_width,
-                height=dock_height,
-                content=ft.Column(
-                    key=f"agent-split-dock-scroll-{dock_epoch}",
-                    spacing=0,
-                    scroll=ft.ScrollMode.AUTO,
-                    controls=[dock],
-                ),
-            )
-        elif budget.dock_overlay:
+        if budget.dock_overlay:
             overlay_controls: list[Any] = [dock]
             if collapse_keys and picture_progress is not None:
                 overlay_controls.insert(0, picture_progress)
@@ -135,4 +93,4 @@ def build_agent_dock(
         # toggle remains and the terminal keeps the remaining height.
     if picture_progress is not None and not collapse_keys:
         bottom.append(picture_progress)
-    return (dock_overlay, split_dock)
+    return dock_overlay

@@ -16,7 +16,7 @@ import time
 import pytest
 from starlette.websockets import WebSocketDisconnect
 
-from relaydeck.gateway import terminal_wire
+from relaydeck.contracts.wire import terminal as terminal_wire
 from relaydeck.gateway.ring import (
     RING_MAX_BYTES,
     VIEWER_QUEUE_MAX_BYTES,

@@ -52,8 +52,7 @@ from relaydeck.client.features.terminal.stream import (
     decide_recovery,
     decide_viewer_overflow,
 )
-from relaydeck.connector.attach import AttachError, AttachSession, apply_controller_resize
-from relaydeck.gateway import terminal_wire
+from relaydeck.contracts.wire import terminal as terminal_wire
 from relaydeck.gateway.app import GatewayState, create_app
 from relaydeck.gateway.backend import BackendError, FakeBackend, ResizeRequest
 from relaydeck.gateway.identity import TicketGrant
@@ -1006,7 +1005,7 @@ def test_controller_viewer_overflow_resets() -> None:
     assert controller.live_edge_pending and controller.ui_input_fenced
     assert controller.state.status == "reconnecting"
     assert controller.state.notice is not None
-    assert "History incomplete" in controller.state.notice.text
+    assert "Older output not kept" in controller.state.notice.text
 
 
 # -- stress profiles and responsiveness --------------------------------------------
@@ -1101,27 +1100,6 @@ def _stub(tmp_path: Path, name: str, body: str) -> str:
     path.write_text(body.format(python=sys.executable))
     path.chmod(path.stat().st_mode | stat.S_IEXEC)
     return str(path)
-
-
-def test_apply_controller_resize_reaches_stub_pty(tmp_path: Path) -> None:
-    import fcntl
-    import termios
-
-    session = AttachSession(argv=[_stub(tmp_path, "echo-herdr", _ECHO_STUB)])
-    session.spawn()
-    try:
-        assert b"stub-ready" in session.expect_ready(b"stub-ready", timeout=5.0)
-        assert apply_controller_resize(session, 100, 30) == (100, 30)
-        assert (session.cols, session.rows) == (100, 30)
-        assert session._fd is not None
-        packed = fcntl.ioctl(session._fd, termios.TIOCGWINSZ, b"\x00" * 8)
-        rows, cols, _, _ = struct.unpack("HHHH", packed)
-        assert (cols, rows) == (100, 30)
-        with pytest.raises(AttachError, match="bad size"):
-            apply_controller_resize(session, 0, 30)
-    finally:
-        session.detach()
-    assert session.running is False
 
 
 def test_upstream_pane_resize_is_layout_only() -> None:

@@ -22,8 +22,8 @@ from relaydeck.client.features.composer.domain import (
     SUBMISSION_UNKNOWN,
 )
 from relaydeck.client.features.composer.draft_field import keep_native_value
+from relaydeck.client.features.composer.keyboard_toggle import keep_focus, keyboard_toggle
 from relaydeck.client.features.composer.shortcut import use_send_shortcut
-from relaydeck.client.features.terminal.diagnostics import diagnostics_logger
 from relaydeck.client.features.terminal.events import (
     click,
     spawn,
@@ -91,19 +91,17 @@ def use_composer_keyboard(
     return focused, closing, focus_changed, dismiss, note_send
 
 
-def _keep_focus(_event: Any) -> None:
-    diagnostics_logger().info("composer_tap_outside action=keep_focus")
-
-
-def _with_working_label(footer: Any, working: bool, tokens: dict[str, str]) -> Any:
-    # Floats just above the box over the terminal: no layout change and never over Send.
-    # The Stack is always there so the text box keeps its identity (and focus).
+def with_working_label(
+    footer: Any, working: bool, tokens: dict[str, str], key: str = "composer-working"
+) -> Any:
+    # Floats just above the input over the terminal: no layout change and never over Send.
+    # The Stack is always there so the input keeps its identity (and focus).
     shimmer = composer_ui.working_shimmer(
         WORKING_LABEL, tokens, size=12, weight=ft.FontWeight.W_600
     )
     # The terminal's canvas colour, so the label blends into its last line.
     label = ft.Container(
-        key="composer-working",
+        key=key,
         top=-WORKING_LABEL_RISE,
         right=8,
         padding=ft.Padding.symmetric(horizontal=6, vertical=1),
@@ -119,63 +117,6 @@ def _with_working_label(footer: Any, working: bool, tokens: dict[str, str]) -> A
 
 def _suffix(send: Any, toggle: Any | None) -> Any:
     return send if toggle is None else ft.Row(tight=True, spacing=4, controls=[send, toggle])
-
-
-def _keyboard_toggle(
-    state: str, compact: bool, on_hide: Callable[[], Any], on_show: Callable[[], Any]
-) -> Any | None:
-    """Hide keyboard while the field is focused, Show keyboard otherwise.
-
-    The toggle sits inside the field's decoration. Showing the keyboard must happen inside the
-    user's tap on iOS, so the Show icon ignores pointers and the tap reaches the text field
-    natively; a server-side focus request would arrive after the gesture has ended.
-    """
-    if state not in ("hide", "show"):
-        return None
-    disc = ft.Colors.with_opacity(0.35, console_tokens.SCROLL_THUMB_BG)
-    if state == "hide":
-        return ft.Semantics(
-            key="composer-hide-keyboard-semantics",
-            label="Hide keyboard",
-            button=True,
-            content=ft.IconButton(
-                ft.Icons.KEYBOARD_HIDE,
-                key="composer-hide-keyboard",
-                width=44,
-                height=44,
-                icon_size=20,
-                padding=0,
-                style=ft.ButtonStyle(
-                    bgcolor=disc, color=console_tokens.ON_PRIMARY, shape=ft.CircleBorder()
-                ),
-                tooltip=None if compact else "Hide keyboard",
-                on_click=click(on_hide),
-            ),
-        )
-    return ft.Semantics(
-        key="composer-show-keyboard-semantics",
-        label="Show keyboard",
-        button=True,
-        on_tap=lambda _e: on_show(),
-        content=ft.Container(
-            key="composer-show-keyboard",
-            width=44,
-            height=44,
-            border_radius=22,
-            bgcolor=disc,
-            alignment=ft.Alignment.CENTER,
-            ignore_interactions=True,
-            content=ft.Column(
-                tight=True,
-                spacing=0,
-                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-                controls=[
-                    ft.Icon(ft.Icons.KEYBOARD_ARROW_UP, size=14, color=console_tokens.ON_PRIMARY),
-                    ft.Icon(ft.Icons.KEYBOARD, size=20, color=console_tokens.ON_PRIMARY),
-                ],
-            ),
-        ),
-    )
 
 
 @ft.component
@@ -275,12 +216,12 @@ def _PhoneComposerField(
                     disabled=not send_enabled,
                     on_click=click(send),
                 ),
-                _keyboard_toggle(keyboard, compact, hide, show),
+                keyboard_toggle(keyboard, compact, hide, show),
             ),
             on_change=value_change(changed),
             on_focus=lambda _e: focus_changed(True),
             on_blur=lambda _e: focus_changed(False),
-            on_tap_outside=_keep_focus,
+            on_tap_outside=keep_focus,
         )
 
     field = ft.use_memo(
@@ -384,7 +325,7 @@ def _phone_composer(
     if attachment is not None:
         row.insert(1 if toggle is not None else 0, attachment)
     footer = ft.Row(key=composer_ui.FOOTER_KEY, spacing=6, controls=row)
-    controls: list[Any] = [_with_working_label(footer, working, palette(dark))]
+    controls: list[Any] = [with_working_label(footer, working, palette(dark))]
     if chips is not None:
         controls.append(chips)
     status: list[Any] = []

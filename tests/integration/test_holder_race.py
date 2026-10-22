@@ -7,13 +7,13 @@ from typing import Any
 import httpx
 import pytest
 
-from relaydeck.client.adapters.fake import FakeClipboard
 from relaydeck.client.features.shell.ops import HttpxShellGatewayOps
 from relaydeck.client.features.terminal.agent_session import (
     AGENT_CONFLICT,
     AGENT_LIVE,
     AgentSession,
 )
+from tests.support.fakes import FakeClipboard
 from tests.support.terminal.lease_gateway import _client, _headers, _token
 from tests.support.terminal.sessions import _SocketFactory
 

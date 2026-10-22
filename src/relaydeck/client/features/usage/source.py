@@ -12,7 +12,6 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from typing import Any
-from urllib.parse import quote
 
 from relaydeck.client.features.sync.transport import GatewayTransport, TransportError
 from relaydeck.client.features.usage.api import (
@@ -20,6 +19,7 @@ from relaydeck.client.features.usage.api import (
     UsageHttpError,
     UsageQuery,
 )
+from relaydeck.contracts import paths
 
 
 class GatewayUsageFetch:
@@ -56,7 +56,7 @@ class GatewayUsageFetch:
         base = getattr(transport, "base_url", None)
         if not callable(request) or not isinstance(base, str):
             return RefreshOutcome("error", code="usage_unavailable")
-        url = f"{base}/v1/hosts/{quote(host_id, safe='')}/usage/limits/refresh"
+        url = base + paths.usage_limits_refresh(host_id)
         try:
             response = await request("POST", url, json={"kind": kind})
         except TransportError as error:

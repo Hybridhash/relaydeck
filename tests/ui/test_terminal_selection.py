@@ -12,10 +12,10 @@ import ast
 from dataclasses import replace
 from typing import Any
 
+import flet as ft
 from relaydeck_terminal.protocol import CLEAR_SELECTION, REQUEST_SELECTION_TEXT
 from relaydeck_terminal.terminal import RelayDeckTerminal
 
-from relaydeck.client.adapters.fake import FakeClipboard
 from relaydeck.client.adapters.ports import ClipboardPort
 from relaydeck.client.features.terminal.models import (
     SelectionState,
@@ -50,6 +50,7 @@ from relaydeck.client.features.terminal.selection_sheet import (
     SelectTextSheet,
     range_label,
 )
+from tests.support.fakes import FakeClipboard
 from tests.support.host_harness import HostApp, button_label, render_component, run
 
 VT = "tests/fixtures/vt"
@@ -444,12 +445,10 @@ def test_sheet_renders_anchored_readonly_mono() -> None:
         assert app.find("select-text-range").value == "Chars 6-10 of 10 (1 lines)"
         field = app.find("select-text-field")
         assert field.value == "alpha\nbeta"
-        assert field.read_only is True
-        assert field.multiline is True
-        assert field.autofocus is False
-        assert field.text_style.font_family == "monospace"
-        assert field.text_style.size == 14
-        assert (field.selection.base_offset, field.selection.extent_offset) == (6, 10)
+        assert isinstance(field, ft.Text) and not field.selectable
+        assert isinstance(app.find("select-text-area"), ft.SelectionArea)
+        assert field.style.font_family == "JetBrains Mono"
+        assert field.style.size == 14
         await app.set_props_and_fire("select-text-copy", {}, "click")
         assert copied == [(6, 10)]
         await app.set_props_and_fire("select-text-close", {}, "click")
@@ -469,13 +468,12 @@ def test_sheet_defaults_to_all_text() -> None:
             on_close=lambda: None,
         )
         assert app.find("select-text-range").value == "All text (2 chars)"
-        field = app.find("select-text-field")
-        assert (field.selection.base_offset, field.selection.extent_offset) == (0, 2)
+        assert app.find("select-text-field").value == "ab"
 
     run(scenario())
 
 
-def test_sheet_emoji_anchor_uses_utf16_units() -> None:
+def test_sheet_emoji_anchor_keeps_str_range_without_browser_input() -> None:
     async def scenario() -> None:
         text = "A😀Z"
         app = await render_component(
@@ -487,8 +485,8 @@ def test_sheet_emoji_anchor_uses_utf16_units() -> None:
             on_close=lambda: None,
         )
         field = app.find("select-text-field")
-        # str offsets (0, 2) cover "A😀": UTF-16 units (0, 3).
-        assert (field.selection.base_offset, field.selection.extent_offset) == (0, 3)
+        assert isinstance(field, ft.Text) and field.value == text
+        assert app.find("select-text-range").value == "Chars 0-2 of 3 (1 lines)"
 
     run(scenario())
 

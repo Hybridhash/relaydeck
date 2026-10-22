@@ -11,7 +11,7 @@ from relaydeck_terminal import protocol
 
 from relaydeck.client.features.inventory.routing import RouteBridge
 from relaydeck.client.features.shell.ops import ShellOpError
-from relaydeck.gateway import terminal_wire
+from relaydeck.contracts.wire import terminal as terminal_wire
 from tests.support.host_harness import run
 from tests.support.sync.transport_fixtures import _wait
 from tests.support.ui.instant_inventory import navigate, valid_inventory

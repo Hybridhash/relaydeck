@@ -37,7 +37,7 @@ from relaydeck.client.features.sync.transport import (
 )
 from relaydeck.client.features.terminal.controller import TerminalController
 from relaydeck.connector.herdr import HerdrAdapter
-from relaydeck.gateway import terminal_wire
+from relaydeck.contracts.wire import terminal as terminal_wire
 from relaydeck.gateway.app import GatewayState, create_app
 from relaydeck.gateway.backend import FakeBackend
 from tests.support.live_server import LiveGateway

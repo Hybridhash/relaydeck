@@ -30,7 +30,6 @@ from relaydeck.client.features.terminal.layout_budget import (
 from relaydeck.client.features.terminal.models import TerminalViewState
 from relaydeck.client.features.terminal.paste_policy import PasteReview
 from relaydeck.client.features.terminal.pictures import (
-    attach_button,
     picture_chips,
 )
 
@@ -49,6 +48,7 @@ from relaydeck.client.features.terminal.surfaces.direct_typing import (
 )
 from relaydeck.client.features.terminal.surfaces.phone_composer import (
     _phone_composer,
+    with_working_label,
 )
 
 # Memoised on value-equal inputs and stable callbacks: a render caused elsewhere on the screen
@@ -65,22 +65,18 @@ def dock_signature(**shape: Any) -> tuple[Any, ...]:
     return tuple(sorted(shape.items()))
 
 
-def _toggle_buttons(
+def _keyboard_toggle(
     *,
-    close_keyboard: Callable[..., Any],
-    composing: Callable[[], Any],
-    dismiss_composer_keyboard: Callable[[], None],
-    composer_focused: bool,
     in_control: bool,
     keyboard_closing: bool,
     mobile_mode: str,
     tier: str,
     toggle_keyboard: Callable[[], Any],
     tokens: dict[str, str],
-) -> tuple[Any, Any]:
-    """The Direct-keyboard and Compose icon buttons of the typing row."""
-    keyboard_button = ft.IconButton(
-        ft.Icons.KEYBOARD,
+) -> Any:
+    """The Direct-keyboard button of the typing row."""
+    return ft.IconButton(
+        ft.Icons.KEYBOARD_HIDE,
         key="agent-workflow-toggle",
         width=32,
         height=32,
@@ -94,21 +90,19 @@ def _toggle_buttons(
         disabled=not in_control,
         on_click=click(toggle_keyboard),
     )
-    compose_button = ft.IconButton(
-        ft.Icons.EDIT,
-        key="agent-compose-toggle",
-        width=32,
-        height=32,
-        icon_size=16,
-        padding=0,
-        tooltip=None if tier == "compact" else "Compose message",
-        on_click=click(
-            dismiss_composer_keyboard
-            if mobile_mode == "compose" and composer_focused
-            else lambda: close_keyboard(composing)
-        ),
+
+
+def _show_keyboard_icon(tokens: dict[str, str]) -> Any:
+    """An up arrow over a keyboard, as on the text box's show-keyboard button."""
+    return ft.Column(
+        tight=True,
+        spacing=0,
+        horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+        controls=[
+            ft.Icon(ft.Icons.KEYBOARD_ARROW_UP, size=12, color=tokens["muted"]),
+            ft.Icon(ft.Icons.KEYBOARD, size=16, color=tokens["muted"]),
+        ],
     )
-    return keyboard_button, compose_button
 
 
 def _typing_slot(typing_field: Any) -> ft.Container:
@@ -127,8 +121,6 @@ def _typing_slot(typing_field: Any) -> ft.Container:
 def build_phone_dock(
     *,
     agent_status: str,
-    agent_title: str,
-    attach_enabled: bool,
     attached_output: bool,
     blocked_review: PasteReview | None,
     blockers: tuple[str, ...],
@@ -136,13 +128,11 @@ def build_phone_dock(
     can_direct_type: Callable[[], bool] | None,
     can_send: bool,
     clear_paste_hint: Callable[[], Any],
-    close_keyboard: Callable[..., Any],
     comp_size: tuple[float, float],
     composer_focusable: bool,
     composer_closing: bool,
     composer_focused: bool,
     dismiss_composer_keyboard: Callable[[], None],
-    composing: Callable[[], Any],
     dark: bool,
     detail_width: float,
     direct_binding: Any,
@@ -152,6 +142,7 @@ def build_phone_dock(
     focus_handled: Any,
     focus_requests: Any,
     in_control: bool,
+    on_direct_focus: Callable[[], Any] | None = None,
     input_enabled: bool,
     input_mode: str,
     keyboard_closing: bool,
@@ -159,7 +150,6 @@ def build_phone_dock(
     markers: tuple[StagedMarker, ...],
     mobile_mode: str,
     modifier_states: dict[str, str] | None,
-    on_attach_picture: Any,
     on_cancel_blocked: Callable[[], Any],
     on_clear_error: Callable[[], Any],
     on_composer_focus: Callable[[bool], Any] | None,
@@ -174,7 +164,6 @@ def build_phone_dock(
     paste_hint: bool,
     paste_review: PasteReview | None,
     phone_lines: int,
-    picture_action: Any,
     pictures: tuple[Any, ...],
     send_then_leave: Callable[..., Any],
     set_comp_size: Callable[[tuple[float, float]], Any],
@@ -199,13 +188,13 @@ def build_phone_dock(
     text_box = compose or (idle and workflow == WORKFLOW_AGENT_COMPOSER)
     direct_row = mobile_mode == "direct" or (idle and workflow != WORKFLOW_AGENT_COMPOSER)
     # In control, the key bar is for Direct input; otherwise it serves read-only output.
-    key_bar_shown = (mobile_mode == "direct" if in_control else attached_output) and not compose
+    # Direct input keeps its field and keys while the phone keyboard is down.
+    direct = (
+        in_control and workflow == WORKFLOW_AGENT_DIRECT and mobile_mode in ("direct", "reading")
+    )
+    key_bar_shown = (direct if in_control else attached_output) and not compose
 
-    keyboard_button, compose_button = _toggle_buttons(
-        close_keyboard=close_keyboard,
-        composing=composing,
-        dismiss_composer_keyboard=dismiss_composer_keyboard,
-        composer_focused=composer_focused,
+    keyboard_button = _keyboard_toggle(
         in_control=in_control,
         keyboard_closing=keyboard_closing,
         mobile_mode=mobile_mode,
@@ -213,24 +202,29 @@ def build_phone_dock(
         toggle_keyboard=toggle_keyboard,
         tokens=tokens,
     )
-    bottom.append(
-        _KeyBar(
-            key="agent-mobile-keybar",
-            on_item=on_mobile_item or _ignore_item,
-            modifier_states=modifier_states or {},
-            enabled=keys_enabled and in_control and not terminal.selection.open,
-            on_paste=on_paste if in_control else None,
-            on_select=on_open_selection if attached_output else None,
-            visible=key_bar_shown,
-            medium=tier == "medium",
-            show_keys=show_key_row and in_control,
-            paste_key=AGENT_PASTE_KEY,
-        )
+    key_bar = _KeyBar(
+        key="agent-mobile-keybar",
+        on_item=on_mobile_item or _ignore_item,
+        modifier_states=modifier_states or {},
+        enabled=keys_enabled and in_control and not terminal.selection.open,
+        on_paste=on_paste if in_control else None,
+        on_select=on_open_selection if attached_output else None,
+        visible=key_bar_shown,
+        medium=tier == "medium",
+        show_keys=show_key_row and in_control,
+        paste_key=AGENT_PASTE_KEY,
     )
+    # Direct input gets the same "Agent is working" label as the text box, above its keys.
+    working = agent_status.lower() == "working"
+    bottom.append(with_working_label(key_bar, working and direct, tokens, key="direct-working"))
     typing_field = DirectTypingField(
         on_input=on_direct_input or on_input,
         on_transaction=on_direct_input,
-        visible=mobile_mode == "direct" and workflow == WORKFLOW_AGENT_DIRECT and in_control,
+        visible=direct,
+        on_focus=on_direct_focus,
+        # iOS raises its keyboard only for a tap on the field itself, so while the keyboard is
+        # down the keyboard icon sits inside the field; the separate button only closes it.
+        suffix_icon=_show_keyboard_icon(tokens) if direct and mobile_mode != "direct" else None,
         enabled=input_enabled
         and keys_enabled
         and in_control
@@ -255,15 +249,9 @@ def build_phone_dock(
         visible=direct_row,
         controls=[
             _typing_slot(typing_field),
-            ft.Semantics(label="Compose message", button=True, content=compose_button),
-            attach_button(
-                on_attach_picture,
-                enabled=attach_enabled,
-                action=picture_action,
-                compact=tier == "compact",
-            ),
             ft.Semantics(
                 key="agent-keyboard-semantics",
+                visible=not (direct and mobile_mode != "direct"),
                 button=True,
                 selected=mobile_mode == "direct" and not keyboard_closing,
                 label="Terminal keyboard",
@@ -297,7 +285,7 @@ def build_phone_dock(
         toggle=None,
         dark=dark,
         blocked=agent_status.lower() == "blocked",
-        working=agent_status.lower() == "working",
+        working=working and text_box,
         visible=text_box,
         focusable=text_box
         and composer_focusable
@@ -321,6 +309,8 @@ def build_phone_dock(
         signature = dock_signature(
             compose=compose,
             mobile_mode=mobile_mode,
+            workflow=workflow,
+            parts=(text_box, direct_row, key_bar_shown),
             in_control=in_control,
             attached_output=attached_output,
             chips=bool(pictures),
@@ -346,7 +336,9 @@ def build_phone_dock(
         def measured(e: Any) -> None:
             if split:
                 return
-            memo[signature] = e.height
+            # A hidden screen also measures 0; only a dock with nothing to show really is empty.
+            if e.height > 0 or not (text_box or direct_row or key_bar_shown):
+                memo[signature] = e.height
             if abs(e.width - dock_w) >= 2 or abs(e.height - spacer) >= 2:
                 set_comp_size((e.width, e.height))
 

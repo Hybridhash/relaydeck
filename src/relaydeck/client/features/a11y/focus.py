@@ -317,9 +317,9 @@ FOCUS_ORDER: dict[str, tuple[str, ...]] = {
         # Send is disabled while a review is open, so traversal skips it.
         "composer-send*",
     ),
-    # Paste review (Cancel before Paste) and Select Text (field, Copy, Done).
+    # Paste review (Cancel before Paste) and Select Text (native selection, Copy, Done).
     "paste-review": ("paste-review-cancel", "paste-review-confirm"),
-    "select-text": ("select-text-field", "select-text-copy", "select-text-close"),
+    "select-text": ("select-text-area", "select-text-copy", "select-text-close"),
     # Tools dock (key rows, modifiers, Text dismiss).
     "tools-dock": DOCK_KEY_ORDER,
     # Terminal window: header (Back on narrow layouts,
@@ -381,9 +381,6 @@ FOCUS_ORDER: dict[str, tuple[str, ...]] = {
         "detail-back",
         "detail-open",
     ),
-    # Login (single primary action, optional re-open).
-    "login": ("auth-sign-in", "auth-reopen*"),
-    "login-error": ("auth-retry*", "auth-cancel"),
     "shell-chooser": ("shell-choice-*",),
 }
 

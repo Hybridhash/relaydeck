@@ -36,11 +36,6 @@ def _modules() -> list[str]:
     return [m.name for m in pkgutil.iter_modules(components.__path__)]
 
 
-def test_old_single_module_is_gone_and_the_package_is_the_import_path() -> None:
-    assert not (PKG_DIR.parent / "components.py").exists()
-    assert (PKG_DIR / "__init__.py").is_file()
-
-
 @pytest.mark.parametrize("name", _modules())
 def test_every_module_has_a_docstring_and_stays_within_the_size_budget(name: str) -> None:
     path = PKG_DIR / f"{name}.py"

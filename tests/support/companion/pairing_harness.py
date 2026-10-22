@@ -7,9 +7,9 @@ from typing import Any
 
 import httpx
 
-from relaydeck.client.adapters.fake import FakeCredentialStore
 from relaydeck.client.features.pairing.service import PairingFlow
 from relaydeck.gateway.app import create_app
+from tests.support.fakes import FakeCredentialStore
 from tests.support.pairing import ORIGIN, foundation
 
 

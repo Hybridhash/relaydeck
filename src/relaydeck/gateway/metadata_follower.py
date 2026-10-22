@@ -62,7 +62,8 @@ class MetadataFollower:
                 self.wake.clear()
                 self.notified = False
             try:
-                await asyncio.wait_for(self.wake.wait(), timeout=heartbeat_s)
+                async with asyncio.timeout(heartbeat_s):
+                    await self.wake.wait()
             except TimeoutError:
                 return None
 

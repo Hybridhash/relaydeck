@@ -9,10 +9,10 @@ from collections import deque
 from collections.abc import Coroutine
 from typing import Any
 
-from relaydeck.client.adapters.fake import FakeClipboard
 from relaydeck.client.features.shell import ScriptedShellGatewayOps
 from relaydeck.client.features.sync.transport import TerminalSocket, TransportError
 from relaydeck.client.features.terminal.agent_session import AgentSession
+from tests.support.fakes import FakeClipboard
 from tests.support.host_harness import run
 
 

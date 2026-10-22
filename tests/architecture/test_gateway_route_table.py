@@ -7,15 +7,12 @@ from relaydeck.gateway.app import GatewayState, create_app
 from relaydeck.gateway.backend import FakeBackend
 
 ROUTES: list[tuple[str, str, tuple[str, ...], str]] = [
-    ("http", "/openapi.json", ("GET", "HEAD"), "openapi"),
-    ("http", "/docs", ("GET", "HEAD"), "swagger_ui_html"),
-    ("http", "/docs/oauth2-redirect", ("GET", "HEAD"), "swagger_ui_redirect"),
-    ("http", "/redoc", ("GET", "HEAD"), "redoc_html"),
     ("http", "/v1/pictures", ("POST",), "begin"),
     ("http", "/v1/pictures/{identifier}/content", ("PUT",), "upload"),
     ("http", "/v1/pictures/{identifier}", ("GET",), "result"),
     ("http", "/v1/pictures/{identifier}", ("DELETE",), "cancel"),
     ("http", "/healthz", ("GET",), "healthz"),
+    ("http", "/readyz", ("GET",), "readyz"),
     ("http", "/v1/pairing/requests", ("POST",), "request_pairing"),
     ("http", "/v1/pairing/{request_id}/status", ("POST",), "pairing_status"),
     ("http", "/v1/pairing/{request_id}/redeem", ("POST",), "redeem_pairing"),
@@ -28,6 +25,7 @@ ROUTES: list[tuple[str, str, tuple[str, ...], str]] = [
     ("http", "/v1/devices", ("GET",), "list_devices"),
     ("http", "/v1/devices/{device_id}", ("DELETE",), "delete_device"),
     ("http", "/v1/deep-links/resolve", ("POST",), "resolve_deep_link"),
+    ("http", "/v1/metrics", ("GET",), "server_metrics"),
     ("http", "/v1/enrollments", ("POST",), "create_enrollment"),
     ("http", "/v1/enrollments/{enrollment_id}", ("GET",), "enrollment_status"),
     ("http", "/v1/enrollments/{enrollment_id}/redeem", ("POST",), "redeem_enrollment"),

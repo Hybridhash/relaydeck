@@ -17,7 +17,7 @@ from relaydeck_terminal.terminal import TerminalOverflowError
 from relaydeck.client.features.inventory.routing import RouteBridge
 from relaydeck.client.features.sync.transport import TransportError
 from relaydeck.client.features.terminal.foreground_recovery import ForegroundRecovery
-from relaydeck.gateway import terminal_wire
+from relaydeck.contracts.wire import terminal as terminal_wire
 from tests.support.host_harness import run
 from tests.support.terminal.resume import _MuxConn, _open_term, _report, _write_payloads
 from tests.support.terminal.retained_transport import capture, mounted, requests, resource, until

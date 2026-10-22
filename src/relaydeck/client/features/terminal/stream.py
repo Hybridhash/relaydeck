@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from relaydeck.client.features.terminal.models import OLDER_OUTPUT_NOT_KEPT
 from relaydeck.contracts.wire.terminal import OutputChunk
 
 EVENT_DATA = "data"
@@ -31,7 +32,7 @@ ACTION_REATTACH = "reattach"
 EMULATOR_PRESERVED = "preserved"
 EMULATOR_FRESH = "fresh"
 
-INCOMPLETE_HISTORY = "History incomplete: reattached live; earlier output unavailable."
+INCOMPLETE_HISTORY = OLDER_OUTPUT_NOT_KEPT
 VIEWER_OVERFLOW_HISTORY = (
     "Output lost (viewer too slow): reattached live; earlier output unavailable."
 )

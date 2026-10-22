@@ -212,8 +212,9 @@ def mount_agent_screen(
 
     # Read the tick to render each session mutation.
     _ = tick
+    mobile = (width_tier or ("compact" if phone else "expanded")) != "expanded"
     mobile_item, modifier_states, mobile_input = use_mobile_key_actions(
-        session, active=(width_tier or ("compact" if phone else "expanded")) != "expanded"
+        session, active=mobile or (typing_split and touch)
     )
     picture_props = use_picture_attachment(session, mobile_input, expose_sources=True)
     paste_props = take_paste_props(picture_props)
@@ -331,6 +332,7 @@ def mount_agent_screen(
             functools.partial(_copy_selection, session, sheet_text), haptics
         ),
         on_close_selection=close_selection,
+        on_dismiss_notice=session.dismiss_notice,
         on_selection_change=move_selection,
         on_draft_change=callbacks["on_draft_change"],
         on_send=haptic_feedback.on_send(send_composer, haptics, lambda: _send_ready(session)),
@@ -364,6 +366,7 @@ def mount_agent_screen(
         on_disconnect=session.disconnect,
         on_reconnect=session.reconnect,
         on_paste=session.paste_from_clipboard,
+        on_paste_text=lambda text: session.request_paste(text, require_review=True),
         confirm_takeover=confirm_takeover,
         control_pending=session.control_pending,
         expected_size=session.expected_geometry,

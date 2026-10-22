@@ -9,13 +9,13 @@ from typing import Any
 import flet as ft
 import pytest
 
-from relaydeck.client.adapters.fake import FakeClipboard, FakeCredentialStore, FakeNotifications
 from relaydeck.client.adapters.ports import PushPermission
 from relaydeck.client.features.auth.service import ACCESS_KEY, REFRESH_KEY
 from relaydeck.client.features.pairing.service import PENDING_KEY
 from relaydeck.client.packaged import PackagedApp
 from relaydeck.client.packaged_runtime import PackagedRuntime
 from tests.support.companion.pairing_harness import Harness
+from tests.support.fakes import FakeClipboard, FakeCredentialStore, FakeNotifications
 from tests.support.host_harness import render_component
 from tests.support.sync.transport_fixtures import _wait
 from tests.support.ui.packaged import Connectivity, Preferences

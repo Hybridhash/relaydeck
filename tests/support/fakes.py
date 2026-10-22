@@ -1,7 +1,6 @@
-"""Deterministic fake port implementations for tests and development.
+"""Deterministic fake port implementations for tests.
 
-Scriptable permission/token/tap behavior with a fake clock. Never ships
-as a production backend: the app wires real adapters in AppRoot.
+Scriptable permission/token/tap behavior with a fake clock.
 """
 
 from __future__ import annotations
@@ -9,14 +8,10 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from relaydeck.client.adapters.ports import (
-    AuthCompletion,
     ClipboardPort,
     ConnectivityPort,
     ConnectivityState,
     CredentialStore,
-    IdentitySession,
-    LifecyclePort,
-    LifecycleState,
     NotificationPort,
     PushPermission,
     PushTap,
@@ -59,23 +54,6 @@ class FakeClipboard(ClipboardPort):
     async def set_text(self, value: str) -> None:
         self.writes.append(value)
         self.text = value
-
-
-class FakeLifecycle(LifecyclePort):
-    def __init__(self) -> None:
-        self._state = LifecycleState.FOREGROUND
-        self._listeners: list[Callable[[LifecycleState], None]] = []
-
-    def current(self) -> LifecycleState:
-        return self._state
-
-    def on_change(self, listener: Callable[[LifecycleState], None]) -> None:
-        self._listeners.append(listener)
-
-    def move_to(self, state: LifecycleState) -> None:
-        self._state = state
-        for listener in list(self._listeners):
-            listener(state)
 
 
 class FakeConnectivity(ConnectivityPort):
@@ -184,25 +162,3 @@ class FakeNotifications(NotificationPort):
 
     def set_initial_tap(self, tap: PushTap | None) -> None:
         self._initial_tap = tap
-
-
-class FakeIdentitySession(IdentitySession):
-    def __init__(self) -> None:
-        self._token: str | None = None
-        self.completions: list[AuthCompletion] = []
-        self.logouts = 0
-
-    async def authorization_url(self) -> str:
-        return "https://gateway.example/authorize?client=relaydeck-android"
-
-    async def complete_callback(self, completion: AuthCompletion) -> None:
-        self.completions.append(completion)
-        if completion.code and not completion.error:
-            self._token = f"token-for-{completion.code}"
-
-    async def access_token(self) -> str | None:
-        return self._token
-
-    async def logout(self) -> None:
-        self.logouts += 1
-        self._token = None

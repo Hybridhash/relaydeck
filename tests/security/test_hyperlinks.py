@@ -18,7 +18,7 @@ from pathlib import Path
 
 from relaydeck.client.features.terminal.projection import TerminalProjection
 from relaydeck.client.features.terminal.stream import TerminalByteStream
-from relaydeck.gateway import terminal_wire
+from relaydeck.contracts.wire import terminal as terminal_wire
 
 OSC8_LINK = b"\x1b]8;;https://evil.example/pwn\x1b\\click me\x1b]8;;\x1b\\"
 OSC8_BEL = b"\x1b]8;;https://evil.example/x\x07label\x1b]8;;\x07"
@@ -93,8 +93,8 @@ def test_no_url_or_command_sink_reachable_from_output() -> None:
 def test_auth_opener_fires_only_for_self_built_authorize_url() -> None:
     """open_url is called exactly once per explicit begin_login, with a
     URL built from trusted config -- never with output-derived text."""
-    from relaydeck.client.adapters.fake import FakeCredentialStore
     from relaydeck.client.features.auth.service import AuthService, GatewayConfig
+    from tests.support.fakes import FakeCredentialStore
 
     opened: list[str] = []
 

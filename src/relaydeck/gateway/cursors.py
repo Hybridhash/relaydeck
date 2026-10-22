@@ -13,14 +13,7 @@ import json
 from typing import Any
 
 from relaydeck.contracts.canonical import canonical_json
-
-# compat: remove in Q4-cleanup after remaining server/test importers migrate.
-from relaydeck.contracts.cursors import (
-    AFTER_SEQUENCE_HEADER as AFTER_SEQUENCE_HEADER,
-)
-from relaydeck.contracts.cursors import (
-    MAX_CURSOR_LEN as MAX_CURSOR_LEN,
-)
+from relaydeck.contracts.cursors import MAX_CURSOR_LEN
 
 # Authenticated SSE response: the server-verified replay boundary for the
 # requested opaque cursor, never an upstream Herdr field.

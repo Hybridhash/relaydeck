@@ -10,12 +10,12 @@ import flet as ft
 import httpx
 import pytest
 
-from relaydeck.client.adapters.fake import FakeClipboard, FakeCredentialStore, FakeNotifications
 from relaydeck.client.features.auth.service import REFRESH_KEY
 from relaydeck.client.packaged import PackagedApp
 from relaydeck.client.packaged_runtime import PackagedRuntime, ScopedDrafts, private_endpoint
 from relaydeck.gateway.app import create_app
 from tests.security.helpers import ALL_CAPS, NOW, make_state
+from tests.support.fakes import FakeClipboard, FakeCredentialStore, FakeNotifications
 from tests.support.host_harness import render_component, run
 from tests.support.sync.transport_fixtures import _wait
 from tests.support.ui.packaged import Connectivity, Preferences

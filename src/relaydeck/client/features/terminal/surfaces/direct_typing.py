@@ -163,6 +163,7 @@ def use_paste_fallback(
     open_keyboard: Callable[[], None],
     binding: Any,
     can_open: Callable[[], bool] | None,
+    on_unavailable: Callable[[], None] | None = None,
 ) -> tuple[Any, bool, Callable[[], None]]:
     hint, set_hint = ft.use_state(False)
     current = ft.use_ref(binding)
@@ -179,6 +180,9 @@ def use_paste_fallback(
         result = on_paste()
         if inspect.isawaitable(result):
             result = await result
+        if result == ClipboardReadStatus.UNAVAILABLE and on_unavailable is not None:
+            on_unavailable()  # a paste panel takes the platform paste instead of the field
+            return result
         if current.current == binding and (can_open is None or can_open()):
             set_hint(result == ClipboardReadStatus.UNAVAILABLE)
             if result == ClipboardReadStatus.UNAVAILABLE:
@@ -218,6 +222,8 @@ def DirectTypingField(
     on_transaction: DirectInput | None = None,
     paste_fallback: bool = False,
     on_input_handled: Callable[[], None] | None = None,
+    on_focus: Callable[[], Any] | None = None,
+    suffix_icon: Any = None,
 ) -> Any:
     """Controlled sentinel field; only explicit gestures request keyboard focus."""
     revision, set_revision = ft.use_state(0)
@@ -399,7 +405,7 @@ def DirectTypingField(
         value=editor_value,
         selection=ft.TextSelection(base_offset=editor_end, extent_offset=editor_end),
         hint_text="Type to terminal",
-        prefix="Type to terminal  ",
+        prefix=None if paste_fallback else "Type to terminal  ",  # one label, never both
         tooltip="Type directly to the terminal",
         text_size=15,
         # Multiline editing avoids Flutter's single-line
@@ -433,4 +439,6 @@ def DirectTypingField(
         on_selection_change=selection_change(acknowledge_reset),
         # Like the composer: tapping a key or button keeps the keyboard up.
         on_tap_outside=lambda _e: None,
+        on_focus=(lambda _e: on_focus()) if on_focus is not None else None,
+        suffix_icon=suffix_icon,
     )

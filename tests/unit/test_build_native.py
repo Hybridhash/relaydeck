@@ -105,8 +105,8 @@ def test_stage_applies_the_mobile_overrides(android_stage: Path) -> None:
     config = tomllib.loads((android_stage / "pyproject.toml").read_text())
     assert config["project"]["requires-python"] == ">=3.13,<3.15"
     deps = config["project"]["dependencies"]
-    assert "cffi==2.0.0" in deps and "msgpack==1.1.2" in deps
-    assert "cryptography==48.0.0" in deps
+    assert "msgpack==1.1.2" in deps and not any(d.startswith("cffi") for d in deps)
+    assert not any(d.startswith("cryptography") for d in deps)
     assert not any(d.startswith(("colorama", "fastapi", "uvicorn", "pytest")) for d in deps)
     overrides = config["tool"]["flet"]["flutter"]["pubspec"]["dependency_overrides"]
     assert overrides == {"jni_flutter": "1.0.3"}
@@ -120,10 +120,7 @@ def test_stage_applies_the_mobile_overrides(android_stage: Path) -> None:
 def test_stage_manifest_records_sources_pins_and_overrides(android_stage: Path) -> None:
     manifest = json.loads((android_stage / "source-manifest.json").read_text())
     assert manifest["platform"] == "android"
-    assert manifest["pin_overrides"]["applied"] == {
-        "cffi": "2.1.1 -> 2.0.0",
-        "msgpack": "1.2.3 -> 1.1.2",
-    }
+    assert manifest["pin_overrides"]["applied"] == {"msgpack": "1.2.3 -> 1.1.2"}
     assert manifest["build_python_version"] == "3.14"
     assert manifest["lock_sha256"] and manifest["root_manifest_sha256"]
     assert "src/relaydeck/client/main.py" in manifest["source_sha256"]
@@ -153,7 +150,7 @@ def test_ios_stage_applies_the_template_patch_through_the_runner(tmp_path: Path)
     manifest = json.loads((project / "source-manifest.json").read_text())
     assert manifest["template"] == f"{tmp_path}/tpl"
     deps = tomllib.loads((project / "pyproject.toml").read_text())["project"]["dependencies"]
-    assert "cffi==2.0.0" in deps
+    assert "msgpack==1.1.2" in deps
 
 
 def test_native_root_refuses_desktop_and_repository(monkeypatch: pytest.MonkeyPatch) -> None:

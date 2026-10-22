@@ -6,7 +6,6 @@ from __future__ import annotations
 
 from typing import Any
 
-from relaydeck.client.adapters.fake import FakeClipboard
 from relaydeck.client.features.shell import SHELL_EXITED, SHELL_LIVE, ScriptedShellGatewayOps
 from relaydeck.client.features.shell.ops import ShellOpError
 from relaydeck.client.features.shell.screen import (
@@ -15,6 +14,7 @@ from relaydeck.client.features.shell.screen import (
     mount_shell_screen,
 )
 from relaydeck.client.features.shell.session import ShellSession
+from tests.support.fakes import FakeClipboard
 from tests.support.host_harness import render_component, run
 from tests.support.terminal.sessions import _SocketFactory
 

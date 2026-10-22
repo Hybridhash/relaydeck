@@ -461,7 +461,9 @@ def test_handoff_waits_for_entire_old_handler_and_revalidates_identity(
         guards: list[FletGuardMiddleware] = []
         original_init = FletGuardMiddleware.__init__
 
-        def delayed_init(self: Any, app: Any, store: Any, ws_path: str = "/ws") -> None:
+        def delayed_init(
+            self: Any, app: Any, store: Any, ws_path: str = "/ws", state: Any = None
+        ) -> None:
             count = 0
 
             async def downstream(scope: Any, receive: Any, send: Any) -> None:
@@ -475,7 +477,7 @@ def test_handoff_waits_for_entire_old_handler_and_revalidates_identity(
                         draining.set()
                         await allow_cleanup.wait()
 
-            original_init(self, downstream, store, ws_path)
+            original_init(self, downstream, store, ws_path, state)
             guards.append(self)
 
         monkeypatch.setattr(FletGuardMiddleware, "__init__", delayed_init)

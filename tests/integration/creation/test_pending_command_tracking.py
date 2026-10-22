@@ -11,7 +11,6 @@ import flet as ft
 import httpx
 import pytest
 
-from relaydeck.client.adapters.fake import FakeClipboard, FakeCredentialStore
 from relaydeck.client.adapters.server_commands import ServerCommandStore
 from relaydeck.client.features.auth.service import REFRESH_KEY
 from relaydeck.client.features.composer.observation import CommandObserver
@@ -22,6 +21,7 @@ from relaydeck.client.pending_commands import MAX_BYTES, MAX_RECORDS, PendingCom
 from relaydeck.gateway.app import create_app
 from tests.security.helpers import ALL_CAPS, NOW, make_state
 from tests.support.creation.pending_command_records import command, record
+from tests.support.fakes import FakeClipboard, FakeCredentialStore
 from tests.support.host_harness import render_component, run
 from tests.support.sync.lifecycle import _agent
 from tests.support.ui.packaged import Preferences

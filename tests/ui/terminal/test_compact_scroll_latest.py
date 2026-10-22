@@ -7,6 +7,7 @@ from relaydeck_terminal import protocol
 
 from relaydeck.client.features.terminal.scrolling import MAX_ALT_PAGES, MAX_ALT_WHEEL_STEPS
 from tests.support.host_harness import run
+from tests.support.terminal.direct_typing import open_compose
 from tests.support.terminal.latch_text import _inputs
 from tests.support.terminal.scroll_ui import _app, _scroll_packets, _view
 from tests.support.ui.phone_terminal import _ancestry, _shape
@@ -137,7 +138,7 @@ def test_legacy_alt_no_mouse_gesture_key_tag_is_indistinguishable_from_physical_
         app, session, socket, channel = await _app(False, "compact")
         try:
             if compose:
-                await app.set_props_and_fire("agent-compose-toggle", {}, "click")
+                await open_compose(app)
             await _view(app, channel, alt=True, mouse=False)
             # Pinned xterm2 scroll_handler._sendScrollEvent invokes keyInput
             # for unhandled alt/no-mouse gestures. The extension's keyInput

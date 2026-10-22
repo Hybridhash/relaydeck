@@ -17,8 +17,9 @@ import threading
 from collections.abc import Callable, Collection, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Concatenate
 
+from relaydeck.contracts.schemas import EnrollmentState
 from relaydeck.persistence_contracts import KeyUnavailable, Record, StorageUnavailable, Table
 
 if TYPE_CHECKING:
@@ -33,9 +34,7 @@ LOG = logging.getLogger("relaydeck.gateway.identity")
 
 ACCESS_TTL_MS = 15 * 60 * 1000
 REFRESH_TTL_MS = 30 * 24 * 60 * 60 * 1000
-NONCE_TTL_MS = 10 * 60 * 1000
 TICKET_TTL_MS = 10 * 1000
-MAX_NONCES = 10_000
 MAX_SESSIONS = 100_000
 MAX_TICKETS = 10_000
 
@@ -55,40 +54,6 @@ def pkce_verify(verifier: str, challenge: str) -> bool:
     return secrets.compare_digest(expect, challenge)
 
 
-@dataclass
-class _Nonce:
-    scope: str
-    expires_ms: int
-
-
-@dataclass
-class NonceStore:
-    _nonces: dict[str, _Nonce] = field(default_factory=dict)
-
-    def issue(self, scope: str, now_ms: int, ttl_ms: int = NONCE_TTL_MS) -> str:
-        self._evict(now_ms)
-        if len(self._nonces) >= MAX_NONCES:
-            oldest = min(self._nonces, key=lambda k: self._nonces[k].expires_ms)
-            del self._nonces[oldest]
-        nonce = secrets.token_urlsafe(32)
-        self._nonces[nonce] = _Nonce(scope, now_ms + ttl_ms)
-        return nonce
-
-    def claim(self, nonce: str, scope: str, now_ms: int) -> bool:
-        entry = self._nonces.get(nonce)
-        if entry is None:
-            return False
-        if entry.scope != scope or entry.expires_ms < now_ms:
-            return False
-        del self._nonces[nonce]
-        return True
-
-    def _evict(self, now_ms: int) -> None:
-        expired = [k for k, v in self._nonces.items() if v.expires_ms < now_ms]
-        for key in expired:
-            del self._nonces[key]
-
-
 @dataclass(frozen=True)
 class Session:
     account: str
@@ -100,6 +65,20 @@ class Session:
     # Nonempty only for local device pairing: exact host enrollment binding.
     # These sessions never inherit other hosts owned by the local principal.
     host_binding: str = ""
+
+
+def _locked[**P, T](
+    method: Callable[Concatenate[SessionStore, P], T],
+) -> Callable[Concatenate[SessionStore, P], T]:
+    """Hold the store lock for the whole call: the in-memory maps are shared with
+    worker threads, and the lock is always taken before a storage transaction."""
+
+    def wrapper(self: SessionStore, /, *args: P.args, **kwargs: P.kwargs) -> T:
+        with self._lock:
+            return method(self, *args, **kwargs)
+
+    wrapper.__name__ = method.__name__
+    return wrapper
 
 
 @dataclass
@@ -194,6 +173,7 @@ class SessionStore:
             ):
                 raise StorageUnavailable("revision_conflict")
 
+    @_locked
     def _durable_session(self, token: str, kind: str) -> tuple[Session, str, str] | None:
         assert self.persistence is not None
         if not self.check_generation() or self.verifier(token) in self._denied:
@@ -247,6 +227,7 @@ class SessionStore:
             if json.loads(row.body)["sid_hash"] in removed:
                 tx.delete(row.table, row.key, expected_revision=row.revision)
 
+    @_locked
     def prepare_refresh(
         self,
         tx: Transaction,
@@ -284,6 +265,7 @@ class SessionStore:
         self._persist_pair(tx, pair, session, now_ms)
         return pair, session, access_hash, refresh_hash
 
+    @_locked
     def publish_refresh(self, result: tuple[tuple[str, str], Session, str, str]) -> None:
         pair, session, access_hash, refresh_hash = result
         self._known_pairs.pop(access_hash, None)
@@ -297,6 +279,7 @@ class SessionStore:
         self._refresh_to_access[pair[1]] = pair[0]
         self._known_pairs[self.verifier(pair[0])] = session, self.verifier(pair[1])
 
+    @_locked
     def begin_revocation(self, access: str, *, refresh: str = "") -> Session | None:
         """Fence locally before I/O; this metadata is ONLY for revocation."""
         hashed = self.verifier(access)
@@ -309,9 +292,11 @@ class SessionStore:
             self._denied.add(self.verifier(refresh))
         return self._pending_revocations.get(hashed) or self._by_access.get(access)
 
+    @_locked
     def pending_revocation(self, access: str) -> Session | None:
         return self._pending_revocations.get(self.verifier(access))
 
+    @_locked
     def revoke_in_transaction(
         self, tx: Transaction, access: str, *, scope: tuple[str, ...] | None = None
     ) -> Session | None:
@@ -343,6 +328,7 @@ class SessionStore:
             self._remove_web(tx, scope, {hashed})
         return session
 
+    @_locked
     def finish_revocation(self, access_hash: str) -> None:
         """Discard retry metadata ONLY after the transaction committed."""
         self._pending_revocations.pop(access_hash, None)
@@ -354,12 +340,13 @@ class SessionStore:
             if self.verifier(access) == access_hash:
                 self._refresh_to_access.pop(refresh, None)
 
+    @_locked
     def _revoke_durable(
         self, scope: tuple[str, ...], predicate: Callable[[Session], bool]
     ) -> tuple[Session, ...]:
         assert self.persistence is not None
         self._denied_scopes.add(scope)
-        with self._lock, self.persistence.transaction() as tx:
+        with self.persistence.transaction() as tx:
             dead: list[Session] = []
             hashes: set[str] = set()
             for row in self._rows(tx, Table.GATEWAY_VERIFIERS, scope):
@@ -387,9 +374,10 @@ class SessionStore:
                 self._refresh_to_access.pop(refresh, None)
         return tuple(dead)
 
+    @_locked
     def _revoke_one(self, access: str) -> Session | None:
         assert self.persistence is not None
-        with self._lock, self.persistence.transaction() as tx:
+        with self.persistence.transaction() as tx:
             session = self.revoke_in_transaction(tx, access)
         self.finish_revocation(self.verifier(access))
         if session is None:
@@ -398,6 +386,7 @@ class SessionStore:
             self._denied.discard(self.verifier(access))
         return session
 
+    @_locked
     def _account_sessions(self, account: str) -> tuple[Session, ...]:
         if self.persistence is None:
             return tuple(self._by_access.values())
@@ -416,6 +405,7 @@ class SessionStore:
                     sessions.append(decoded[0])
         return tuple(sessions)
 
+    @_locked
     def create(
         self,
         account: str,
@@ -439,7 +429,7 @@ class SessionStore:
                 device_id or f"dev_{secrets.token_urlsafe(16)}",
                 host_binding,
             )
-            with self._lock, self.persistence.transaction() as tx:
+            with self.persistence.transaction() as tx:
                 if not self.check_generation():
                     raise StorageUnavailable("unavailable")
                 self._persist_pair(tx, pair, session, now_ms)
@@ -462,6 +452,7 @@ class SessionStore:
         self._refresh_to_access[refresh] = access
         return access, refresh
 
+    @_locked
     def lookup(self, access: str, now_ms: int) -> Session | None:
         if self.persistence is not None:
             result = self._durable_session(access, "access")
@@ -474,6 +465,7 @@ class SessionStore:
             return None
         return session
 
+    @_locked
     def access_failure_reason(self, access: str, now_ms: int) -> str:
         decoded = self._durable_session(access, "access") if self.persistence is not None else None
         session = decoded[0] if decoded else self._by_access.get(access)
@@ -481,13 +473,14 @@ class SessionStore:
             return "access_expired"
         return "authority_changed"
 
+    @_locked
     def refresh(
         self, refresh: str, now_ms: int, *, allowed: Callable[[Session], bool] | None = None
     ) -> tuple[str, str] | None:
         """Rotate: the presented refresh token is invalidated and a new
         pair is issued. Reuse of a rotated token fails (no reuse window)."""
         if self.persistence is not None:
-            with self._lock, self.persistence.transaction() as tx:
+            with self.persistence.transaction() as tx:
                 result = self.prepare_refresh(tx, refresh, now_ms, allowed)
                 if result is not None:
                     self._remove_web(
@@ -515,6 +508,7 @@ class SessionStore:
             host_binding=session.host_binding,
         )
 
+    @_locked
     def revoke_paired_host(self, host_id: str) -> tuple[Session, ...]:
         if self.persistence is not None:
             return self._revoke_durable(
@@ -527,6 +521,7 @@ class SessionStore:
         ]
         return tuple(session for access in doomed if (session := self.revoke_session(access)))
 
+    @_locked
     def revoke_session(self, access_token: str) -> Session | None:
         """Revoke one session (logout); returns the dead session if any."""
         if self.persistence is not None:
@@ -540,6 +535,7 @@ class SessionStore:
             del self._refresh_to_access[refresh]
         return session
 
+    @_locked
     def revoke_account(self, account: str) -> int:
         if self.persistence is not None:
             return len(self._revoke_durable((self.origin, account), lambda s: True))
@@ -551,6 +547,7 @@ class SessionStore:
             del self._refresh_to_access[refresh]
         return len(doomed)
 
+    @_locked
     def revoke_device(self, account: str, device_id: str) -> int:
         if self.persistence is not None:
             return len(self._revoke_durable((self.origin, account, device_id), lambda s: True))
@@ -563,6 +560,7 @@ class SessionStore:
             self.revoke_session(access)
         return len(doomed)
 
+    @_locked
     def device_metadata(self, account: str, now_ms: int) -> dict[str, dict[str, Any]]:
         rows: dict[str, dict[str, Any]] = {}
         for session in self._account_sessions(account):
@@ -582,6 +580,7 @@ class SessionStore:
             row["refresh_expires_ms"] = max(row["refresh_expires_ms"], session.refresh_expires_ms)
         return rows
 
+    @_locked
     def _evict(self, now_ms: int) -> None:
         expired = [a for a, s in self._by_access.items() if s.refresh_expires_ms < now_ms]
         for access in expired:
@@ -590,6 +589,7 @@ class SessionStore:
         for refresh in stale:
             del self._refresh_to_access[refresh]
 
+    @_locked
     def notification_devices(
         self, account: str, host: str, now_ms: int, *, owned: bool = False
     ) -> frozenset[str]:
@@ -831,14 +831,16 @@ class EnrollmentStore:
             self._save_file()
             return claimed
 
-    def status(self, enrollment_id: str, account: str, now_ms: int) -> str | None:
+    def status(self, enrollment_id: str, account: str, now_ms: int) -> EnrollmentState | None:
         if self.path is not None:
             with _exclusive(self.path + ".lock"):
                 self._load_file(None)
                 return self._status_memory(enrollment_id, account, now_ms)
         return self._status_memory(enrollment_id, account, now_ms)
 
-    def _status_memory(self, enrollment_id: str, account: str, now_ms: int) -> str | None:
+    def _status_memory(
+        self, enrollment_id: str, account: str, now_ms: int
+    ) -> EnrollmentState | None:
         entry = self._items.get(enrollment_id)
         if entry is None or entry.enrollment.account != account:
             return None

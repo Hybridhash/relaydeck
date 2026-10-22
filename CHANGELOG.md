@@ -3,6 +3,34 @@
 User-visible changes by release. Versions follow the package version
 (`relaydeck --version`).
 
+## 0.2.4
+
+- **Phone Direct input**: the typing row keeps only the text field and the keyboard button, stays
+  put while the keyboard is down, and shows "Agent is working" above its keys. The page no longer
+  stays shifted after iOS scrolls it.
+- **iPad**: the typing column keeps the keyboard up and has the phone's keyboard button. Its tools
+  button replaces Keys and opens every terminal key, the input switch, paste, Select text and attach
+  above the keyboard. Select text follows the handles at every width.
+- **Reconnect**: an agent you left returns to your control when you reopen it after the app was
+  hidden. After a long time away, a gentler "older output not kept" notice has a close button.
+- **Paste on desktop browsers**: text copied outside the browser pastes into the composer and the
+  terminal, including in Firefox and Safari. Very large pastes are refused with a message.
+- **Fonts**: the web app ships Chinese, Japanese and Korean fallback fonts and Noto Sans Symbols,
+  with their licences in the app's notices. Fonts are cached until they change.
+- **Server health**: Settings shows an owner-only Server health panel with request counts and
+  timings, kept in memory only.
+- **Usage**: Muse refresh resumes one saved session in an empty, trusted folder, so a reading costs
+  no tokens; `relaydeck-companion usage install` helps trust that folder. A usage read waits for a
+  new shell's prompt before giving up.
+- **Gateway**: routes are grouped by area with one error format, request IDs and one logging setup.
+  API docs routes are off unless debugging, secret replies are never cached, and sign-in work runs
+  off the event loop.
+- **Dependencies**: Starlette 1.8, FastAPI 0.133, Pillow 13, cryptography 50 and the latest certifi
+  clear every known advisory. CI fails on any new one, and new releases are used only after seven
+  days. The phone and tablet apps no longer bundle cryptography.
+- **Quieter**: fewer log lines, no pasted text in debug logs, and the notifications banner checks
+  less often.
+
 ## 0.2.3
 
 - **Phone agent screen**: the header title opens the space's agents, with a count of working

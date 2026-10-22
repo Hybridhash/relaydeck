@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 import tomllib
 from collections.abc import Iterable
 from dataclasses import asdict, dataclass
@@ -18,6 +19,15 @@ from relaydeck.usage import hook_files as fs
 from relaydeck.usage.contracts import MAX_SOURCES
 from relaydeck.usage.hook_doctor import HookSource, doctor_sources
 from relaydeck.usage.hook_install import install_hook, uninstall_hook
+from relaydeck.usage.probe_setup import (
+    NOT_TRUSTED,
+    ProbeTarget,
+    ask_on_terminal,
+    doctor_line,
+    load_probe_targets,
+    offer_trust,
+    probe_state,
+)
 from relaydeck.usage.readers import READERS
 
 
@@ -112,7 +122,7 @@ def add_actions(subparsers: Any) -> None:
         "install", help="Stop other settings writers; JSON will be reformatted"
     )
     install.add_argument(
-        "--source", required=True, help="Configured kind/format; no directory discovery"
+        "--source", help="Configured kind/format; no directory discovery. Omit for probe folders"
     )
     install.add_argument(
         "--install-limits-hook", action="store_true", help="Separately authorize hook installation"
@@ -150,13 +160,35 @@ def run_usage(
     sources: Iterable[HookSource],
     *,
     hooks_dir: Path | None = None,
+    probes: Iterable[ProbeTarget] = (),
 ) -> int:
     entries = tuple(sources)
+    targets = tuple(probes)
     if args.usage_action == "doctor":
-        print(json.dumps({"sources": doctor_sources(entries, hooks_dir=hooks_dir)}, indent=2))
+        report: dict[str, Any] = {"sources": doctor_sources(entries, hooks_dir=hooks_dir)}
+        if targets:
+            states = [(t, probe_state(t)) for t in targets]
+            report["probe_folders"] = [
+                {"tool": t.kind, "path": str(t.folder), "state": state} for t, state in states
+            ]
+            for t, state in states:
+                print(doctor_line(t, state), file=sys.stderr)
+        print(json.dumps(report, indent=2))
         return 0  # Diagnostic states are data, not infrastructure/prerequisite probes.
     if args.usage_action == "repair":
-        return _run_repair(args, entries, hooks_dir)
+        code = _run_repair(args, entries, hooks_dir)
+        for t in targets:
+            if probe_state(t) == NOT_TRUSTED:
+                offer_trust(t, ask=ask_on_terminal)
+        return code
+    if args.usage_action == "install":
+        for t in targets:
+            offer_trust(t, ask=ask_on_terminal)
+        if args.source is None:
+            if targets:
+                return 0
+            print(json.dumps({"state": "not_configured"}))
+            return 1
     selected = [s for s in entries if f"{s.kind}/{s.format}" == args.source]
     if (
         len(selected) != 1
@@ -164,6 +196,10 @@ def run_usage(
         or selected[0].limits_settings is None
         or selected[0].limits_cache is None
     ):
+        # A tool that has only a probe folder has no hook to install.
+        probe_only = len(selected) == 1 and any(t.kind == selected[0].kind for t in targets)
+        if probe_only:
+            return 0
         print(json.dumps({"state": "not_configured"}))
         return 1
     source = selected[0]
@@ -240,7 +276,7 @@ def run_configured_usage(args: argparse.Namespace) -> int:
     except (OSError, ValueError, TypeError, RecursionError, fs.HookFileError):
         print(json.dumps({"state": "config_unavailable"}))
         return 2
-    return run_usage(args, sources)
+    return run_usage(args, sources, probes=load_probe_targets(Path(args.config).expanduser()))
 
 
 if __name__ == "__main__":

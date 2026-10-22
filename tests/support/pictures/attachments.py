@@ -82,11 +82,38 @@ def install_picker(monkeypatch: pytest.MonkeyPatch, api: _Api, on_upload: Any = 
     return calls
 
 
+SHELL_ATTACH = "terminal-attach-picture"
+TOOLS_ATTACH = "tools-attach-picture"
+
+
+def attach_key(app: Any, key: str = SHELL_ATTACH) -> str:
+    """The attach control this screen has: the shell's (or wide layout's) own button when it
+    exists, otherwise the phone agent's action in the tools popover."""
+    try:
+        app.find(key)
+    except KeyError:
+        if key == SHELL_ATTACH:
+            return TOOLS_ATTACH
+    return key
+
+
+def attach_control(app: Any, key: str = SHELL_ATTACH) -> Any:
+    return app.find(attach_key(app, key))
+
+
+async def click_attach(app: Any, key: str = SHELL_ATTACH) -> None:
+    """Click attach; on the phone agent screen that means tools button, then the action."""
+    real = attach_key(app, key)
+    if real == TOOLS_ATTACH:
+        await app.set_props_and_fire("terminal-tools-button", {}, "click")
+    await app.set_props_and_fire(real, {}, "click")
+
+
 async def choose(app: Any, key: str, path: Path | None = None) -> None:
-    action = app.find(key).action
+    action = attach_control(app, key).action
     assert isinstance(action, ft.PickFiles)
     assert action.allow_multiple is False and action.file_type is ft.FilePickerFileType.IMAGE
-    await app.set_props_and_fire(key, {}, "click")
+    await click_attach(app, key)
     # The native action's pinned result payload follows its click event.
     await app.session.dispatch_event(
         action.file_picker._i,

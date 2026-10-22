@@ -523,6 +523,19 @@ class RelayDeckTerminal(LayoutControl):
                 bool(flags & 16),
                 viewport,
             )
+        elif packet.kind == protocol.PAGE_METRICS:
+            try:
+                reset, scroll, offset, height, window = protocol.decode_page_metrics(packet.payload)
+            except ValueError:
+                return
+            logging.getLogger("relaydeck.client.typing_split").info(
+                "page_metrics reset=%s scroll=%s vv_offset=%s vv=%s window=%s",
+                bool(reset),
+                scroll,
+                offset,
+                height,
+                window,
+            )
         elif packet.kind == protocol.SELECTION_TEXT:
             text = packet.payload.decode("utf-8", errors="replace")
             if self._selection_waiters:

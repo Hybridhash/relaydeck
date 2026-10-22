@@ -12,10 +12,10 @@ from collections import deque
 from dataclasses import dataclass, field
 from typing import Any
 
-from relaydeck.client.adapters.fake import FakeClipboard
 from relaydeck.client.features.shell.ops import ScriptedShellGatewayOps
 from relaydeck.client.features.sync.transport import TerminalSocket, TransportError
 from relaydeck.client.sessions import SessionFactory
+from tests.support.fakes import FakeClipboard
 
 
 class ScriptedTerminalSocket(TerminalSocket):

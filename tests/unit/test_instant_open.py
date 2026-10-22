@@ -16,7 +16,7 @@ from relaydeck.client.features.terminal.screen_cache import (
 )
 from relaydeck.client.features.terminal.warm_watch import watch_only
 from relaydeck.client.retained_sessions import SLOT_IDLE_MS, RetainedSessions
-from relaydeck.gateway import terminal_wire
+from relaydeck.contracts.wire import terminal as terminal_wire
 from tests.support.scripted_sessions import make_scripted_sessions
 from tests.support.ui.instant_open import jobs
 

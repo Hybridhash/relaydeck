@@ -83,8 +83,6 @@ class RefreshOutcome:
 
 
 UsageFetch = Callable[[UsageQuery], Awaitable[Mapping[str, object]]]
-# (host_id, kind) -> outcome. Never raises: a failed request is `RefreshOutcome("error", ...)`.
-LimitsRefreshCall = Callable[[str, str], Awaitable[RefreshOutcome]]
 IsCurrent = Callable[[], bool]
 
 

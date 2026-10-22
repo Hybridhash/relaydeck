@@ -7,7 +7,6 @@ import flet as ft
 import pytest
 from flet.messaging.protocol import MessageAction
 
-from relaydeck.client.adapters.fake import FakeCredentialStore
 from relaydeck.client.features.composer.pictures import Picture
 from relaydeck.client.features.inventory.routing import RouteBridge
 from relaydeck.client.features.lifecycle.persist import draft_key, pause_persist
@@ -16,6 +15,7 @@ from relaydeck.client.features.terminal.input_modes import (
     WORKFLOW_AGENT_DIRECT,
 )
 from relaydeck.client.features.terminal.surfaces import mount_agent_screen
+from tests.support.fakes import FakeCredentialStore
 from tests.support.host_harness import render_component, run
 from tests.support.pictures.attachments import (
     IDENTIFIER,
@@ -26,6 +26,7 @@ from tests.support.pictures.attachments import (
     install_picker,
 )
 from tests.support.sync.transport_fixtures import _wait
+from tests.support.terminal.direct_typing import open_compose
 from tests.support.terminal.sessions import _agent_session
 from tests.support.ui.retained_root import _active, _render
 
@@ -51,6 +52,12 @@ def test_staging_compose_picture_from_reading_reveals_phone_draft(
             if not in_control:
                 with pytest.raises(KeyError):
                     _active(app, "composer-draft")
+                # Attach lives in the tools popover, which needs control: while only
+                # watching there is no way to stage a picture and the draft stays hidden.
+                with pytest.raises(KeyError):
+                    app.find("terminal-tools-button")
+                assert session.store.pictures == ()
+                return
             terminal = session.current_term
             token = session.input_token
             before = (len(ops.attaches), len(ops.leases), len(sockets.sockets))
@@ -123,12 +130,24 @@ def test_delayed_root_draft_restore_stays_reading_then_fresh_attach_reveals(
                 await app.settle()
                 with pytest.raises(KeyError):
                     _active(app, "composer-draft")
+            # The tools popover needs control, so take it first; the attach itself then
+            # must neither take control again nor open another stream.
+            await app.set_props_and_fire("agent-takeover-confirm", {}, "click")
+            counts = (
+                len(scripted.ops.attaches),
+                len(scripted.ops.leases),
+                len(scripted.streams.opened),
+            )
             await choose(app, "terminal-attach-picture")
             assert _active(app, "picture-chip-" + "b" * 32).controls[0].src == PREVIEW
             assert _active(app, "composer-draft").value == "securely restored\ntext 😀"
-            assert session.current_term is terminal and session.input_token is None
-            assert not scripted.ops.attaches and not scripted.ops.leases and not scripted.submitted
-            assert not scripted.streams.opened
+            assert session.current_term is terminal
+            assert counts == (
+                len(scripted.ops.attaches),
+                len(scripted.ops.leases),
+                len(scripted.streams.opened),
+            )
+            assert not scripted.submitted
             assert not any(
                 msg.action == MessageAction.INVOKE_METHOD and msg.body.name == "focus"
                 for msg in app.conn.sent
@@ -236,12 +255,14 @@ def test_suppressed_picture_additions_cannot_reveal_later(
     run(scenario())
 
 
-def test_pencil_opened_compact_compose_field_has_no_tooltip() -> None:
+def test_tools_opened_compact_compose_field_has_no_tooltip() -> None:
     async def scenario() -> None:
         session, _ops, _sockets, _submitted = _agent_session()
+        session.open()
+        await session.confirm_takeover()  # the tools popover needs control
         app: Any = await render_component(mount_agent_screen, session, phone=True)
         try:
-            await app.set_props_and_fire("agent-compose-toggle", {}, "click")
+            await open_compose(app)
             assert _active(app, "composer-draft").tooltip is None
         finally:
             await session.dispose()

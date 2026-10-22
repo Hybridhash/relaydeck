@@ -147,7 +147,7 @@ def test_qr_origin_policy() -> None:
 def test_plaintext_endpoint_policy() -> None:
     """Client gateway endpoints: TLS by default, plaintext only for
     loopback or an explicitly allowlisted host (owner-authorized)."""
-    from relaydeck.gateway.policy import is_trusted_endpoint
+    from relaydeck.contracts.endpoints import is_trusted_endpoint
 
     assert is_trusted_endpoint("https://gw.example", frozenset()) is True
     assert is_trusted_endpoint("wss://gw.example/x", frozenset()) is True

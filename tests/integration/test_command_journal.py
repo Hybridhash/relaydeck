@@ -26,10 +26,10 @@ from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 from websockets.exceptions import ConnectionClosed
 
-import relaydeck.gateway.app as app_module
+import relaydeck.gateway.api.sockets as sockets_module
 from relaydeck.connector.journal import ConnectorDispatch
 from relaydeck.contracts.schemas import GATEWAY_PROTOCOL, validate
-from relaydeck.gateway import terminal_wire
+from relaydeck.contracts.wire import terminal as terminal_wire
 from relaydeck.gateway.app import GatewayState, create_app
 from relaydeck.gateway.production import JournalBackend
 from relaydeck.journal import (
@@ -796,7 +796,7 @@ def test_tunnel_forged_host_field_closes_and_leaves_record(tmp_path: Path) -> No
 
 
 def test_negative_auth_result_for_undispatched_refused(tmp_path: Path, monkeypatch: Any) -> None:
-    monkeypatch.setattr(app_module, "TUNNEL_POLL_S", 3600.0)
+    monkeypatch.setattr(sockets_module, "TUNNEL_POLL_S", 3600.0)
     state, backend, journal = _seed(tmp_path)
     try:
         client = TestClient(create_app(state))
@@ -1159,7 +1159,7 @@ def test_live_push_subscribe_publish_unsubscribe(tmp_path: Path) -> None:
 
 
 def test_slow_socket_overflow_disconnects(tmp_path: Path, monkeypatch: Any) -> None:
-    monkeypatch.setattr(app_module, "TERMINAL_PUSH_POLL_S", 3600.0)
+    monkeypatch.setattr(sockets_module, "TERMINAL_PUSH_POLL_S", 3600.0)
 
     async def scenario() -> None:
         state, backend, _ = _seed(tmp_path)

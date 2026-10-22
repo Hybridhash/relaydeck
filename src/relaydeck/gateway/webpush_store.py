@@ -31,7 +31,6 @@ from relaydeck.gateway.push import ProviderOutcome, ProviderPort
 MAX_ROUTE_CHARS = 64
 ROUTE_PREFIX = "wp_"
 RETRY_LIFETIME_MS = webpush.MAX_RETRY_MS
-TTL_MS_CAP = webpush.MAX_TTL_SECONDS * 1000
 BACKOFF_BASE_MS = 30_000
 BACKOFF_CAP_MS = 15 * 60_000
 ROUTE_LIFETIME_MS = 24 * 60 * 60 * 1000

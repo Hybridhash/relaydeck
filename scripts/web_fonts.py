@@ -7,13 +7,15 @@ otherwise).
 The engine fetches fallback fonts from ``<fontFallbackBaseUrl><family>/v<N>/<file>``,
 which is ``assets/fonts/`` locally. This script extracts the engine's path list
 from the built ``main.dart.js`` (version segments move with Flutter) and vendors
-each file from gstatic through the cache. CJK is excluded by default (size).
+each file from gstatic through the cache. The web build enables all five CJK families.
 Every font is structurally validated (WOFF2 header, table directory, compressed
 stream, metadata/private blocks; sfnt table directory) before it reaches OUT or
 the cache, and any fetch or validation failure fails the build loudly.
 It was the last heredoc of ``scripts/build_web_client.sh``; the CLI is unchanged.
 """
 
+import hashlib
+import json
 import os
 import re
 import struct
@@ -23,6 +25,11 @@ import urllib.request
 from pathlib import Path
 
 CJK = ("notosanskr/", "notosansjp/", "notosanshk/", "notosanstc/", "notosanssc/")
+FONT_NOTICES = (
+    Path(__file__).resolve().parents[1]
+    / "src/relaydeck/client/assets/design_system/fonts/web-fallback-notices.json"
+)
+NOTICE_MARKER = "\n\n" + "=" * 80 + "\nRelayDeck web fallback font notices\n\n"
 
 
 class FontError(Exception):
@@ -246,6 +253,40 @@ def _install(data: bytes, dest: Path) -> None:
         raise
 
 
+def _notices(paths: list[str]) -> dict[str, str]:
+    manifest = json.loads(FONT_NOTICES.read_text())
+    notices: dict[str, str] = {}
+    for family in sorted({path.split("/")[0] for path in paths}):
+        row = manifest.get(family, {})
+        text = row.get("text", "")
+        if (
+            not text.startswith("Copyright")
+            or "SIL OPEN FONT LICENSE Version 1.1" not in text
+            or "TERMINATION" not in text
+            or "DISCLAIMER" not in text
+            or hashlib.sha256(text.encode()).hexdigest() != row.get("sha256")
+        ):
+            raise FontError(f"missing or invalid fallback font notice: {family}")
+        notices[family] = f"{family}\nSource: {row['url']}\n\n{text}"
+    return notices
+
+
+def _write_notices(out: Path, paths: list[str]) -> None:
+    # Include any fallback files retained from an earlier run against this OUT too.
+    root = out / "assets" / "fonts"
+    installed = [str(path.relative_to(root)) for path in root.glob("*/v*/*") if path.is_file()]
+    notices = _notices(paths + installed)
+    dest = out / "assets" / "NOTICES"
+    existing = dest.read_text() if dest.exists() else ""
+    base = existing.split(NOTICE_MARKER, 1)[0]
+    separator = "\n\n" + "=" * 80 + "\n"
+    _install((base + NOTICE_MARKER + separator.join(notices.values())).encode(), dest)
+    packaged = dest.read_text()
+    if any(text not in packaged for text in notices.values()):
+        raise FontError("fallback font notices packaging check failed")
+    print(f"fallback font notices: {len(notices)}/{len(notices)} families verified -> {dest}")
+
+
 def main(argv: list[str]) -> None:
     out, cache, cjk = Path(argv[1]), Path(argv[2]), argv[3] == "1"
     js = (out / "main.dart.js").read_text()
@@ -253,6 +294,9 @@ def main(argv: list[str]) -> None:
     assert paths, "no fallback font paths found in main.dart.js"
     if not cjk:
         paths = [p for p in paths if not p.startswith(CJK)]
+    elif {p.split("/")[0] + "/" for p in paths if p.startswith(CJK)} != set(CJK):
+        raise FontError("CJK fallback families must include all five families")
+    _notices(paths)  # Fail before publishing a font whose licence notice is missing.
     total = 0
     for rel in paths:
         dest = out / "assets" / "fonts" / rel
@@ -279,6 +323,7 @@ def main(argv: list[str]) -> None:
         _install(data, dest)
         _check_font(dest.read_bytes(), dest.suffix)  # never publish a truncated file
         total += dest.stat().st_size
+    _write_notices(out, paths)
     print(
         f"fallback fonts: {len(paths)} files, {total} bytes "
         f"(cjk={'on' if cjk else 'off'}) -> {out}/assets/fonts/"

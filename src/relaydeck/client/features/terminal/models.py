@@ -11,8 +11,8 @@ STATUS_CONNECTING = "connecting"
 STATUS_RECONNECTING = "reconnecting"
 STATUS_RESET = "reset"
 
-TONE_INFO = "info"
 TONE_WARN = "warning"
+OLDER_OUTPUT_NOT_KEPT = "Older output not kept while away."
 
 
 @dataclass(frozen=True)
@@ -29,6 +29,12 @@ class ScrollModel:
 class NoticeModel:
     tone: str
     text: str
+    dismissible: bool = False
+
+
+def history_notice(text: str) -> NoticeModel:
+    """Warning notice; the gentle older-output one can be dismissed."""
+    return NoticeModel(TONE_WARN, text, dismissible=text == OLDER_OUTPUT_NOT_KEPT)
 
 
 @dataclass(frozen=True)
@@ -105,7 +111,7 @@ def apply_reset(state: TerminalViewState, notice_text: str) -> TerminalViewState
     return replace(
         state,
         status=STATUS_RESET,
-        notice=NoticeModel(TONE_WARN, notice_text),
+        notice=history_notice(notice_text),
         scroll=ScrollModel(stick_to_bottom=True, unseen_bytes=0),
     )
 

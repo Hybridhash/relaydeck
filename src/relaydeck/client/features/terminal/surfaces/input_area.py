@@ -33,6 +33,7 @@ from relaydeck.client.features.terminal.pictures import (
     attach_button,
     picture_chips,
 )
+from relaydeck.client.features.terminal.surfaces.tools_popover import tools_button
 
 if TYPE_CHECKING:
     from relaydeck.client.features.composer.domain import StagedMarker
@@ -61,8 +62,7 @@ def _measure_composer(
     set_comp_size: Callable[[tuple[float, float]], Any],
     set_split_comp_h: Callable[[float], Any],
 ) -> None:
-    """The split dock is anchored under the composer frame, so the split
-    records its height; the normal layout keeps its width/height measurement."""
+    """Record frame measurements separately for split and normal slot geometry."""
     if split:
         if abs(e.height - split_comp_h) >= 2:
             set_split_comp_h(e.height)
@@ -90,6 +90,7 @@ def build_expanded_input(
     input_mode: str,
     keep_typing: Callable[..., Any],
     keyboard: str,
+    keyboard_up: bool,
     markers: tuple[StagedMarker, ...],
     on_attach_picture: Any,
     on_cancel_blocked: Callable[[], Any],
@@ -99,6 +100,8 @@ def build_expanded_input(
     on_confirm_blocked: Callable[[], Any],
     on_draft_change: Callable[[str], Any],
     on_keyboard_change: Callable[[str], Any],
+    on_tools: Callable[[], Any],
+    tools_open: bool,
     on_remove_picture: Any,
     on_workflow_change: Callable[[str], Any],
     pad: float,
@@ -114,7 +117,6 @@ def build_expanded_input(
     split: bool,
     split_comp_h: float,
     split_ctl_height: float,
-    split_dock: Any,
     split_side_width: float,
     split_top: float,
     submission: str,
@@ -151,6 +153,7 @@ def build_expanded_input(
                 chips=picture_chips(pictures, on_remove_picture) if pictures else None,
                 on_focus_change=on_composer_focus,
                 fill_lines=expanded_lines if split else WIDE_DRAFT_LINES,
+                keyboard=("hide" if keyboard_up else "show") if split else "",
             ),
         )
     else:
@@ -174,7 +177,11 @@ def build_expanded_input(
         ),
     )
     axes_controls: list[Any] = [workflow_switch, input_body]
-    if collapse_keys or split:
+    if split:
+        axes_controls.insert(
+            0, tools_button(keep_typing(on_tools), opened=tools_open, key="agent-tools-toggle")
+        )
+    elif collapse_keys:
         # The collapsed key row becomes one toggle that reopens the
         # dock (same keyboard flip as the More keys pill).
         axes_controls.insert(
@@ -292,8 +299,6 @@ def build_expanded_input(
             ),
         )
         slot_children.extend([cluster, composer_slot])
-        if split and split_dock is not None:
-            slot_children.append(split_dock)
         bottom.append(
             ft.Container(
                 key="agent-input-spacer",

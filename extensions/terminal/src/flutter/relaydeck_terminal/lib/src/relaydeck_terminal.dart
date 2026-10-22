@@ -47,6 +47,7 @@ const _kKeyboardTrace = 0x89;
 // (viewer sends, never the PTY; seq 0 at mount proves the capability).
 const _kCancelScroll = 0x10;
 const _kScrollCancelled = 0x8A;
+const _kPageMetrics = 0x8B;
 
 const _kInput = 0x81;
 const _kSizeReport = 0x82;
@@ -233,6 +234,7 @@ class _RelayDeckTerminalControlState extends State<RelayDeckTerminalControl>
   bool _buttonDownShown = false;
   bool _buttonGestureActive = false;
   final _keyboardTraceSamples = <Timer>{};
+  void Function()? _unwatchPage;
   // Native keyboard button: shown only when Python enables it.
   bool _keyboardButton = false;
   final _focusNode = FocusNode();
@@ -272,6 +274,7 @@ class _RelayDeckTerminalControlState extends State<RelayDeckTerminalControl>
   void initState() {
     super.initState();
     _focusNode.addListener(_onFocusChanged);
+    if (_touch) _unwatchPage = watchPage(_onPageChanged);
     _applyFocusGate();
     final random = Random();
     _nativeInstanceId =
@@ -367,13 +370,14 @@ class _RelayDeckTerminalControlState extends State<RelayDeckTerminalControl>
 
   @override
   void dispose() {
+    _unwatchPage?.call();
     for (final timer in _keyboardTraceSamples) {
       timer.cancel();
     }
     _keyboardTraceSamples.clear();
     _focusNode.removeListener(_onFocusChanged);
     final paste = PicturePasteSource.shared.dispatcher;
-    if (identical(paste.terminalPaste, _pasteFromBrowser)) paste.terminalPaste = null;
+    if (paste.terminalFocused == _hasFocus) paste.terminalFocused = null;
     _focusNode.dispose();
     _terminal.removeListener(_scheduleViewReport);
     _terminal.removeListener(_swipeWatchMode);
@@ -398,9 +402,9 @@ class _RelayDeckTerminalControlState extends State<RelayDeckTerminalControl>
     _sendKeyboardTrace(_focusNode.hasFocus ? 4 : 5);
     final paste = PicturePasteSource.shared.dispatcher;
     if (_focusNode.hasFocus) {
-      paste.terminalPaste = _pasteFromBrowser;
-    } else if (identical(paste.terminalPaste, _pasteFromBrowser)) {
-      paste.terminalPaste = null;
+      paste.terminalFocused = _hasFocus;
+    } else if (paste.terminalFocused == _hasFocus) {
+      paste.terminalFocused = null;
     }
     if (!_focusNode.hasFocus &&
         _keyboardArmed &&
@@ -443,12 +447,38 @@ class _RelayDeckTerminalControlState extends State<RelayDeckTerminalControl>
     _channel?.send(packet);
   }
 
+  void _onPageChanged() {
+    if (!mounted) return;
+    final before = pageMetrics();
+    if (pinPageTop()) _sendPageMetrics(true, before);
+  }
+
+  void _sendPageMetrics(bool reset, List<double>? metrics) {
+    if (!_touch || !mounted || metrics == null) return;
+    int signed(double v) =>
+        v.isFinite ? v.round().clamp(-32768, 32767).toInt() : 0;
+    int size(double v) =>
+        v.isFinite ? v.round().clamp(0, 0xFFFE).toInt() : 0xFFFF;
+    final packet = Uint8List(10);
+    ByteData.sublistView(packet)
+      ..setUint8(0, _kPageMetrics)
+      ..setUint8(1, reset ? 1 : 0)
+      ..setInt16(2, signed(metrics[0]))
+      ..setInt16(4, signed(metrics[1]))
+      ..setUint16(6, size(metrics[2]))
+      ..setUint16(8, size(metrics[3]));
+    _channel?.send(packet);
+  }
+
   void _scheduleKeyboardTraceSample() {
     if (!_touch) return;
     late final Timer timer;
     timer = Timer(const Duration(milliseconds: 400), () {
       _keyboardTraceSamples.remove(timer);
-      if (mounted) _sendKeyboardTrace(9);
+      if (mounted) {
+        _sendKeyboardTrace(9);
+        _sendPageMetrics(false, pageMetrics());
+      }
     });
     _keyboardTraceSamples.add(timer);
   }
@@ -836,10 +866,10 @@ class _RelayDeckTerminalControlState extends State<RelayDeckTerminalControl>
       _sendInput(_kOriginKey, Uint8List.fromList([0x0A]));
       return KeyEventResult.handled;
     }
-    // A clipboard picture reaches the page only as a browser paste event, which a
-    // handled Cmd/Ctrl+V would suppress. While a picture region owns focus the
-    // shortcut is left to the browser; a text-only paste event is routed back into
-    // the terminal's own paste (_pasteFromBrowser) exactly once.
+    // The clipboard reaches the page only as a browser paste event, which a
+    // handled Cmd/Ctrl+V would suppress. While a paste region owns focus the
+    // shortcut is left to the browser; the region then offers a picture, or sends
+    // text to Python's reviewed paste exactly once (never xterm's raw paste).
     if (kIsWeb &&
         event is KeyDownEvent &&
         event.logicalKey == LogicalKeyboardKey.keyV &&
@@ -853,13 +883,7 @@ class _RelayDeckTerminalControlState extends State<RelayDeckTerminalControl>
     return KeyEventResult.ignored;
   }
 
-  // The same paste xterm's own shortcut performs, fed from the paste event's text.
-  bool _pasteFromBrowser(String text) {
-    if (!mounted) return false;
-    _terminal.paste(text);
-    _controller.clearSelection();
-    return true;
-  }
+  bool _hasFocus() => mounted && _focusNode.hasFocus && _inputEnabled;
 
   void _sendInput(int origin, Uint8List bytes) {
     // Fresh non-mouse input obsoletes any queued wheel run: keystrokes
@@ -1300,6 +1324,7 @@ class _RelayDeckTerminalControlState extends State<RelayDeckTerminalControl>
           fontFamilyFallback: const [
             'JetBrains Mono',
             'Noto Sans Symbols 2',
+            'Noto Sans Symbols',
             'monospace',
           ],
         ),

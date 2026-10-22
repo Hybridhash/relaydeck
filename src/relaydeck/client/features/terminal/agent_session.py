@@ -558,9 +558,15 @@ class AgentSession(TerminalSessionBase):
         self._notify()
         return TAKEOVER_DISCLOSURE_AGENT
 
+    def _live_edge_owns_recovery(self) -> bool:
+        # A parked viewer's pending live-edge resume must not swallow the takeover replacing it.
+        controller, lease = self._controller, self._lease
+        pending = controller is not None and controller.live_edge_pending
+        return pending and lease is not None and lease.mode == "control"
+
     async def auto_take_control(self) -> str:
         """Take unheld control automatically; conflicts and unknown ownership stay explicit."""
-        if self._controller is not None and self._controller.live_edge_pending:
+        if self._live_edge_owns_recovery():
             return await self.drive_recovery()
         return await terminal_transition(self).automatic(self)
 
@@ -568,7 +574,7 @@ class AgentSession(TerminalSessionBase):
         self.log_reopen("auto_take")
         if self._disposed or self._paused or not self._foreground or self._phase == AGENT_EXITED:
             return self._phase
-        if self._controller is not None and self._controller.live_edge_pending:
+        if self._live_edge_owns_recovery():
             return await self.drive_recovery()
         if outcome := self.defer_gap_recovery(self.auto_take_control):
             return outcome

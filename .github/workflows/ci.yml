@@ -70,6 +70,11 @@ jobs:
       - name: License inventory (fails on unknown)
         run: uv run python scripts/license_inventory.py --out sbom.json
 
+      - name: Dependency vulnerability audit
+        run: |
+          uv export --locked --no-hashes --no-emit-project --extra companion --format requirements-txt > requirements-audit.txt
+          uvx pip-audit==2.9.0 -r requirements-audit.txt --no-deps --disable-pip
+
       - name: Upload SBOM
         uses: actions/upload-artifact@v7.0.1
         with:
@@ -99,7 +104,9 @@ jobs:
 
       - name: Notifications extension tests
         working-directory: extensions/notifications/src/flutter/relaydeck_notifications
-        run: flutter test
+        run: |
+          flutter pub get --enforce-lockfile
+          flutter test
 
       - name: Reconnect patch tests (pristine Flet plus the shipped diff)
         env:

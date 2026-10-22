@@ -38,6 +38,9 @@ class MetadataStreams:
         self._held: dict[int, MetadataSignal] = {}
         self._sequence = 0
 
+    def __len__(self) -> int:
+        return len(self._held)
+
     def register(self, account: str, device_id: str, host_id: str) -> tuple[int, MetadataSignal]:
         if len(self._held) >= self.limit:
             raise RuntimeError("metadata stream capacity reached")

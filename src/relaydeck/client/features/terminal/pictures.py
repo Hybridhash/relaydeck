@@ -33,6 +33,7 @@ from relaydeck.client.features.terminal.picture_operations import (
     run_operation,
     start_from_source,
 )
+from relaydeck.contracts import paths
 from relaydeck.contracts.schemas import validate
 
 logger = logging.getLogger(__name__)
@@ -68,6 +69,10 @@ _EXIT_MESSAGES = {
     "not_ready": FAILURE,
     "busy": "A picture is already uploading. Wait for it to finish.",
 }
+# The browser listener's cap, checked again here. Dart counts UTF-16 units (never fewer
+# than code points), so the browser refuses first and this check is the backstop.
+MAX_PASTE_TEXT = 1024 * 1024
+
 _PASTE_REJECTIONS = {
     "multiple": "Paste one picture at a time.",
     "unsupported": "That picture type is not supported. Use a PNG, JPEG or WebP picture.",
@@ -75,6 +80,9 @@ _PASTE_REJECTIONS = {
     "busy": "A picture is already uploading. Wait for it to finish.",
     "stale": "The screen changed while pasting; picture not attached. Paste it again.",
     "too_large": "Picture must be 10 MB or smaller.",
+    "no_text": "Paste blocked by the browser: use the paste panel",
+    "stale_text": "The screen changed while pasting; nothing was pasted. Paste it again.",
+    "text_too_large": "Pasted text is larger than 1 MB; paste a smaller part.",
 }
 
 
@@ -169,7 +177,7 @@ class PictureApi:
         return response.json()
 
     async def begin(self, host: str) -> dict[str, Any]:
-        doc = await self.request("POST", "/v1/pictures", {"host_id": host})
+        doc = await self.request("POST", paths.PICTURES, {"host_id": host})
         validate("relaydeck/gateway/v1/picture-grant", doc)
         # Web resolves against page origin, never the server's loopback address.
         if self.native:
@@ -218,12 +226,12 @@ class PictureApi:
                 raise PictureClientError(FAILURE)
 
     async def result(self, identifier: str) -> dict[str, Any]:
-        doc = await self.request("GET", f"/v1/pictures/{identifier}")
+        doc = await self.request("GET", paths.picture(identifier))
         validate("relaydeck/gateway/v1/picture-result", doc)
         return dict(doc)
 
     async def cancel(self, identifier: str) -> None:
-        await self.request("DELETE", f"/v1/pictures/{identifier}")
+        await self.request("DELETE", paths.picture(identifier))
 
 
 async def insert_picture(
@@ -735,6 +743,16 @@ def use_picture_attachment(
         sweep_services(current)
 
     ft.use_effect(lambda: None, dependencies=[session], cleanup=cleanup)
+
+    def browser_paste(text: str) -> Any:
+        # Composer mode shows the terminal display-only: a paste must never type into it.
+        if hasattr(session, "store") and session.sessions.modes.text_edits_draft:
+            return None
+        if len(text) > MAX_PASTE_TEXT:
+            reject_paste("text_too_large")
+            return None
+        return session.request_paste(text)
+
     props = {
         "on_attach_picture": pick,
         "picture_action": action,
@@ -773,4 +791,5 @@ def use_picture_attachment(
         props["picture_paste_available"] = api is not None
         props["picture_paste_binding"] = paste_binding()
         props["picture_paste_binding_now"] = paste_binding
+        props["browser_paste_text"] = browser_paste
     return props

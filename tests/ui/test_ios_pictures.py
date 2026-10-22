@@ -11,8 +11,16 @@ from relaydeck.client.features.composer.pictures import Picture
 from relaydeck.client.features.terminal import pictures
 from relaydeck.client.features.terminal.input_modes import WORKFLOW_AGENT_DIRECT
 from tests.support.host_harness import FakeConnection, render_component, run
-from tests.support.pictures.attachments import IDENTIFIER, PATH, PREVIEW, _Api, install_picker
-from tests.support.terminal.direct_typing import _direct
+from tests.support.pictures.attachments import (
+    IDENTIFIER,
+    PATH,
+    PREVIEW,
+    _Api,
+    attach_control,
+    click_attach,
+    install_picker,
+)
+from tests.support.terminal.direct_typing import _direct, open_compose
 from tests.support.terminal.latch_text import _inputs
 from tests.support.terminal.sessions import _agent_session
 
@@ -64,10 +72,10 @@ def test_compose_pick_survives_connection_changes(
     async def scenario() -> None:
         app, session, socket, _ = await _direct(False)
         try:
-            await app.set_props_and_fire("agent-compose-toggle", {}, "click")
-            picker = app.find("terminal-attach-picture").action.file_picker
+            await open_compose(app)
+            picker = attach_control(app).action.file_picker
             store, term = session.store, session.current_term
-            await app.set_props_and_fire("terminal-attach-picture", {}, "click")
+            await click_attach(app)
             await _change_boundary(app, session, change)
             await _result(app, picker)
             assert session.store is store and session.current_term is term
@@ -90,8 +98,8 @@ def test_direct_changed_boundary_keeps_uploaded_picture_and_explains(
     async def scenario() -> None:
         app, session, socket, _ = await _direct(shell)
         try:
-            picker = app.find("terminal-attach-picture").action.file_picker
-            await app.set_props_and_fire("terminal-attach-picture", {}, "click")
+            picker = attach_control(app).action.file_picker
+            await click_attach(app)
             await _change_boundary(app, session, "generation")
             await _result(app, picker)
             assert len(calls) == 1 and not api.cancelled and not _inputs(socket)
@@ -140,11 +148,11 @@ def test_compose_reconnect_at_every_upload_boundary(
         calls = install_picker(monkeypatch, api, reconnect if phase == "upload" else None)
         try:
             await app.settle()
-            await app.set_props_and_fire("agent-compose-toggle", {}, "click")
-            picker = app.find("terminal-attach-picture").action.file_picker
+            await open_compose(app)
+            picker = attach_control(app).action.file_picker
             before = len(session._ops.attaches)
             term, store = session.current_term, session.store
-            await app.set_props_and_fire("terminal-attach-picture", {}, "click")
+            await click_attach(app)
             await _result(app, picker)
             assert session.store is store and session.current_term is term
             assert [p.path for p in store.pictures] == [PATH]
@@ -181,8 +189,8 @@ def test_direct_non_writer_boundaries_are_visible_and_never_insert(
         calls = install_picker(monkeypatch, api, change)
         await app.settle()
         try:
-            picker = app.find("terminal-attach-picture").action.file_picker
-            await app.set_props_and_fire("terminal-attach-picture", {}, "click")
+            picker = attach_control(app).action.file_picker
+            await click_attach(app)
             await _result(app, picker)
             assert app.find("picture-upload-message").value == pictures._EXIT_MESSAGES[reason]
             assert len(calls) == 1 and not api.cancelled and not _inputs(socket)
@@ -203,9 +211,9 @@ def test_mode_change_during_direct_pick_never_stages_or_inserts(
     async def scenario() -> None:
         app, session, socket, _ = await _direct(False)
         try:
-            picker = app.find("terminal-attach-picture").action.file_picker
-            await app.set_props_and_fire("terminal-attach-picture", {}, "click")
-            await app.set_props_and_fire("agent-compose-toggle", {}, "click")
+            picker = attach_control(app).action.file_picker
+            await click_attach(app)
+            await open_compose(app)
             await _result(app, picker)
             assert (
                 app.find("picture-upload-message").value == pictures._EXIT_MESSAGES["mode_changed"]
@@ -257,9 +265,9 @@ def test_compose_identity_failures_stop_at_each_await_and_explain(
         calls = install_picker(monkeypatch, api, invalidate if phase == "upload" else None)
         await app.settle()
         try:
-            await app.set_props_and_fire("agent-compose-toggle", {}, "click")
-            picker = app.find("terminal-attach-picture").action.file_picker
-            await app.set_props_and_fire("terminal-attach-picture", {}, "click")
+            await open_compose(app)
+            picker = attach_control(app).action.file_picker
+            await click_attach(app)
             if phase == "start":
                 await invalidate()
             await _result(app, picker)
@@ -292,8 +300,8 @@ def test_shell_and_agent_auth_loss_during_upload_cancel_without_input(
         install_picker(monkeypatch, api, revoke)
         await app.settle()
         try:
-            picker = app.find("terminal-attach-picture").action.file_picker
-            await app.set_props_and_fire("terminal-attach-picture", {}, "click")
+            picker = attach_control(app).action.file_picker
+            await click_attach(app)
             await _result(app, picker)
             assert not _inputs(socket) and api.cancelled == [IDENTIFIER]
             assert app.find("picture-upload-message").value == pictures._EXIT_MESSAGES["revoked"]
@@ -315,11 +323,11 @@ def test_empty_oversized_or_stale_result_has_visible_fixed_reason(
     async def scenario() -> None:
         app, session, socket, _ = await _direct(False)
         try:
-            picker = app.find("terminal-attach-picture").action.file_picker
+            picker = attach_control(app).action.file_picker
             if reason != "stale_op":
-                await app.set_props_and_fire("terminal-attach-picture", {}, "click")
+                await click_attach(app)
             if reason == "retired_picker":
-                await app.set_props_and_fire("terminal-attach-picture", {}, "click")
+                await click_attach(app)
             await _result(app, picker, 10 * 1024 * 1024 + 1 if reason == "too_large" else 100)
             assert app.find("picture-upload-message").value == pictures._EXIT_MESSAGES[reason]
             assert not calls and not _inputs(socket) and not api.cancelled
@@ -343,8 +351,8 @@ def test_picker_cancel_is_silent_but_logged(
     async def scenario() -> None:
         app, session, socket, _ = await _direct(False)
         try:
-            picker = app.find("terminal-attach-picture").action.file_picker
-            await app.set_props_and_fire("terminal-attach-picture", {}, "click")
+            picker = attach_control(app).action.file_picker
+            await click_attach(app)
             await app.session.dispatch_event(picker._i, "result", {"files": []})
             await app.settle()
             with pytest.raises(KeyError):
@@ -396,9 +404,9 @@ def test_completion_failures_cancel_grant_and_explain(
         install_picker(monkeypatch, api, during_upload)
         await app.settle()
         try:
-            await app.set_props_and_fire("agent-compose-toggle", {}, "click")
-            original = app.find("terminal-attach-picture").action.file_picker
-            await app.set_props_and_fire("terminal-attach-picture", {}, "click")
+            await open_compose(app)
+            original = attach_control(app).action.file_picker
+            await click_attach(app)
             await _result(app, original)
             text = app.find("picture-upload-message").value
             assert text == (
@@ -458,8 +466,8 @@ def test_duplicate_results_never_repeat_upload_or_insert(
         calls = install_picker(monkeypatch, api, upload_duplicate)
         app = await render_component(View)
         try:
-            picker = app.find("terminal-attach-picture").action.file_picker
-            await app.set_props_and_fire("terminal-attach-picture", {}, "click")
+            picker = attach_control(app).action.file_picker
+            await click_attach(app)
             await _result(app, picker)
             assert len(calls) == len(inserted) == 1 and not api.cancelled
         finally:
@@ -506,8 +514,8 @@ def test_late_picker_never_mutates_replacement_session_or_its_notice(
 
         app = await render_component(View)
         try:
-            picker = app.find("terminal-attach-picture").action.file_picker
-            await app.set_props_and_fire("terminal-attach-picture", {}, "click")
+            picker = attach_control(app).action.file_picker
+            await click_attach(app)
             await app.set_props_and_fire("switch-session", {}, "click")
             await _result(app, picker)
             assert first.store.pictures == () and first.store.draft == "first unsent"
@@ -541,8 +549,8 @@ def test_result_log_uses_only_count_and_size_bucket(
     async def scenario() -> None:
         app, session, _socket, _ = await _direct(False)
         try:
-            picker = app.find("terminal-attach-picture").action.file_picker
-            await app.set_props_and_fire("terminal-attach-picture", {}, "click")
+            picker = attach_control(app).action.file_picker
+            await click_attach(app)
             await app.session.dispatch_event(
                 picker._i,
                 "result",
@@ -596,8 +604,8 @@ def test_cancelled_completion_wait_is_visible_and_cancels_grant(
 
         monkeypatch.setattr(ft.FilePicker, "upload", blocked_upload)
         try:
-            picker = app.find("terminal-attach-picture").action.file_picker
-            await app.set_props_and_fire("terminal-attach-picture", {}, "click")
+            picker = attach_control(app).action.file_picker
+            await click_attach(app)
             task = asyncio.create_task(_result(app, picker))
             await started.wait()
             task.cancel()
@@ -606,7 +614,7 @@ def test_cancelled_completion_wait_is_visible_and_cancels_grant(
             await app.settle()
             assert app.find("picture-upload-message").value == pictures._EXIT_MESSAGES["cancelled"]
             assert api.cancelled == [IDENTIFIER] and not _inputs(socket)
-            assert not app.find("terminal-attach-picture").disabled
+            assert not attach_control(app).disabled
         finally:
             await session.dispose()
 

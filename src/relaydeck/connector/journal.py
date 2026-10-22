@@ -77,10 +77,8 @@ from relaydeck.contracts.canonical import canonical_json
 from relaydeck.contracts.launch import display_name_clean
 from relaydeck.journal import CommandJournal, JournalConflict, digest_for
 
-DISPATCH_KIND = "command.dispatch"
 ACK_KIND = "command.ack"
 RESULT_KIND = "command.result"
-OUTPUT_KIND = "terminal.output"
 
 GATEWAY_KINDS = ("agent.prompt", "agent.start", "agent.rename", "shell.create", "session.close")
 RESULT_STATUSES = ("succeeded", "failed", "rejected")

@@ -158,7 +158,7 @@ class _ScriptedSocket(TerminalSocket):
 
 
 def test_terminal_client_output_input_ack() -> None:
-    from relaydeck.gateway import terminal_wire
+    from relaydeck.contracts.wire import terminal as terminal_wire
 
     async def scenario() -> None:
         seen_tickets: list[str] = []
@@ -204,7 +204,7 @@ def test_terminal_client_output_input_ack() -> None:
 
 
 def test_terminal_client_offset_gap_and_resume() -> None:
-    from relaydeck.gateway import terminal_wire
+    from relaydeck.contracts.wire import terminal as terminal_wire
 
     async def scenario() -> None:
         sock = _ScriptedSocket(
@@ -229,7 +229,7 @@ def test_terminal_client_offset_gap_and_resume() -> None:
 
 
 def test_terminal_client_epoch_change_gaps() -> None:
-    from relaydeck.gateway import terminal_wire
+    from relaydeck.contracts.wire import terminal as terminal_wire
 
     async def scenario() -> None:
         sock = _ScriptedSocket(
@@ -270,7 +270,7 @@ def test_terminal_client_control_gap() -> None:
 
 
 def test_terminal_client_rate_limited_gap_keeps_output_and_never_replays_input() -> None:
-    from relaydeck.gateway import terminal_wire
+    from relaydeck.contracts.wire import terminal as terminal_wire
 
     async def scenario() -> None:
         gap = {"kind": "gap", "detail": "rate_limited"}
@@ -304,7 +304,7 @@ def test_terminal_client_rate_limited_gap_keeps_output_and_never_replays_input()
 @pytest.mark.parametrize("mode", ["control", "view"])
 def test_terminal_controller_rate_limited_gap_does_not_schedule_recovery(mode: str) -> None:
     from relaydeck.client.features.terminal.controller import TerminalController
-    from relaydeck.gateway import terminal_wire
+    from relaydeck.contracts.wire import terminal as terminal_wire
 
     async def scenario() -> None:
         sock = _ScriptedSocket(

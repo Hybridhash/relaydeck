@@ -23,7 +23,15 @@ from relaydeck.client.features.terminal.pictures import (
 )
 from relaydeck.client.features.terminal.surfaces import mount_agent_screen
 from tests.support.host_harness import render_component, run
-from tests.support.pictures.attachments import IDENTIFIER, PATH, _Api, choose, install_picker
+from tests.support.pictures.attachments import (
+    IDENTIFIER,
+    PATH,
+    _Api,
+    attach_control,
+    choose,
+    click_attach,
+    install_picker,
+)
 from tests.support.pictures.clipboard_picker import _Blocked
 from tests.support.terminal.direct_typing import _direct
 from tests.support.terminal.latch_text import _inputs
@@ -133,14 +141,14 @@ def test_dismissed_pick_does_not_lock_and_late_result_is_ignored(
         app, session, socket, _ = await _direct(shell)
         try:
             key = "terminal-attach-picture"
-            first = app.find(key).action.file_picker
-            await app.set_props_and_fire(key, {}, "click")  # A: picker dismissed, no result
+            first = attach_control(app, key).action.file_picker
+            await click_attach(app, key)  # A: picker dismissed, no result
             await app.settle()
-            button = app.find(key)
+            button = attach_control(app, key)
             assert not button.disabled
             second = button.action.file_picker
             assert second is not first
-            await app.set_props_and_fire(key, {}, "click")  # B
+            await click_attach(app, key)  # B
             await app.settle()
             await _deliver(app, first)  # late A result
             assert calls == [] and _inputs(socket) == []
@@ -222,8 +230,8 @@ def test_web_upload_waits_for_completion_before_reading_the_result(
         app, session, socket, _ = await _direct(shell)
         try:
             key = "terminal-attach-picture"
-            picker = app.find(key).action.file_picker
-            await app.set_props_and_fire(key, {}, "click")
+            picker = attach_control(app, key).action.file_picker
+            await click_attach(app, key)
             await _deliver(app, picker)
             for _ in range(100):
                 if _inputs(socket):
@@ -279,7 +287,7 @@ def test_direct_without_control_still_refuses_attach(
             session.set_workflow(WORKFLOW_AGENT_DIRECT)
             await app.settle()
             assert session.keys_enabled is False
-            assert app.find("terminal-attach-picture").disabled
+            assert attach_control(app).disabled
             await choose(app, "terminal-attach-picture")
             await app.settle()
             assert calls == [] and api.cancelled == []
@@ -343,8 +351,8 @@ def test_upload_error_logs_carry_no_sensitive_text(
         app, session, socket, _ = await _direct(shell)
         try:
             key = "terminal-attach-picture"
-            picker = app.find(key).action.file_picker
-            await app.set_props_and_fire(key, {}, "click")
+            picker = attach_control(app, key).action.file_picker
+            await click_attach(app, key)
             await _deliver(app, picker)
             assert _inputs(socket) == []
             if kind != "refused":
@@ -431,8 +439,8 @@ def test_abandoned_pickers_stay_bounded_and_unmount_clears(
             key = "terminal-attach-picture"
             previous = None
             for _ in range(5):
-                await app.set_props_and_fire(key, {}, "click")
-                current = app.find(key).action.file_picker
+                await click_attach(app, key)
+                current = attach_control(app, key).action.file_picker
                 assert previous is None or current is not previous
                 previous = current
             steady_state(app)

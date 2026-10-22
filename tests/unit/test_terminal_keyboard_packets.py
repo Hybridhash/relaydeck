@@ -122,3 +122,33 @@ def test_malformed_trace_is_rejected_and_not_logged(
     with caplog.at_level(logging.INFO, logger="relaydeck.client.typing_split"):
         term._dispatch(protocol.DecodedPacket(protocol.KEYBOARD_TRACE, payload))
     assert not caplog.records
+
+
+@pytest.mark.parametrize("cut", range(1, 10))
+def test_page_metrics_wait_for_the_whole_frame_and_log_geometry(
+    cut: int, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The diagnostics logger stops propagating once configured; capture needs it back.
+    monkeypatch.setattr(logging.getLogger("relaydeck.client.typing_split"), "propagate", True)
+    frame = struct.pack(">BBhhHH", protocol.PAGE_METRICS, 1, -44, 12, 526, 873)
+    buffer = bytearray(frame[:cut])
+    assert protocol.decode_packets(buffer) == []
+    buffer.extend(frame[cut:])
+    (packet,) = protocol.decode_packets(buffer)
+    assert protocol.decode_page_metrics(packet.payload) == (1, -44, 12, 526, 873)
+    term = RelayDeckTerminal(key="page-metrics")
+    with caplog.at_level(logging.INFO, logger="relaydeck.client.typing_split"):
+        term._dispatch(packet)
+    assert "page_metrics reset=True scroll=-44 vv_offset=12 vv=526 window=873" in caplog.text
+
+
+@pytest.mark.parametrize("payload", [b"", b"\x01" * 8, b"\x02" + b"\x00" * 8])
+def test_malformed_page_metrics_are_rejected_and_not_logged(
+    payload: bytes, caplog: pytest.LogCaptureFixture
+) -> None:
+    with pytest.raises(ValueError):
+        protocol.decode_page_metrics(payload)
+    term = RelayDeckTerminal(key="bad-page")
+    with caplog.at_level(logging.INFO, logger="relaydeck.client.typing_split"):
+        term._dispatch(protocol.DecodedPacket(protocol.PAGE_METRICS, payload))
+    assert not caplog.records

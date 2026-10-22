@@ -8,7 +8,6 @@ from typing import Any, cast
 
 import pytest
 
-from relaydeck.client.adapters.fake import FakeCredentialStore
 from relaydeck.client.adapters.server_commands import ServerCommandStore
 from relaydeck.client.features.inventory.rename import rename_command
 from relaydeck.client.features.inventory.selectors import agent_names, metadata_rows
@@ -28,6 +27,7 @@ from tests.support.creation.create_readiness import _message
 from tests.support.creation.pending_command_records import command as prompt_command
 from tests.support.creation.pending_command_records import record
 from tests.support.creation.pending_creation import _creation
+from tests.support.fakes import FakeCredentialStore
 from tests.support.host_harness import run
 
 

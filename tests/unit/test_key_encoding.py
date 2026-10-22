@@ -30,7 +30,7 @@ from relaydeck.client.features.terminal.keys import (
     normalize_key_name,
     shifted_char,
 )
-from relaydeck.gateway import terminal_wire
+from relaydeck.contracts.wire import terminal as terminal_wire
 from tests.support.host_harness import run
 
 KEYS = Path(__file__).resolve().parent.parent / "fixtures" / "keys"

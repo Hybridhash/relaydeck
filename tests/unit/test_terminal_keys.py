@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from relaydeck.connector.keys import is_valid_key, normalize_combo
+from relaydeck.contracts.keys import is_valid_key, normalize_combo
 
 
 def test_modifiers_and_named_keys() -> None:

@@ -14,6 +14,15 @@ from tests.support.terminal.direct_typing import _ack_reset, _change, _direct, _
 from tests.support.terminal.latch_text import _inputs
 
 
+async def _stale_event(field: Any, name: str, data: str) -> None:
+    """Fire an event on a field object captured before a rerender. A field the rerender orphaned
+    (its screen left the tree) refuses the event outright; a still-parented one must ignore it."""
+    try:
+        await field._trigger_event(name, data)
+    except RuntimeError as exc:
+        assert "added to the page" in str(exc)
+
+
 @pytest.mark.parametrize("shell", [False, True])
 def test_direct_field_exact_text_backspace_enter_latch_and_sentinel(shell: bool) -> None:
     async def scenario() -> None:
@@ -91,8 +100,8 @@ def test_direct_changes_and_focus_fail_closed_before_the_subscription_rerender(
                 if not shell:
                     await session.confirm_takeover()
             state, count = session.term_state, len(focuses)
-            await field._trigger_event("change", "  forbidden")
-            await field._trigger_event("submit", "  forbidden")
+            await _stale_event(field, "change", "  forbidden")
+            await _stale_event(field, "submit", "  forbidden")
             assert session.term_state is state and not _inputs(socket)
             assert len(focuses) == count
             if not shell:
@@ -175,8 +184,8 @@ def test_old_field_changes_and_submit_cannot_touch_replacement_writer_or_draft(s
             await app.settle()
             current, state = session.controller, session.term_state
             count = len(focuses)
-            await field._trigger_event("change", "  stale")
-            await field._trigger_event("submit", "  stale")
+            await _stale_event(field, "change", "  stale")
+            await _stale_event(field, "submit", "  stale")
             assert session.controller is current and session.term_state is state
             assert _inputs(socket) == [] and len(focuses) == count
             if not shell:
@@ -204,7 +213,11 @@ def test_keyboard_single_clicks_toggle_and_rapid_duplicate_click_toggles_once(
             now[0] += 0.5
             await app.set_props_and_fire(key, {}, "click")
             closed = app.find(_typing_key(app))
-            assert not closed.visible and not closed.can_request_focus and closed.disabled
+            if shell:
+                assert not closed.visible and not closed.can_request_focus and closed.disabled
+            else:
+                # Agents keep the Direct field on screen as the tap that reopens the keyboard.
+                assert closed.visible and closed.can_request_focus
             count = len(focuses)
             now[0] += 0.5
             await app.set_props_and_fire(key, {}, "click")
@@ -213,7 +226,7 @@ def test_keyboard_single_clicks_toggle_and_rapid_duplicate_click_toggles_once(
             await app.set_props_and_fire(key, {}, "click")
             now[0] += 0.02
             await app.set_props_and_fire(key, {}, "click")
-            assert not app.find(_typing_key(app)).visible
+            assert app.find(_typing_key(app)).visible is not shell
             assert app.find(_typing_key(app))._i == field_id
             assert session.current_term is term and session.controller is controller
         finally:

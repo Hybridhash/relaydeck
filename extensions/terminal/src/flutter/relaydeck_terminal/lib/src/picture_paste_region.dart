@@ -10,7 +10,8 @@ import 'picture_paste.dart';
 /// It adds no visual or focus behavior of its own: its focus node cannot take
 /// focus and is skipped by traversal, it only reports whether focus is somewhere
 /// inside. Offers go to Python as `offer`/`reject` events; the retained Blob stays
-/// in the browser until Python asks to `upload` or `abort` it.
+/// in the browser until Python asks to `upload` or `abort` it. Pasted text goes to
+/// the focused terminal as a `text` event, or into the focused text field here.
 class RelayDeckPicturePasteControl extends StatefulWidget {
   const RelayDeckPicturePasteControl({super.key, required this.control});
 
@@ -55,6 +56,14 @@ class _RelayDeckPicturePasteState extends State<RelayDeckPicturePasteControl> {
         },
         onReject: (reason) =>
             widget.control.triggerEvent('reject', {'reason': reason}),
+        // The terminal's paste: Python classifies it (single line inserts,
+        // several lines or controls go to review) and never logs it.
+        // Text carries the gesture's binding too: a late event never reaches a new writer.
+        onText: (text) => widget.control.triggerEvent('text', {
+          'text': text,
+          'binding': widget.control.getString('binding', '') ?? '',
+        }),
+        picturesEnabled: () => widget.control.getBool('pictures', true)!,
       ),
     );
   }

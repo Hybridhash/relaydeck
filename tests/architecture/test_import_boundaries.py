@@ -185,42 +185,6 @@ print(json.dumps({{'server_modules': [n for n in sys.modules if n.startswith(ser
     ("old", "new", "names"),
     [
         (
-            "relaydeck.gateway.terminal_wire",
-            "relaydeck.contracts.wire.terminal",
-            (
-                "OutputChunk",
-                "InputChunk",
-                "encode_input",
-                "decode_input",
-                "encode_output",
-                "decode_output",
-                "encode_key",
-                "encode_text",
-                "encode_resize",
-                "KIND_NAMES",
-                "MAX_INPUT_CHUNK",
-                "MAX_OUTPUT_CHUNK",
-            ),
-        ),
-        (
-            "relaydeck.connector.keys",
-            "relaydeck.contracts.keys",
-            (
-                "normalize_combo",
-                "is_valid_key",
-                "MAX_KEY_LEN",
-                "MODIFIERS",
-                "NAMED_KEYS",
-                "ALIASES",
-            ),
-        ),
-        (
-            "relaydeck.gateway.cursors",
-            "relaydeck.contracts.cursors",
-            ("MAX_CURSOR_LEN", "AFTER_SEQUENCE_HEADER"),
-        ),
-        ("relaydeck.gateway.policy", "relaydeck.contracts.endpoints", ("is_trusted_endpoint",)),
-        (
             "relaydeck.connector.pubkey",
             "relaydeck.contracts.pubkeys",
             ("openssh_to_raw", "raw_to_openssh", "fingerprint_of_raw", "_ssh_blob"),

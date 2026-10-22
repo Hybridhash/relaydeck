@@ -25,11 +25,6 @@ from relaydeck_notifications.payload import (
     parse_push_payload,
 )
 
-from relaydeck.client.adapters.fake import FakeNotifications
-from relaydeck.client.adapters.notifications import (
-    permission_explanation,
-    validated_tap,
-)
 from relaydeck.client.adapters.ports import PushPermission, PushTap
 from relaydeck.gateway.app import GatewayState, create_app
 from relaydeck.gateway.backend import FakeBackend
@@ -43,13 +38,11 @@ from relaydeck.gateway.push import (
     ProviderOutcome,
     PushDenied,
     PushStore,
-    StubProvider,
     backoff_ms,
-    hint_relevance,
-    link_url,
     pump_outbox,
-    token_from_url,
 )
+from tests.support.fakes import FakeNotifications
+from tests.support.push import StubProvider
 
 FIXTURES = Path(__file__).resolve().parent.parent / "fixtures" / "gateway"
 SECRET = b"notification-test-secret-32bytes!!"
@@ -611,8 +604,6 @@ def test_tap_path_never_sends_input() -> None:
         assert resolved.status_code == 200, resolved.text
         current = client.get(f"/v1/hosts/{resolved.json()['host_id']}/snapshot", headers=headers)
         assert current.status_code == 200
-        relevance = hint_relevance(taps[0].category, "working")
-        assert relevance == "relevant"
         return dict(resolved.json())
 
     resolved_body = asyncio.run(scenario())
@@ -635,16 +626,10 @@ def test_app_link_and_killed_app_tap_paths() -> None:
         category="completion",
         now=1_000_000,
     )
-    url = link_url("https://gw.example", str(rows[0]["link_token"]))
 
     async def scenario() -> None:
         port = FakeNotifications(permission=PushPermission.GRANTED)
-        links: list[str] = []
-        port.on_app_link(links.append)
-        port.open_link(url)
-        assert links == [url]
-        token = token_from_url(links[0])
-        assert token is not None
+        token = str(rows[0]["link_token"])
         r = client.post("/v1/deep-links/resolve", headers=headers, json={"token": token})
         assert r.status_code == 200
         # Killed-app relaunch via getInitialMessage equivalent.
@@ -669,46 +654,7 @@ def test_app_link_and_killed_app_tap_paths() -> None:
     assert backend.commands == {}
 
 
-def test_extension_adapter_projects_full_payload() -> None:
-    from relaydeck_notifications.notifications import RelayDeckNotifications
-
-    from relaydeck.client.adapters.notifications import ExtensionNotifications
-
-    service = RelayDeckNotifications()
-    port = ExtensionNotifications(service)
-    taps: list[PushTap] = []
-    port.on_tap(taps.append)
-    service._test_event(
-        "push_tap",
-        {
-            "notification_id": "n-1",
-            "device_ref": "dr_x",
-            "host_ref": "hr_x",
-            "session_ref": "sr_x",
-            "event_ref": "er_x",
-            "category": "attention",
-        },
-    )
-    assert taps == [PushTap("n-1", "er_x", "attention")]
-    assert validated_tap(parse_push_payload({**taps[0].__dict__})) == taps[0]
-    # Guarded: bad category never reaches the app.
-    service._test_event(
-        "push_tap", {"notification_id": "n-2", "event_ref": "er_y", "category": "approve"}
-    )
-    assert len(taps) == 1
-
-
-# -- stale hints, permission-denied, durability ---------------------------
-
-
-def test_stale_hint_relevance_matrix() -> None:
-    assert hint_relevance("attention", "working") == "relevant"
-    assert hint_relevance("attention", "blocked") == "relevant"
-    assert hint_relevance("attention", "completed") == "stale"
-    assert hint_relevance("attention", "resolved") == "stale"
-    assert hint_relevance("attention", "failed") == "stale"
-    assert hint_relevance("completion", "completed") == "relevant"
-    assert hint_relevance("completion", "working") == "relevant"
+# -- late hints, durability ---------------------------
 
 
 def test_late_hint_still_opens_current_state() -> None:
@@ -731,45 +677,6 @@ def test_late_hint_still_opens_current_state() -> None:
     resolved = state.push.resolve_hint("acct-1", nid, clock.now)
     assert resolved is not None
     assert resolved["host_id"] == "home-mac"
-    assert hint_relevance("attention", "completed") == "stale"
-
-
-def test_permission_denied_quiet_state_stays_usable() -> None:
-    async def scenario() -> None:
-        port = FakeNotifications(permission=PushPermission.DENIED)
-        assert await port.request_permission() == PushPermission.DENIED
-        assert await port.token() is None
-        copy = permission_explanation(PushPermission.DENIED)
-        assert copy is not None and "sessions list" in copy
-        assert permission_explanation(PushPermission.GRANTED) is None
-        assert permission_explanation(PushPermission.UNKNOWN) is None
-        # The app still works: taps deliver, adapter stays scriptable.
-        taps: list[PushTap] = []
-        port.on_tap(taps.append)
-        port.tap(PushTap("n", "e", "attention"))
-        assert taps == [PushTap("n", "e", "attention")]
-
-    asyncio.run(scenario())
-    # ...and the server side needs no permission: resolution is auth-only.
-    state, _, _ = _state()
-    client = TestClient(create_app(state))
-    headers = _headers(_token(state))
-    state.push.register_device("acct-1", "install-1", "fcm-a", "android", 1_000_000)
-    rows = state.push.notify(
-        account="acct-1",
-        account_hosts=HOSTS,
-        host_id="home-mac",
-        session_id="term-1",
-        event_id="ev-1",
-        category="attention",
-        now=1_000_000,
-    )
-    r = client.post(
-        "/v1/deep-links/resolve",
-        headers=headers,
-        json={"notification_id": rows[0]["notification_id"]},
-    )
-    assert r.status_code == 200
 
 
 def test_file_durability_and_retention(tmp_path: Path) -> None:

@@ -16,12 +16,12 @@ from typing import Any
 
 from relaydeck_terminal import protocol
 
-from relaydeck.client.adapters.fake import FakeClipboard
 from relaydeck.client.features.shell import ScriptedShellGatewayOps, ShellSession
 from relaydeck.client.features.shell.screen import mount_shell_screen
 from relaydeck.client.features.terminal.agent_session import AGENT_LIVE, AgentSession
 from relaydeck.client.features.terminal.screen import SELECT_BUTTON_KEY
 from relaydeck.client.features.terminal.selection_sheet import (
+    SELECT_AREA_KEY,
     SELECT_CLOSE_KEY,
     SELECT_COPY_KEY,
     SELECT_ERROR_KEY,
@@ -29,6 +29,7 @@ from relaydeck.client.features.terminal.selection_sheet import (
     SELECT_RANGE_KEY,
 )
 from relaydeck.client.features.terminal.surfaces import mount_agent_screen
+from tests.support.fakes import FakeClipboard
 from tests.support.host_harness import render_component, run
 from tests.support.terminal.binding import _cancel, _control, _output, _wait_for
 from tests.support.terminal.dispatch import _SocketFactory
@@ -104,10 +105,10 @@ def test_snapshot_frozen_while_selecting() -> None:
             # drag): the frozen engine text must not change.
             session.output_log.append(b"\x1b[32mlate\x1b[0m")
             await app.set_props_and_fire(
-                SELECT_FIELD_KEY,
+                SELECT_AREA_KEY,
                 {},
-                "selection_change",
-                {"selected_text": "X", "selection": {"base_offset": 0, "extent_offset": 1}},
+                "change",
+                "X",
             )
             assert app.find(SELECT_FIELD_KEY).value == TRUTH
             # Reopening fetches a FRESH snapshot, not the frozen one.
@@ -130,20 +131,20 @@ def test_copy_uses_current_dragged_range() -> None:
             await _open_with_snapshot(app, term, sent, TRUTH)
             assert app.find(SELECT_RANGE_KEY).value == "All text (3 chars)"
             await app.set_props_and_fire(
-                SELECT_FIELD_KEY,
+                SELECT_AREA_KEY,
                 {},
-                "selection_change",
-                {"selected_text": "X", "selection": {"base_offset": 0, "extent_offset": 1}},
+                "change",
+                "X",
             )
             assert app.find(SELECT_RANGE_KEY).value == "Chars 0-1 of 3 (1 lines)"
             await app.set_props_and_fire(SELECT_COPY_KEY, {}, "click")
             assert clipboard.writes == ["X"]
             # Change the selection again before the next Copy.
             await app.set_props_and_fire(
-                SELECT_FIELD_KEY,
+                SELECT_AREA_KEY,
                 {},
-                "selection_change",
-                {"selected_text": "ed", "selection": {"base_offset": 1, "extent_offset": 3}},
+                "change",
+                "ed",
             )
             await app.set_props_and_fire(SELECT_COPY_KEY, {}, "click")
             assert clipboard.writes == ["X", "ed"]
@@ -232,10 +233,10 @@ def test_shell_select_text_snapshot_and_current_copy() -> None:
                     opener.cancel()
             assert app.find(SELECT_FIELD_KEY).value == "Xed"
             await app.set_props_and_fire(
-                SELECT_FIELD_KEY,
+                SELECT_AREA_KEY,
                 {},
-                "selection_change",
-                {"selected_text": "ed", "selection": {"base_offset": 1, "extent_offset": 3}},
+                "change",
+                "ed",
             )
             await app.set_props_and_fire(SELECT_COPY_KEY, {}, "click")
             assert clipboard.writes == ["ed"]

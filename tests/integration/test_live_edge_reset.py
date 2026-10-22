@@ -6,7 +6,7 @@ import time
 
 import pytest
 
-from relaydeck.gateway import terminal_wire
+from relaydeck.contracts.wire import terminal as terminal_wire
 from relaydeck.gateway.identity import TicketGrant
 from relaydeck.gateway.leases import READER_HANDOFF_TTL_MS
 from relaydeck.gateway.ring import FIRST_REPLAY_MAX_BYTES, RING_MAX_BYTES, VIEWER_QUEUE_MAX_BYTES
@@ -53,7 +53,7 @@ def test_overflow_resumes_same_lease_at_atomic_live_edge(
             assert current.generation == generation and current.expires_ms == expires
             assert not current.resume_pending and not controller.live_edge_pending
             assert controller._client.next_offset == end + (6 if publish_during_baseline else 0)
-            assert "History incomplete" in actor.term_state.notice.text
+            assert "Older output not kept" in actor.term_state.notice.text
             assert all(path == "/v1/terminal-tickets" for _, path in ctx.requests[len(before) :])
             assert ctx.backend.input_logs == {} and ctx.backend.resize_log == []
             if kind == "agent":

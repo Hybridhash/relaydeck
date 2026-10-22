@@ -40,9 +40,7 @@ from relaydeck.client.theme import palette
 if TYPE_CHECKING:
     from relaydeck.client.features.composer.domain import StagedMarker
 
-from relaydeck.client.features.terminal.surfaces.actions import (
-    DirectInput,
-)
+from relaydeck.client.features.terminal.surfaces.actions import DirectInput
 from relaydeck.client.features.terminal.surfaces.agent_dock import (
     build_agent_dock,
 )
@@ -71,6 +69,7 @@ from relaydeck.client.features.terminal.surfaces.direct_typing import (
 from relaydeck.client.features.terminal.surfaces.input_area import (
     build_expanded_input,
 )
+from relaydeck.client.features.terminal.surfaces.paste_entry import PasteEntry
 from relaydeck.client.features.terminal.surfaces.phone_composer import use_composer_keyboard
 from relaydeck.client.features.terminal.surfaces.phone_dock import (
     build_phone_dock,
@@ -80,9 +79,7 @@ from relaydeck.client.features.terminal.surfaces.screen_overlays import (
     phone_tools,
     review_sheet,
 )
-from relaydeck.client.features.terminal.surfaces.select_stack import (
-    build_select_stack,
-)
+from relaydeck.client.features.terminal.surfaces.select_stack import build_select_stack
 from relaydeck.client.features.terminal.surfaces.terminal_host import (
     build_terminal_host,
 )
@@ -117,6 +114,7 @@ def AgentTerminalScreen(
     on_open_selection: Callable[[], Any],
     on_copy_selection: Callable[[int, int], Any],
     on_close_selection: Callable[[], Any],
+    on_dismiss_notice: Callable[[Any], Any],
     on_draft_change: Callable[[str], Any],
     on_send: Callable[[], Any],
     on_confirm_blocked: Callable[[], Any],
@@ -149,6 +147,7 @@ def AgentTerminalScreen(
     on_disconnect: Callable[[], Any] | None = None,
     on_reconnect: Callable[[], Any] | None = None,
     on_paste: Callable[[], Any] | None = None,
+    on_paste_text: Callable[[str], Any] | None = None,
     confirm_takeover: bool = True,
     control_pending: bool = False,
     expected_size: tuple[int, int] | None = None,
@@ -328,19 +327,18 @@ def AgentTerminalScreen(
 
     ctl_size, set_ctl_size = ft.use_state((0.0, 0.0))
     split_ctl_height, set_split_ctl_height = ft.use_state(0.0)
-    # Measured composer frame height (the split dock sits under it), and
-    # an open counter that changes the dock's scroll key each time it opens.
     split_comp_h, set_split_comp_h = ft.use_state(0.0)
-    dock_epoch_ref: Any = ft.use_ref((False, 0))
-    dock_was_open, dock_epoch = dock_epoch_ref.current
-    dock_open = in_control and not phone and split and keyboard == KEYBOARD_KEYS
-    if dock_open and not dock_was_open:
-        dock_epoch += 1
-    dock_epoch_ref.current = (dock_open, dock_epoch)
-    split_dock_top = split_top + max(split_ctl_height, 48.0) + 8.0 + split_comp_h + 8.0
     slim = phone or split
     overlay, toggle_overlay, close_overlay = use_screen_overlay(
-        [mobile_mode, in_control, keys_enabled, terminal.selection.open, direct_binding, shown]
+        [
+            mobile_mode,
+            in_control,
+            keys_enabled,
+            terminal.selection.open,
+            direct_binding,
+            shown,
+            split,
+        ]
     )
     controls: list[Any] = [
         build_agent_header(
@@ -368,9 +366,6 @@ def AgentTerminalScreen(
             else None,
         )
     ]
-    # Below 600px tall the input dock takes one flex share
-    # (terminal three) and scrolls internally, so a short window can
-    # never starve the terminal of rows.
     detail_height, set_detail_height = ft.use_state(0.0)
     budget = plan_detail(
         detail_height=detail_height or max(0.0, viewport_height - 96.0),
@@ -380,10 +375,6 @@ def AgentTerminalScreen(
         dock_open=keyboard == KEYBOARD_KEYS,
         picture_visible=picture_progress is not None,
     )
-    # A short visible height (keyboard) or a panel that cannot fit
-    # 12 rows with full chrome collapses the key row, status line, dock and
-    # picture into the axes "Keys" toggle below, which opens the dock as an
-    # overlay. The read-only watching row is never collapsed.
     collapse_keys = budget.collapse and not phone and in_control
 
     def switch_to_direct() -> None:
@@ -445,8 +436,13 @@ def AgentTerminalScreen(
         close_keyboard=close_keyboard,
         composing=composing,
     )
+    paste_entry, set_paste_entry = ft.use_state(False)
     on_paste, paste_hint, clear_paste_hint = use_paste_fallback(
-        on_paste, open_keyboard, direct_binding, can_open_keyboard
+        on_paste,
+        open_keyboard,
+        direct_binding,
+        can_open_keyboard,
+        on_unavailable=(lambda: set_paste_entry(True)) if on_paste_text else None,
     )
     key_handlers.current = (on_mobile_item, on_paste, on_open_selection)
     controls.append(
@@ -467,6 +463,7 @@ def AgentTerminalScreen(
             keys_enabled=keys_enabled,
             keyboard_shown=mobile_mode == "direct",
             on_close_selection=on_close_selection,
+            on_dismiss_notice=on_dismiss_notice,
             on_tools=(lambda: toggle_overlay("tools")) if phone and in_control else None,
             tools_open=overlay == "tools",
             on_copy_selection=on_copy_selection,
@@ -499,30 +496,23 @@ def AgentTerminalScreen(
         )
     )
     bottom: list[Any] = []
-    dock_overlay, split_dock = build_agent_dock(
+    dock_overlay = build_agent_dock(
         armed=armed,
         bottom=bottom,
         budget=budget,
         collapse_keys=collapse_keys,
         composer_focusable=composer_focusable,
         dark=dark,
-        detail_height=detail_height,
-        dock_epoch=dock_epoch,
         in_control=in_control,
         keyboard=keyboard,
         keys_enabled=keys_enabled,
         on_dismiss_keys=on_dismiss_keys,
         on_key=on_key,
         on_toggle_modifier=on_toggle_modifier,
-        pad=pad,
         phone=phone,
         picture_progress=picture_progress,
         show_key_row=show_key_row,
         split=split,
-        split_ctl_height=split_ctl_height,
-        split_dock_top=split_dock_top,
-        split_side_width=split_side_width,
-        split_top=split_top,
         terminal=terminal,
         tokens=tokens,
     )
@@ -573,10 +563,14 @@ def AgentTerminalScreen(
 
     phone_lines = typing_split_lines(detail_height - split_top, 56)
     if phone:
+
+        def focus_direct() -> None:
+            if mobile_mode == "reading":  # tapping the idle field starts Direct input
+                open_keyboard()
+
         build_phone_dock(
+            on_direct_focus=focus_direct,
             agent_status=agent_status,
-            agent_title=agent_title,
-            attach_enabled=attach_enabled,
             attached_output=attached_output,
             blocked_review=blocked_review,
             blockers=blockers,
@@ -584,13 +578,11 @@ def AgentTerminalScreen(
             can_direct_type=can_direct_type,
             can_send=can_send,
             clear_paste_hint=clear_paste_hint,
-            close_keyboard=close_keyboard,
             comp_size=comp_size,
             composer_focusable=composer_focusable,
             composer_closing=composer_closing,
             composer_focused=composer_focused,
             dismiss_composer_keyboard=dismiss_composer_keyboard,
-            composing=composing,
             dark=dark,
             detail_width=detail_width,
             direct_binding=direct_binding,
@@ -607,7 +599,6 @@ def AgentTerminalScreen(
             markers=markers,
             mobile_mode=mobile_mode,
             modifier_states=modifier_states,
-            on_attach_picture=on_attach_picture,
             on_cancel_blocked=on_cancel_blocked,
             on_clear_error=on_clear_error,
             on_composer_focus=focus_composer,
@@ -622,7 +613,6 @@ def AgentTerminalScreen(
             paste_hint=paste_hint,
             paste_review=paste_review,
             phone_lines=phone_lines,
-            picture_action=picture_action,
             pictures=pictures,
             send_then_leave=send_then_leave,
             set_comp_size=set_comp_size,
@@ -670,10 +660,7 @@ def AgentTerminalScreen(
     # Draft lines that fill the typing column (text scrolls inside the field).
     expanded_lines = typing_split_lines(
         detail_height - split_top - pad,
-        max(split_ctl_height, 48.0)
-        + (split_dock.height + 8 if split_dock is not None else 0)
-        + 8
-        + 44,
+        max(split_ctl_height, 48.0) + 8 + 44,
     )
     if split and not keyboard_up:
         # With the keyboard down the draft is sized to its content, at
@@ -701,6 +688,7 @@ def AgentTerminalScreen(
             input_mode=input_mode,
             keep_typing=keep_typing,
             keyboard=keyboard,
+            keyboard_up=keyboard_up,
             markers=markers,
             on_attach_picture=on_attach_picture,
             on_cancel_blocked=on_cancel_blocked,
@@ -710,6 +698,8 @@ def AgentTerminalScreen(
             on_confirm_blocked=on_confirm_blocked,
             on_draft_change=on_draft_change,
             on_keyboard_change=on_keyboard_change,
+            on_tools=lambda: toggle_overlay("tools"),
+            tools_open=overlay == "tools",
             on_remove_picture=on_remove_picture,
             on_workflow_change=on_workflow_change,
             pad=pad,
@@ -725,7 +715,6 @@ def AgentTerminalScreen(
             split=split,
             split_comp_h=split_comp_h,
             split_ctl_height=split_ctl_height,
-            split_dock=split_dock,
             split_side_width=split_side_width,
             split_top=split_top,
             submission=submission,
@@ -767,21 +756,36 @@ def AgentTerminalScreen(
             switcher_rows=switcher_rows,
             on_pick=on_agent_tab,
             paste=paste_sheet,
+            paste_entry=PasteEntry(paste_entry, on_paste_text, lambda: set_paste_entry(False))
+            if on_paste_text
+            else None,
+            tokens=tokens,
             wide=not phone,
+            tools_top=split_top if split and not phone else 32,
             tools=phone_tools(
                 on_item=key_item,
                 modifier_states=modifier_states or {},
                 keys_enabled=keys_enabled and in_control and not terminal.selection.open,
                 show_keys=show_key_row and in_control,
-                mode=mobile_mode,
-                on_mode=lambda m: close_keyboard(composing) if m == "compose" else open_keyboard(),
+                mode=mobile_mode
+                if phone
+                else ("compose" if workflow == WORKFLOW_AGENT_COMPOSER else "direct"),
+                on_mode=(lambda m: close_keyboard(composing) if m == "compose" else open_keyboard())
+                if phone
+                else keep_typing(
+                    lambda m: on_workflow_change(
+                        WORKFLOW_AGENT_COMPOSER if m == "compose" else WORKFLOW_AGENT_DIRECT
+                    )
+                ),
                 on_paste=key_paste if in_control else None,
                 on_select=key_select if attached_output else None,
                 on_attach=on_attach_picture,
                 attach_enabled=attach_enabled,
                 picture_action=picture_action,
+                right=split_side_width + split_gap + pad if split and not phone else 4,
+                bottom=pad if split and not phone else 4,
             )
-            if phone
+            if (phone or split) and in_control
             else None,
         ),
     )

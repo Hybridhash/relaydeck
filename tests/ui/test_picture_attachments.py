@@ -26,10 +26,11 @@ from tests.support.pictures.attachments import (
     PATH,
     PREVIEW,
     _Api,
+    attach_control,
     choose,
     install_picker,
 )
-from tests.support.terminal.direct_typing import _direct
+from tests.support.terminal.direct_typing import _direct, open_compose
 from tests.support.terminal.latch_text import _inputs
 from tests.support.terminal.sessions import _agent_session, _session
 from tests.support.ui.phone_terminal import _ancestry
@@ -100,7 +101,7 @@ def test_explicit_picture_upload_inserts_exact_path_without_enter(
         try:
             terminal = session.current_term
             session.set_bracketed_paste(bracketed)
-            button = app.find("terminal-attach-picture")
+            button = attach_control(app)
             assert button.tooltip is None and not button.disabled
             assert any(
                 isinstance(parent, ft.Semantics) and parent.label == "Attach picture"
@@ -131,7 +132,7 @@ def test_compose_chip_add_remove_roundtrip_and_explicit_send(
     async def scenario() -> None:
         app, session, socket, _ = await _direct(False)
         try:
-            await app.set_props_and_fire("agent-compose-toggle", {}, "click")
+            await open_compose(app)
             await choose(app, "terminal-attach-picture")
             assert len(session.store.pictures) == 1 and _inputs(socket) == []
             image = app.find(f"picture-chip-{IDENTIFIER}").controls[0]
@@ -203,10 +204,20 @@ def test_watch_disables_attachment_and_forged_click_is_inert(
     async def scenario() -> None:
         app, session, socket, _ = await _direct(False)
         try:
+            attach = attach_control(app)
+            forged_click, action = attach.on_click, attach.action
             await session.disconnect()
             await app.settle()
-            assert app.find("terminal-attach-picture").disabled
-            await choose(app, "terminal-attach-picture")
+            for key in ("terminal-tools-button", "tools-attach-picture"):
+                with pytest.raises(KeyError):
+                    app.find(key)
+            await forged_click(None)
+            await app.session.dispatch_event(
+                action.file_picker._i,
+                "result",
+                {"files": [{"id": 7, "name": "spoof.exe", "size": 100}]},
+            )
+            await app.settle()
             assert calls == [] and _inputs(socket) == []
         finally:
             await session.dispose()

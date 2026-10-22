@@ -10,13 +10,13 @@ from urllib.parse import urlencode
 
 import httpx
 
-from relaydeck.client.adapters.fake import FakeClipboard
 from relaydeck.client.features.shell.ops import HttpxShellGatewayOps
 from relaydeck.client.features.shell.session import ShellSession
 from relaydeck.client.features.sync.transport import TerminalSocket, TransportError
 from relaydeck.client.features.terminal.agent_session import AgentSession
 from relaydeck.gateway.leases import READER_HANDOFF_TTL_MS
 from tests.support.asgi_socket import AsgiSocket
+from tests.support.fakes import FakeClipboard
 from tests.support.terminal.lease_gateway import _client, _token
 
 

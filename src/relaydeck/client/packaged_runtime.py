@@ -6,7 +6,7 @@ import asyncio
 import hashlib
 import logging
 from collections.abc import Callable
-from typing import Any
+from typing import Any, cast
 from urllib.parse import unquote, urlsplit
 
 import flet as ft
@@ -28,7 +28,8 @@ from relaydeck.client.features.sync.transport import TransportError
 from relaydeck.client.notifications_runtime import NotificationRuntime
 from relaydeck.client.resources import AppResources, build_resources
 from relaydeck.client.sessions import session_live
-from relaydeck.contracts.schemas import validate
+from relaydeck.contracts import paths
+from relaydeck.contracts.schemas import Me, validate
 
 logger = logging.getLogger(__name__)
 
@@ -570,11 +571,12 @@ class PackagedRuntime:
             self.notify()
             return
         response = await self.client.get(
-            self.endpoint + "/v1/me", headers={"Authorization": f"Bearer {token}"}
+            self.endpoint + paths.ME, headers={"Authorization": f"Bearer {token}"}
         )
         response.raise_for_status()
         identity = response.json()
         validate("relaydeck/gateway/v1/me", identity)
+        known = cast(Me, identity)
         if not self.alive or generation != self.generation:
             return
         await self._close_resources()
@@ -588,7 +590,7 @@ class PackagedRuntime:
             if ":" in route.selection
             else ""
         )
-        host = host if host in identity["hosts"] else next(iter(identity["hosts"]), "")
+        host = host if host in known["hosts"] else next(iter(known["hosts"]), "")
         auth = self.auth
 
         async def refresh_identity() -> bool:

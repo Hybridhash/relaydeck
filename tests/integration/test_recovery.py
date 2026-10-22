@@ -24,10 +24,11 @@ from typing import Any
 from fastapi.testclient import TestClient
 
 from relaydeck.connector.journal import ConnectorDispatch
-from relaydeck.gateway.app import GatewayState, create_app, revoke_account_and_close
+from relaydeck.gateway.app import GatewayState, create_app
 from relaydeck.gateway.backend import BackendError
 from relaydeck.gateway.production import JournalBackend
 from relaydeck.gateway.push import PushStore
+from relaydeck.gateway.revocation import revoke_account_and_close
 from relaydeck.gateway.ring import STATUS_OK, TerminalRing
 from relaydeck.journal import CommandJournal
 

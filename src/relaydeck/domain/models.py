@@ -61,10 +61,6 @@ class CommandStatus(str, Enum):
     UNKNOWN = "unknown"
 
 
-TERMINAL_KIND_AGENT = "agent"
-TERMINAL_KIND_SHELL = "shell"
-
-
 def scope_key(host_id: str, bare_id: str) -> str:
     """Host-scoped internal key for host-local upstream ids.
 

@@ -10,8 +10,9 @@ from relaydeck_terminal import protocol
 
 from relaydeck.client.features.inventory.routing import RouteBridge
 from relaydeck.client.features.terminal.input_modes import WORKFLOW_AGENT_DIRECT
-from relaydeck.gateway import terminal_wire
+from relaydeck.contracts.wire import terminal as terminal_wire
 from tests.support.host_harness import run
+from tests.support.terminal.direct_typing import open_compose
 from tests.support.ui.editor_patches import assert_only_editor_idle_patches
 from tests.support.ui.phone_terminal import _ancestry, _shape
 from tests.support.ui.retained_root import _render
@@ -112,7 +113,7 @@ def test_multiline_compose_focus_and_tap_do_not_rebuild_or_rewrite_field(width: 
             session = pool.foreground.session
             draft = "\n".join(f"line {n}: long scrolling draft with words" for n in range(16))
             session.on_draft_change(draft)
-            await app.set_props_and_fire("agent-compose-toggle", {}, "click")
+            await open_compose(app)
             field = app.find("composer-draft")
             term = session.current_term
             ancestry = _shape(_ancestry(app, field))

@@ -8,7 +8,6 @@ from typing import Any, cast
 import httpx
 import pytest
 
-from relaydeck.client.adapters.fake import FakeClipboard, FakeCredentialStore
 from relaydeck.client.components.design_system.connect import connect_hint_example
 from relaydeck.client.packaged_runtime import (
     PAIRING_SETUP_FAILED,
@@ -16,6 +15,7 @@ from relaydeck.client.packaged_runtime import (
     PackagedRuntime,
     private_endpoint,
 )
+from tests.support.fakes import FakeClipboard, FakeCredentialStore
 from tests.support.host_harness import run
 
 SECRET = "hunter2-secret-token"

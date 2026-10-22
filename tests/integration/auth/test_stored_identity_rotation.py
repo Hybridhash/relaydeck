@@ -8,7 +8,6 @@ from urllib.parse import parse_qs, urlsplit
 
 import httpx
 
-from relaydeck.client.adapters.fake import FakeCredentialStore
 from relaydeck.client.features.auth.service import (
     ACCESS_KEY,
     EXPIRES_KEY,
@@ -21,6 +20,7 @@ from relaydeck.client.features.auth.service import (
 )
 from relaydeck.gateway.app import create_app
 from tests.security.helpers import ALL_CAPS, NOW, make_state
+from tests.support.fakes import FakeCredentialStore
 
 
 def test_json_grant_collections_are_frozen_and_cannot_expand_an_issued_session() -> None:

@@ -714,7 +714,7 @@ def test_scope_revocation_failure_severs_writers_before_retry(
 
     from starlette.responses import JSONResponse
 
-    from relaydeck.gateway.app import revoke_account_and_close, revoke_host_and_close
+    from relaydeck.gateway.revocation import revoke_account_and_close, revoke_host_and_close
     from tests.support.gateway.fake_socket import _FakeSocket
 
     keys, clock, disk, sessions, web, sid = seed(tmp_path / "state")

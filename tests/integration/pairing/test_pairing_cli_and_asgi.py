@@ -14,7 +14,8 @@ from relaydeck.companion.cli import main
 from relaydeck.companion.config import load_config
 from relaydeck.companion.runtime import CompanionRuntime
 from relaydeck.contracts.schemas import validate
-from relaydeck.gateway.app import create_app, revoke_host_and_close
+from relaydeck.gateway.app import create_app
+from relaydeck.gateway.revocation import revoke_host_and_close
 from tests.security.helpers import auth
 from tests.support.companion.asgi_companion import AsgiServer, config_file
 from tests.support.pairing import ORIGIN, VERIFIER, foundation, proof

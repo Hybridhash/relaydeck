@@ -40,6 +40,36 @@ packaging configuration. No network font dependency at runtime.
   (upstream OFL.txt, unchanged). Single weight-400 face registered as
   the `Noto Sans Symbols 2` family; UI text and the terminal list it
   as a fallback, never as primary.
+- `fonts/NotoSansSymbols-Regular.ttf`: the published, unmodified **full**
+  Regular TTF from Noto Sans Symbols v2.003 (not a subset or variable font).
+  Copyright 2022 The Noto Project Authors (https://github.com/notofonts/symbols).
+  Official release archive:
+  https://github.com/notofonts/symbols/releases/download/NotoSansSymbols-v2.003/NotoSansSymbols-v2.003.zip
+  (SHA-256 `0c113cdcf6c31d050b80dac39fba2d804a6985281012e76e9220c0a00da007f3`).
+  Archive member: `NotoSansSymbols/full/ttf/NotoSansSymbols-Regular.ttf`.
+  264032 bytes; SHA-256
+  `0088617baec0e8ac47e022cc1f38695f772301c9ef6d1f24a785abbef1e05d79`.
+  Embedded version: `Version 2.003; ttfautohint (v1.8.4.7-5d5b)`.
+  The archive's unchanged `OFL.txt` ships as `OFL-NotoSansSymbols.txt`
+  (SHA-256 `b118dd41337806a5d4797052c77caf3bd096aed783e5eb21b4d11154351e1ac0`).
+  Registered as `Noto Sans Symbols`, after Symbols 2 in both fallback chains.
+
+### Web engine fallback notices
+
+`fonts/web-fallback-notices.json` contains the full, unmodified copyright/OFL
+notices for all 145 families in Flutter 3.44.8's fallback list, including all
+five CJK families. Each record includes its upstream URL and SHA-256 of the
+UTF-8 notice. Sources are `ofl/<family>/OFL.txt` at the official Google Fonts
+repository commit `47d54ca1ebb14fd864695f1d39dc734f39017c33`:
+https://github.com/google/fonts/tree/47d54ca1ebb14fd864695f1d39dc734f39017c33/ofl
+
+`scripts/web_fonts.py` verifies those hashes and requires a notice for every
+vendored family before installing fonts. It appends the selected families'
+full notices to the web build's existing `assets/NOTICES` and verifies their
+presence, preserving Flutter's original notices. No licence network access
+is needed during builds. Binaries are fetched from the engine's exact
+versioned `https://fonts.gstatic.com/s/<family>/v<N>/<file>` URLs, validated,
+and served from the build's own `assets/fonts/`; they are not committed here.
 
 Flet 1.0.3 `page.fonts` maps one file per family name (verified in the
 pinned `flet` Dart client: one `FontLoader` asset per family, no weight

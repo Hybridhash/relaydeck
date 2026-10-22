@@ -95,6 +95,7 @@ def SettingsPage(
     scenarios: tuple[str, ...] = (),
     on_apply_scenario: Callable[[str], Any] | None = None,
     management: Any = None,
+    server_health: Any = None,
     hosts_section: Any = None,
     notifications_panel: Any = None,
     diagnostics: Any = None,
@@ -274,6 +275,8 @@ def SettingsPage(
                 phone=phone,
             )
         )
+    if server_health is not None:
+        extras.append(server_health)
     if diagnostics is not None:
         extras.append(
             SettingsPanel(

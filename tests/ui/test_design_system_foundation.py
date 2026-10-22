@@ -8,7 +8,9 @@ claims with real math; they never restate a constant alone.
 
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
+from urllib.parse import parse_qs, urlsplit
 
 from PIL import Image, ImageFont
 
@@ -68,7 +70,7 @@ def test_layout_breakpoints() -> None:
 
 
 def test_font_assets_exist_and_load_offline() -> None:
-    assert len(WEIGHT_FILES) == 9
+    assert len(WEIGHT_FILES) == 10
     for alias, name, _weight in WEIGHT_FILES:
         path = FONTS_DIR / name
         assert path.is_file(), alias
@@ -77,7 +79,7 @@ def test_font_assets_exist_and_load_offline() -> None:
         assert (
             "Bricolage Grotesque" in family
             or "JetBrains Mono" in family
-            or "Noto Sans Symbols 2" in family
+            or "Noto Sans Symbols" in family
         ), alias
     # Licenses ship beside the binaries they cover.
     assert (ASSETS_DIR / "OFL-BricolageGrotesque.txt").is_file()
@@ -87,6 +89,7 @@ def test_font_assets_exist_and_load_offline() -> None:
     assert "SIL Open Font License" in (ASSETS_DIR / "OFL-JetBrainsMono.txt").read_text()
     assert "SIL Open Font License" in (ASSETS_DIR / "OFL-NotoSansSymbols2.txt").read_text()
     assert "Noto Project Authors" in (ASSETS_DIR / "OFL-NotoSansSymbols2.txt").read_text()
+    assert "SIL OPEN FONT LICENSE" in (ASSETS_DIR / "OFL-NotoSansSymbols.txt").read_text()
 
 
 def test_symbols_font_registered_and_wired_as_fallback() -> None:
@@ -95,8 +98,14 @@ def test_symbols_font_registered_and_wired_as_fallback() -> None:
     from relaydeck.client.theme import TEXT_FONT_FALLBACK
 
     table = page_fonts("design_system")
-    assert table[FAMILY_SYMBOLS] == "design_system/fonts/NotoSansSymbols2-Regular.ttf"
-    assert TEXT_FONT_FALLBACK == (FAMILY_SYMBOLS,)
+    assert (
+        urlsplit(table[FAMILY_SYMBOLS]).path == "design_system/fonts/NotoSansSymbols2-Regular.ttf"
+    )
+    assert (
+        urlsplit(table["Noto Sans Symbols"]).path
+        == "design_system/fonts/NotoSansSymbols-Regular.ttf"
+    )
+    assert TEXT_FONT_FALLBACK == (FAMILY_SYMBOLS, "Noto Sans Symbols")
     # Theme text and mock card text list the loaded family as fallback
     # so agent symbols render instead of tofu.
     for dark in (False, True):
@@ -124,13 +133,33 @@ def test_font_table_shape_is_offline_and_complete() -> None:
     assert set(table) == {alias for alias, _, _ in WEIGHT_FILES}
     for alias, src in table.items():
         assert not src.startswith("http"), alias
-        assert (
-            ASSETS_DIR / Path(src).name if "/" not in src else FONTS_DIR / src.split("/")[-1]
-        ).is_file()
+        url = urlsplit(src)
+        path = FONTS_DIR / Path(url.path).name
+        assert path.is_file()
+        assert parse_qs(url.query) == {"v": [hashlib.sha256(path.read_bytes()).hexdigest()[:12]]}
     assert face("Bricolage Grotesque", 800) == "Bricolage Grotesque ExtraBold"
     assert face("Bricolage Grotesque", 700) == "Bricolage Grotesque Bold"
     assert face("Bricolage Grotesque", 500) == "Bricolage Grotesque Medium"
     assert face("JetBrains Mono", 400) == "JetBrains Mono"
+
+
+def test_symbols_regular_font_is_published_full_face_with_needed_glyphs() -> None:
+    path = FONTS_DIR / "NotoSansSymbols-Regular.ttf"
+    assert path.stat().st_size == 264032 < 500_000
+    assert (
+        hashlib.sha256(path.read_bytes()).hexdigest()
+        == "0088617baec0e8ac47e022cc1f38695f772301c9ef6d1f24a785abbef1e05d79"
+    )
+    font = ImageFont.truetype(str(path), 20)
+    assert font.getname() == ("Noto Sans Symbols", "Regular")
+    missing = bytes(font.getmask("\uffff"))
+    for glyph in "⎿①←→":
+        assert bytes(font.getmask(glyph)) != missing, glyph
+    terminal = (
+        Path(__file__).resolve().parents[2]
+        / "extensions/terminal/src/flutter/relaydeck_terminal/lib/src/relaydeck_terminal.dart"
+    ).read_text()
+    assert "'Noto Sans Symbols 2',\n            'Noto Sans Symbols'," in terminal
 
 
 def test_dot_tile_is_valid_18px_png() -> None:

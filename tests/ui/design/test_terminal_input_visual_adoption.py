@@ -122,6 +122,7 @@ def _shell_props(**overrides: Any) -> dict[str, Any]:
         "on_open_selection": _noop,
         "on_copy_selection": _noop,
         "on_close_selection": _noop,
+        "on_dismiss_notice": _noop,
         "on_paste": _noop,
         "on_mode_change": _noop,
         "on_key": _noop,

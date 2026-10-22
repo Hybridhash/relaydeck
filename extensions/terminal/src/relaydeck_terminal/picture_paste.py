@@ -1,8 +1,10 @@
-"""Browser picture-paste bridge: a layout-neutral region around real inputs.
+"""Browser paste bridge: a layout-neutral region around real inputs.
 
 Dart owns the clipboard event and the retained Blob; Python only receives a request id and
 metadata (`offer`), decides, and asks the same control to `upload` that request to a grant URL
-or to `abort` it. Image bytes never cross Flet events or the terminal channel.
+or to `abort` it. Image bytes never cross Flet events or the terminal channel. Text pasted
+while a terminal has focus arrives as `text` for the terminal's reviewed paste; text for a text
+field is inserted in Dart and never crosses as an event.
 
 No `from __future__ import annotations`: Flet 1.0.3 reads raw event annotations (see terminal.py).
 """
@@ -37,6 +39,17 @@ class PicturePasteRejectEvent(ControlEvent):
     reason: str
 
 
+@dataclass(repr=False)
+class PicturePasteTextEvent(ControlEvent):
+    text: str
+    # The binding the browser read at the gesture, as for picture offers.
+    binding: str = ""
+
+    def __repr__(self) -> str:
+        # Flet logs every triggered event at DEBUG; the pasted text must never appear there.
+        return f"PicturePasteTextEvent(name={self.name!r}, chars={len(self.text)})"
+
+
 def valid_request_id(value: object) -> bool:
     return isinstance(value, str) and _REQUEST_ID.fullmatch(value) is not None
 
@@ -59,8 +72,12 @@ class RelayDeckPicturePaste(LayoutControl):
     binding: str = ""
     """Opaque activation revision, republished on every render and echoed in each offer."""
 
+    pictures: bool = True
+    """False while Python cannot take a picture: the browser then ignores pasted files."""
+
     on_offer: ft.EventHandler[PicturePasteOfferEvent] | None = None
     on_reject: ft.EventHandler[PicturePasteRejectEvent] | None = None
+    on_text: ft.EventHandler[PicturePasteTextEvent] | None = None
 
     async def upload(self, request_id: str, upload_url: str, expires_ms: int) -> str:
         """PUT the retained Blob of `request_id`; the result is a short status word."""

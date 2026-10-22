@@ -1718,6 +1718,7 @@ void main() {
       expect(view.textStyle.fontFamilyFallback, [
         'JetBrains Mono',
         'Noto Sans Symbols 2',
+        'Noto Sans Symbols',
         'monospace',
       ]);
       // The full glyph set survives the write path unmangled.

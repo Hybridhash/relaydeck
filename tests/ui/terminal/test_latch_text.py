@@ -12,6 +12,7 @@ from relaydeck_terminal import protocol
 from relaydeck.client.features.shell.screen import mount_shell_screen
 from relaydeck.client.features.terminal.surfaces import mount_agent_screen
 from tests.support.host_harness import render_component, run
+from tests.support.terminal.direct_typing import open_compose
 from tests.support.terminal.latch_text import _inputs
 from tests.support.terminal.sessions import _agent_session, _session
 
@@ -217,7 +218,7 @@ def test_composer_native_text_stays_local_and_does_not_consume_latch() -> None:
         try:
             session.on_draft_change("kept draft ")
             await app.set_props_and_fire("mod-ctrl", {}, "click")
-            await app.set_props_and_fire("agent-compose-toggle", {}, "click")
+            await open_compose(app)
             channel._deliver(protocol.encode_input("漢".encode(), protocol.ORIGIN_TEXT))
             await app.settle()
             assert session.store.draft == "kept draft 漢" and _inputs(socket) == []

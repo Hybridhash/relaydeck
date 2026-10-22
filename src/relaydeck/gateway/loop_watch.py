@@ -8,6 +8,7 @@ import re
 import sys
 import threading
 import time
+from collections.abc import Callable
 from contextlib import suppress
 from types import FrameType
 
@@ -33,8 +34,15 @@ def _location(frame: FrameType | None) -> tuple[str, str, int]:
 class LoopWatch:
     """A 100 ms heartbeat plus a daemon sampler; one attribution per stalled heartbeat."""
 
-    def __init__(self, *, interval: float = 0.1, threshold: float = 0.25) -> None:
+    def __init__(
+        self,
+        *,
+        interval: float = 0.1,
+        threshold: float = 0.25,
+        on_beat: Callable[[float], None] | None = None,
+    ) -> None:
         self.interval, self.threshold = interval, threshold
+        self._on_beat = on_beat
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._task: asyncio.Task[None] | None = None
@@ -54,6 +62,11 @@ class LoopWatch:
             await asyncio.sleep(self.interval)
             self._beat = time.monotonic()
             lag = self._beat - before - self.interval
+            if self._on_beat is not None:
+                try:
+                    self._on_beat(lag)
+                except Exception as exc:  # a metrics fault must not stop the watchdog
+                    LOG.error("loop_beat_failed error=%s", type(exc).__name__)
             if lag > self.threshold:
                 LOG.warning("loop_lag ms=%d", round(lag * 1000))
 

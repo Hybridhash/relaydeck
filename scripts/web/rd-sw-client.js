@@ -395,9 +395,25 @@
   // Pairing and the Settings choice both change inside the running app without a reload, so
   // the answer is checked again later (one small request): a minute while unpaired, 15 seconds
   // while this device could still be offered notifications. Never while hidden or subscribed.
-  var PUSH_RECHECK_MS = 60 * 1000;
+  // While nothing can be offered the wait grows (60 s, 2 min, 5 min) and starts over when the
+  // page returns to the foreground or the network comes back. The 15 s check runs only while
+  // the bar is open: once it is closed for the current choice, only a foreground re-checks.
+  var PUSH_BACKOFF_MS = [60 * 1000, 120 * 1000, 300 * 1000];
   var PUSH_CHOICE_RECHECK_MS = 15 * 1000;
+  var pushBackoffStep = 0;
   var pushRecheck = null;
+  function resetPushBackoff() {
+    pushBackoffStep = 0;
+    if (pushRecheck) {
+      clearTimeout(pushRecheck);
+      pushRecheck = null;
+    }
+  }
+  function pushBackoffDelay() {
+    var ms = PUSH_BACKOFF_MS[Math.min(pushBackoffStep, PUSH_BACKOFF_MS.length - 1)];
+    pushBackoffStep += 1;
+    return ms;
+  }
   var pushStarted = false;  // set once the service worker is registered
   function recheckPush(ms) {
     if (pushRecheck) return;
@@ -412,13 +428,17 @@
     // page's event handlers.
     return Promise.resolve().then(fetchKey).then(function (keyDoc) {
       if (!keyDoc) {
-        recheckPush(PUSH_RECHECK_MS);
+        recheckPush(pushBackoffDelay());
         return hidePushBar();  // not paired: no banner
       }
       pushChoice = keyDoc.choice.slice().sort().join(',');
       if (keyDoc.subscribed) return hidePushBar();
+      if (pushDismissedFor === pushChoice) return hidePushBar();  // closed: wait for a foreground
+      if (!pushChoice) {
+        recheckPush(pushBackoffDelay());  // nothing to offer yet; a Settings change shows up later
+        return hidePushBar();
+      }
       recheckPush(PUSH_CHOICE_RECHECK_MS);
-      if (!pushChoice) return hidePushBar();  // the device chose none: nothing to offer
       // iPhone and iPad offer web push only to the Home Screen app; a Safari tab has no
       // Notification API at all, so this hint must come before that check.
       if (isIos() && !isStandalone()) {
@@ -461,7 +481,11 @@
     trackInput();
     document.addEventListener('focusin', updateVisibility, true);
     document.addEventListener('focusout', function () { setTimeout(updateVisibility, 0); }, true);
-    window.addEventListener('online', updateVisibility);
+    window.addEventListener('online', function () {
+      resetPushBackoff();
+      if (pushStarted) pushBanner();
+      updateVisibility();
+    });
     window.addEventListener('offline', updateVisibility);
     if (window.MutationObserver) {
       new MutationObserver(function () { if (offered) updateVisibility(); })
@@ -470,6 +494,7 @@
     document.addEventListener('visibilitychange', function () {
       if (document.visibilityState !== 'visible') return;
       checkForUpdate();
+      resetPushBackoff();
       // Back from the system settings or another app: permission or pairing may have changed.
       if (pushStarted) pushBanner();
     });

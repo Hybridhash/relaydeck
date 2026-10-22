@@ -12,7 +12,6 @@ from relaydeck.client.components.design_system.fonts import FAMILY_INTERFACE
 from relaydeck.client.components.design_system.primitives import text_style
 
 TOAST_SECONDS = 5
-TOAST_HEIGHT = 56
 _MESSAGE = {"size": 14, "weight": 600, "height": 1.2}
 _STRONG = {"size": 14, "weight": 800, "height": 1.2}
 

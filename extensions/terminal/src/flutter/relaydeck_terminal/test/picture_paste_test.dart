@@ -14,6 +14,22 @@ PictureRegion region(String owner, bool Function() eligible,
       eligible: eligible,
       onOffer: (id, mime, size) => log?.add('offer:$owner'),
       onReject: (reason) => log?.add('reject:$owner:$reason'),
+      onText: (text) => log?.add('text:$owner:$text'),
+    );
+
+PasteDecision decide({
+  List<PasteCandidate> files = const [],
+  String text = '',
+  bool terminal = false,
+  bool field = false,
+  bool busy = false,
+}) =>
+    decidePaste(
+      pictures: classifyPaste(files),
+      text: text,
+      terminalFocused: terminal,
+      fieldFocused: field,
+      pictureBusy: busy,
     );
 
 void main() {
@@ -146,17 +162,128 @@ void main() {
       expect(changes, 2);
     });
 
-    test('text goes to a focused terminal exactly once, else stays native', () {
+    test('a terminal owns the paste only while it says it has focus', () {
       final dispatcher = PicturePasteDispatcher();
-      expect(dispatcher.pasteText('hello'), isFalse);
-      final seen = <String>[];
-      dispatcher.terminalPaste = (text) {
-        seen.add(text);
-        return true;
-      };
-      expect(dispatcher.pasteText('hello'), isTrue);
-      expect(dispatcher.pasteText(''), isFalse);
-      expect(seen, ['hello']);
+      expect(dispatcher.terminalOwnsPaste, isFalse);
+      var focused = true;
+      dispatcher.terminalFocused = () => focused;
+      expect(dispatcher.terminalOwnsPaste, isTrue);
+      focused = false;
+      expect(dispatcher.terminalOwnsPaste, isFalse);
+      dispatcher.terminalFocused = null;
+      expect(dispatcher.terminalOwnsPaste, isFalse);
+    });
+
+    test('a region without pictures still carries text', () {
+      final log = <String>[];
+      final r = region('composer', () => true, log: log);
+      expect(r.picturesEnabled(), isTrue);
+      r.onText('hi');
+      expect(log, ['text:composer:hi']);
+    });
+  });
+
+  group('decidePaste', () {
+    test('an office copy (picture plus text) pastes the text into an input', () {
+      final files = [png(name: 'image.png')];
+      expect(decide(files: files, text: 'A1\tB1', field: true).action,
+          PasteAction.field);
+      expect(decide(files: files, text: 'A1\tB1', terminal: true).action,
+          PasteAction.terminal);
+    });
+
+    test('a file copy offers the picture, never its name as text', () {
+      final files = [png(name: 'shot.png')];
+      expect(decide(files: files, text: 'shot.png', field: true).action,
+          PasteAction.offer);
+      expect(decide(files: files, field: true).action, PasteAction.offer);
+    });
+
+    test('outside an input a picture paste is unchanged', () {
+      expect(decide(files: [png()], text: 'A1').action, PasteAction.offer);
+    });
+
+    test('text over the cap is refused', () {
+      final big = 'x' * (maxPasteText + 1);
+      final decision = decide(text: big, field: true);
+      expect(decision.action, PasteAction.reject);
+      expect(decision.reason, 'text_too_large');
+      expect(decide(text: 'x' * maxPasteText, field: true).action,
+          PasteAction.field);
+    });
+
+    test('text goes to the focused terminal', () {
+      final decision = decide(text: 'ls -la', terminal: true);
+      expect(decision.action, PasteAction.terminal);
+      expect(decision.takesEvent, isTrue);
+    });
+
+    test('text goes into the focused text field when no terminal has focus', () {
+      final decision = decide(text: 'hello', field: true);
+      expect(decision.action, PasteAction.field);
+      expect(decision.takesEvent, isTrue);
+    });
+
+    test('a terminal with focus wins over a field', () {
+      expect(decide(text: 'x', terminal: true, field: true).action,
+          PasteAction.terminal);
+    });
+
+    test('text nobody of ours owns keeps the browser default', () {
+      final decision = decide(text: 'hello');
+      expect(decision.action, PasteAction.ignore);
+      expect(decision.takesEvent, isFalse);
+    });
+
+    test('a picture is offered and takes the event', () {
+      final decision = decide(files: [png()], field: true);
+      expect(decision.action, PasteAction.offer);
+      expect(decision.takesEvent, isTrue);
+    });
+
+    test('a picture with text is the text inside an input', () {
+      expect(decide(files: [png()], text: 'caption', terminal: true).action,
+          PasteAction.terminal);
+      // With pictures off the caller passes no files, so the text is pasted.
+      expect(decide(text: 'caption', terminal: true).action,
+          PasteAction.terminal);
+    });
+
+    test('a paste without text is refused with a reason when an input owns it',
+        () {
+      for (final owner in [
+        decide(terminal: true),
+        decide(field: true),
+      ]) {
+        expect(owner.action, PasteAction.reject);
+        expect(owner.reason, 'no_text');
+        expect(owner.takesEvent, isTrue);
+      }
+      expect(decide().action, PasteAction.ignore);
+    });
+
+    test('picture refusals keep their reasons and a busy slot refuses', () {
+      expect(decide(files: [png()], busy: true).reason, 'busy');
+      expect(decide(files: [png(name: 'a.png'), png(name: 'b.png', size: 2)])
+          .reason, 'multiple');
+      expect(decide(files: [png(size: 0)]).reason, 'empty');
+      expect(decide(files: [png(size: kMaxPicturePasteBytes + 1)]).reason,
+          'too_large');
+      expect(
+          decide(files: [const PasteCandidate(mime: 'image/gif', size: 3)])
+              .reason,
+          'unsupported');
+    });
+
+    test('every taken paste suppresses the browser paste: no double paste', () {
+      for (final decision in [
+        decide(text: 'a', terminal: true),
+        decide(text: 'a', field: true),
+        decide(files: [png()]),
+        decide(terminal: true),
+      ]) {
+        expect(decision.takesEvent, isTrue, reason: '${decision.action}');
+      }
     });
   });
 

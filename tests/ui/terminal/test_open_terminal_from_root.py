@@ -10,6 +10,7 @@ sockets (no network, no credentials).
 
 from __future__ import annotations
 
+import pytest
 from relaydeck_terminal.protocol import ORIGIN_KEY
 
 from relaydeck.client.app import Root
@@ -23,9 +24,9 @@ from relaydeck.client.features.terminal.surfaces import (
     AGENT_TAKEOVER_CONFIRM_KEY,
     AGENT_TAKEOVER_DISCLOSURE_KEY,
 )
+from relaydeck.contracts.wire import terminal as terminal_wire
 from relaydeck.domain import reducers
 from relaydeck.domain.models import ConnectionState, scope_key
-from relaydeck.gateway import terminal_wire
 from tests.support.host_harness import HostApp, render_component, run
 from tests.support.scripted_sessions import ScriptedSessions, make_scripted_sessions
 from tests.support.ui.open_terminal import AGENT_ID, AGENT_KEY, _host_entry, _TwoHostTransport
@@ -369,5 +370,54 @@ def test_wire_boundary_carries_bare_upstream_ids() -> None:
         # SHELL_TAB itself contains ":" — this proves unquoting, not a
         # prefix strip ("h1:w1%3At2" would fail both asserts).
         assert sessions.ops.attaches[1]["terminal_id"] != SHELL_KEY
+
+    run(scenario())
+
+
+def test_root_retained_is_traced_once_for_repeated_identical_renders(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from relaydeck.client.hooks import retained as retained_hooks
+
+    calls: list[tuple[str, tuple[tuple[str, object], ...]]] = []
+    monkeypatch.setattr(
+        retained_hooks,
+        "trace_lifecycle",
+        lambda event, **fields: calls.append((event, tuple(sorted(fields.items())))),
+    )
+
+    async def scenario() -> None:
+        app, *_ = await _render()
+        await _open_shell(app)
+        await app.settle()
+
+    run(scenario())
+    retained = [c for c in calls if c[0] == "root_retained"]
+    assert retained
+    assert all(a != b for a, b in zip(retained, retained[1:], strict=False))
+
+
+def test_settings_shows_server_health_only_when_the_transport_can_read_it() -> None:
+    import json
+    from pathlib import Path
+
+    snapshot = json.loads(
+        (Path(__file__).resolve().parents[2] / "fixtures/gateway/server-metrics.json").read_text()
+    )
+
+    async def scenario() -> None:
+        app, _controller, _sessions, transport = await _render()
+        await app.set_props_and_fire("console-rail-settings", {}, "click")
+        await app.settle()
+        assert _missing(app, "settings-server-health")  # this transport has no metrics
+
+        async def metrics() -> dict[str, object]:
+            return snapshot
+
+        transport.metrics = metrics  # type: ignore[attr-defined]
+        await app.set_props_and_fire("console-rail-console", {}, "click")
+        await app.set_props_and_fire("console-rail-settings", {}, "click")
+        await app.wait_for("settings-server-health")
+        assert app.find("health-tile-requests") is not None
 
     run(scenario())

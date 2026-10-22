@@ -15,9 +15,10 @@ from cryptography.hazmat.primitives.asymmetric import padding, rsa
 from relaydeck.gateway.app import create_app
 from relaydeck.gateway.cli import build_parser, build_serve_state, resolve_serve_options
 from relaydeck.gateway.fcm import FCM_SCOPE, TOKEN_URL, FcmProvider
-from relaydeck.gateway.push import HINT_KEYS, ProviderOutcome, PushStore, StubProvider
+from relaydeck.gateway.push import HINT_KEYS, ProviderOutcome, PushStore
 from relaydeck.gateway.push_worker import PushWorker
 from tests.security.helpers import make_state as gateway_state
+from tests.support.push import StubProvider
 from tests.support.sync.transport_fixtures import _wait
 
 

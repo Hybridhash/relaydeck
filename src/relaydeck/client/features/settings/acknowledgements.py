@@ -73,6 +73,7 @@ ACKNOWLEDGEMENT_GROUPS: tuple[AcknowledgementGroup, ...] = (
         ("Bricolage Grotesque", "OFL-1.1"),
         ("JetBrains Mono", "OFL-1.1"),
         ("Noto Sans Symbols 2", "OFL-1.1"),
+        ("Noto Sans Symbols", "OFL-1.1"),
     ),
 )
 

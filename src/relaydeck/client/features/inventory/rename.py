@@ -194,6 +194,7 @@ def RenameDialog(
                             "agent_not_found": "This agent is no longer available.",
                             "stale_epoch": "The Mac reconnected. Check status before trying again.",
                             "unsupported_capability": "This Mac does not support renaming agents.",
+                            "internal": "Something went wrong on the Mac.",
                         }.get(exc.code, "The Mac refused the rename. Refresh before trying again.")
                     )
                     set_uncertain(False)

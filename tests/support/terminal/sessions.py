@@ -7,10 +7,10 @@ from collections import deque
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from relaydeck.client.adapters.fake import FakeClipboard
 from relaydeck.client.features.shell import ScriptedShellGatewayOps, ShellSession
 from relaydeck.client.features.sync.transport import TerminalSocket, TransportError
 from relaydeck.client.features.terminal.agent_session import AgentSession
+from tests.support.fakes import FakeClipboard
 
 
 class _ScriptedSocket(TerminalSocket):

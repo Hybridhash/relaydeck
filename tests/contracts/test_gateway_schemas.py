@@ -23,6 +23,7 @@ EXAMPLES = {
     "relaydeck/gateway/v1/picture-request": "picture-request.json",
     "relaydeck/gateway/v1/picture-grant": "picture-grant.json",
     "relaydeck/gateway/v1/picture-result": "picture-result.json",
+    "relaydeck/gateway/v1/server-metrics": "server-metrics.json",
     "relaydeck/gateway/v1/authorization-request": "authorization-request.json",
     "relaydeck/gateway/v1/snapshot": "snapshot.json",
     "relaydeck/gateway/v1/metadata-event": "metadata-event.json",

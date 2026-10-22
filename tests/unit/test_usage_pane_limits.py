@@ -130,6 +130,7 @@ class FakeHerdr:
         self.sent: list[tuple[str, str, str]] = []
         self.failed: set[str] = set()  # "tab close", "wait", ...
         self.slow_create = False
+        self.cwds: list[str | None] = []  # the --cwd each tab was created with
         self._counter = 0
 
     # -- transport ---------------------------------------------------------
@@ -170,6 +171,7 @@ class FakeHerdr:
         workspace = args[args.index("--workspace") + 1]
         label = args[args.index("--label") + 1]
         assert args[-1] == "--no-focus"
+        self.cwds.append(args[args.index("--cwd") + 1] if "--cwd" in args else None)
         self._counter += 1
         tab_id, pane_id = f"t{self._counter}", f"p{self._counter}"
         self.tabs[tab_id] = {"tab_id": tab_id, "label": label, "workspace_id": workspace}
@@ -629,6 +631,28 @@ def test_fresh_pane_not_shell_is_unavailable(tmp_path: Path) -> None:
     assert result.error == LimitError.UNAVAILABLE
     assert fake.tabs == {}
     assert all(payload != "/quit" for _, _, payload in fake.sent)
+
+
+def test_a_prompt_hook_in_the_fresh_shell_is_waited_out(tmp_path: Path) -> None:
+    """A git-aware prompt briefly runs git as the foreground before the shell settles."""
+    fake = FakeHerdr()
+    fake.inventory = [_live_pane("w9", KIND, str(tmp_path))]
+    real_info = fake._process_info
+    hooks = iter(range(2))
+
+    def info(pane_id: str) -> bytes:
+        raw = real_info(pane_id)
+        if not raw or next(hooks, None) is None:
+            return raw
+        doc = json.loads(raw)
+        for proc in doc["result"]["process_info"]["foreground_processes"]:
+            proc["argv0"], proc["name"] = "git", "git"
+        return json.dumps(doc).encode()
+
+    fake._process_info = info  # type: ignore[method-assign]
+    result = TuiUsagePaneProvider().fetch(_ctx(tmp_path, fake))
+    assert result.error is None
+    assert fake.tabs == {}
 
 
 def test_foreground_takeover_mid_run_sends_no_quit_text(tmp_path: Path) -> None:
@@ -1655,13 +1679,10 @@ def test_shipped_tui_recipes_validate_without_naming_tools() -> None:
     tracked = [
         recipe for recipe in recipes if recipe is not None and recipe.session_root is not None
     ]
-    assert len(tracked) == 1
-    assert tracked[0] is not None
-    assert tracked[0].launch_resume is not None and tracked[0].hint_pattern is not None
-    fresh = [recipe for recipe in recipes if recipe is not None and recipe.session_root is None]
-    assert len(fresh) == 1
-    assert fresh[0] is not None
-    assert fresh[0].launch_resume is None and fresh[0].hint_pattern is None
+    assert len(tracked) == 2  # every shipped recipe resumes a saved session
+    for recipe in tracked:
+        assert recipe is not None
+        assert recipe.launch_resume is not None and recipe.hint_pattern is not None
 
 
 # -- setup ---------------------------------------------------------------------------------
@@ -1837,3 +1858,443 @@ def test_a_limit_reached_panel_is_a_reading_not_a_failure(tmp_path: Path) -> Non
         ("weekly", 96.0),
     ]
     assert all(w.resets_at_ms is not None for w in snapshot.windows)
+
+
+# -- warm-up message, double Enter, untrusted folder -------------------------------
+
+
+def _warm_recipe(**over: Any) -> dict[str, Any]:
+    return _fresh_recipe(
+        warmup_prompt="reply with the single word ok",
+        warmup_marker="(?m)^REPLY",
+        usage_enters=2,
+        untrusted=["Do you trust this workspace"],
+        **over,
+    )
+
+
+def _warm_fake(screen: list[str]) -> FakeHerdr:
+    fake = FakeHerdr(usage=("◆ ok", "ALLOWANCE HEADER", "USED 3 OF 50"))
+    fake.inventory = [_live_pane("w9", KIND, "/")]
+
+    def launch(pane_id: str, command: str) -> None:
+        fake.panes[pane_id]["fg"] = "tool"
+        fake.panes[pane_id]["screen"] = list(screen)
+
+    fake.on_launch = launch
+    return fake
+
+
+def test_the_warmup_is_the_launch_message_and_usage_gets_two_enters(tmp_path: Path) -> None:
+    fake = _warm_fake(["TOOL PROMPT", "REPLY ok"])
+    result = TuiUsagePaneProvider().fetch(_ctx(tmp_path, fake, _warm_recipe()))
+    assert result.error is None and result.snapshots
+    (launch,) = [payload for _, kind, payload in fake.sent if kind == "run"]
+    assert launch == "tool-a --fresh 'reply with the single word ok'"
+    after_usage = fake.sent[[i for i, e in enumerate(fake.sent) if e[2] == "/usage"][0] :]
+    assert [e[2] for e in after_usage[:3]] == ["/usage", "enter", "enter"]
+
+
+def test_the_warmup_reply_is_not_a_refusal(tmp_path: Path) -> None:
+    fake = _warm_fake(["TOOL PROMPT", "REPLY ok"])
+    recipe = _warm_recipe(refuse=["(?i)no `?/usage`? command", "(?m)^◆ (?!ok)"])
+    result = TuiUsagePaneProvider().fetch(_ctx(tmp_path, fake, recipe))
+    assert result.error is None and result.note == ""
+
+
+def test_a_missing_reply_is_a_fixed_note_and_nothing_is_typed(tmp_path: Path) -> None:
+    fake = _warm_fake(["TOOL PROMPT"])
+    result = TuiUsagePaneProvider().fetch(_ctx(tmp_path, fake, _warm_recipe()))
+    assert result.error == LimitError.TIMEOUT and result.note == "no_warmup"
+    assert [e for e in fake.sent if e[1] in ("text", "keys")] == []
+    assert fake.tabs == {}
+
+
+def test_the_trust_question_is_never_answered(tmp_path: Path) -> None:
+    fake = _warm_fake(["Do you trust this workspace? ⟩ 1 Trust and continue / 2 Quit"])
+    result = TuiUsagePaneProvider().fetch(_ctx(tmp_path, fake, _warm_recipe()))
+    assert result.error == LimitError.TIMEOUT and result.note == "workspace_untrusted"
+    assert [e for e in fake.sent if e[1] in ("text", "keys")] == []
+    assert fake.tabs == {}  # the pane was closed
+
+
+def test_a_recipe_without_the_new_fields_behaves_as_before(tmp_path: Path) -> None:
+    recipe = tui_recipe_from(_fresh_recipe())
+    assert (recipe.warmup_prompt, recipe.warmup_marker, recipe.untrusted) == (None, None, ())
+    assert recipe.usage_enters == 1
+    fake = FakeHerdr(usage=("ALLOWANCE HEADER", "USED 1 OF 10"))
+    fake.inventory = [_live_pane("w9", KIND, str(tmp_path))]
+    assert TuiUsagePaneProvider().fetch(_ctx(tmp_path, fake, _fresh_recipe())).error is None
+    enters = [e for e in fake.sent if e[1] == "keys"]
+    assert len(enters) == 2  # one for /usage, one for /quit
+
+
+def test_the_packaged_recipes_carry_the_warmup_only_for_muse() -> None:
+    by_binary = {
+        e.tui.binary: e.tui for e in load_catalog().entries if e.limits == FORMAT_ID and e.tui
+    }
+    muse, kiro = by_binary["muse"], by_binary["kiro-cli"]
+    assert muse.launch_new == (
+        "muse", "--preset", "empty", "--model", "muse-spark-1.3", "--reasoning-effort", "minimal",
+    )  # fmt: skip
+    assert (
+        muse.launch_resume == ("muse", "resume", "{id}")
+        and "--no-session-log" not in muse.launch_new
+    )
+    assert muse.session_entry == ".msp-view-g6/{id}"
+    assert re.fullmatch(muse.id_pattern, "01a15cae-76cd-7900-8e8f-d4f401db9567")
+    assert muse.hint_pattern is not None and re.search(
+        muse.hint_pattern,
+        "To continue this session, run muse resume 01a15cae-76cd-7900-8e8f-d4f401db9567",
+    )
+    assert muse.warmup_prompt == "reply with the single word ok" and muse.usage_enters == 2
+    assert muse.warmup_marker == "(?m)^◆" and muse.untrusted
+    assert (kiro.warmup_prompt, kiro.warmup_marker, kiro.usage_enters, kiro.untrusted) == (
+        None,
+        None,
+        1,
+        (),
+    )
+
+
+def test_recipe_rejects_broken_warmup_fields() -> None:
+    for bad in (
+        {"warmup_prompt": "hi"},
+        {"warmup_marker": "x"},
+        {"warmup_prompt": "--evil", "warmup_marker": "x"},
+        {"warmup_prompt": "hi", "warmup_marker": "("},
+        {"usage_enters": 0},
+        {"usage_enters": "2"},
+        {"untrusted": "no"},
+    ):
+        _rejected(_fresh_recipe(**bad))
+
+
+# -- resume without a message (session kept under a folder entry) -----------------------
+
+
+def _muse_like(root: Path, **over: Any) -> dict[str, Any]:
+    return _recipe(
+        str(root),
+        launch_new=["tool-a", "--fresh"],
+        launch_resume=["tool-a", "resume", "{id}"],
+        warmup_prompt="WARM",
+        warmup_marker="(?m)^REPLY",
+        usage_enters=2,
+        session_entry=".views/{id}",
+        **over,
+    )
+
+
+def test_a_resumed_session_never_gets_a_message(tmp_path: Path) -> None:
+    root = tmp_path / "sessions"
+    (root / ".views" / "sess-9").mkdir(parents=True)
+    fake = FakeHerdr(
+        usage=("REPLY ok", "ALLOWANCE HEADER", "USED 3 OF 50"),
+        quit_lines=("SESSION DONE", "resume with sess-9"),
+    )
+    fake.inventory = [_live_pane("w9", KIND, str(tmp_path))]
+    state = RefreshState(tmp_path / "refresh.json")
+    scope = session_scope(KIND, str(root), "w9")
+    state.save_session(scope, "sess-9", "hint")
+    recipe = _muse_like(root, refuse=["(?i)no `?/usage`? command", "(?m)^REPLY (?!ok)"])
+    result = TuiUsagePaneProvider().fetch(_ctx(tmp_path, fake, recipe, state=state))
+    assert result.error is None and result.note == ""
+    assert [p for _, k, p in fake.sent if k == "run"] == ["tool-a resume sess-9"]
+    typed = {payload for _, kind, payload in fake.sent if kind == "text"}
+    assert typed == {"/usage", "/quit"}  # no warm-up, no message of any kind
+    assert {payload for _, kind, payload in fake.sent if kind == "keys"} <= {"enter", "esc"}
+    saved = state.saved_session(scope)
+    assert saved is not None and saved.session_id == "sess-9"
+
+
+def test_a_missing_saved_session_falls_back_once_to_a_warm_start_and_saves_the_id(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "sessions"
+    (root / ".views").mkdir(parents=True)
+    fake = FakeHerdr(
+        usage=("REPLY ok", "ALLOWANCE HEADER", "USED 3 OF 50"),
+        quit_lines=("SESSION DONE", "resume with sess-new"),
+    )
+    fake.inventory = [_live_pane("w9", KIND, str(tmp_path))]
+
+    def launch(pane_id: str, command: str) -> None:
+        fake.panes[pane_id]["fg"] = "tool"
+        # a resume of a vanished session never reaches the prompt
+        fake.panes[pane_id]["screen"] = [] if "resume" in command else ["TOOL PROMPT", "REPLY ok"]
+        if "WARM" in command:
+            (root / ".views" / "sess-new").mkdir()  # the fresh session is born now
+
+    fake.on_launch = launch
+    state = RefreshState(tmp_path / "refresh.json")
+    scope = session_scope(KIND, str(root), "w9")
+    state.save_session(scope, "sess-gone", "hint")
+    result = TuiUsagePaneProvider().fetch(_ctx(tmp_path, fake, _muse_like(root), state=state))
+    assert result.error is None
+    runs = [p for _, k, p in fake.sent if k == "run"]
+    assert runs[0] == "tool-a resume sess-gone"
+    assert runs[-1] == "tool-a --fresh WARM"
+    saved = state.saved_session(scope)
+    assert saved is not None and saved.session_id == "sess-new"
+
+
+def test_session_entry_must_stay_under_the_root() -> None:
+    for bad in ("../{id}", "/abs/{id}", "no-placeholder", "{id}/{id}", ""):
+        _rejected(_fresh_recipe(session_entry=bad))
+
+
+# -- trusted folder choice -------------------------------------------------------
+
+
+def _trust_file(path: Path, *folders: Path, version: int = 1) -> str:
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": version,
+                "projects": {str(f): {"decision": "trusted"} for f in folders}
+                | {"/never/trusted": {"decision": "denied"}},
+            }
+        )
+    )
+    return str(path)
+
+
+def _trust_run(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    trust: str | None,
+    panes: list[dict[str, Any]],
+    *,
+    kind: str = KIND,
+    linked: str | None = None,
+) -> tuple[FakeHerdr, ProviderResult]:
+    home = tmp_path / "home"
+    home.mkdir(exist_ok=True)
+    monkeypatch.setenv("HOME", str(home))
+    fake = FakeHerdr()
+    fake.inventory = panes
+    data = _recipe() | ({"trust_store": trust} if trust is not None else {})
+    return fake, TuiUsagePaneProvider().fetch(_ctx(tmp_path, fake, data, kind=kind, linked=linked))
+
+
+def test_an_untrusted_pane_folder_gives_way_to_a_trusted_home(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    untrusted = tmp_path / "scratch"
+    untrusted.mkdir()
+    home = tmp_path / "home"
+    home.mkdir()
+    trust = _trust_file(tmp_path / "trust.json", home, tmp_path / "other")
+    fake, result = _trust_run(
+        tmp_path, monkeypatch, trust, [_live_pane("w1", KIND, str(untrusted))]
+    )
+    assert result.error is None
+    assert fake.cwds == [str(home.resolve())]
+    assert ("p1", "create", f"{KIND}-relaydeck") in fake.sent
+
+
+def test_a_pane_in_a_trusted_folder_is_preferred(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    other = tmp_path / "scratch"
+    other.mkdir()
+    (tmp_path / "home").mkdir()
+    trust = _trust_file(tmp_path / "trust.json", tmp_path / "home", project)
+    fake, result = _trust_run(
+        tmp_path,
+        monkeypatch,
+        trust,
+        [_live_pane("w1", KIND, str(other)), _live_pane("w2", KIND, str(project))],
+    )
+    assert result.error is None
+    assert fake.cwds == [str(project)]
+    assert next(iter(fake.tabs.values()), None) is None  # closed again
+
+
+def test_without_a_trusted_home_the_shortest_trusted_folder_is_used(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    long = tmp_path / "a" / "deeper"
+    short = tmp_path / "b"
+    long.mkdir(parents=True)
+    short.mkdir()
+    trust = _trust_file(tmp_path / "trust.json", long, short)
+    fake, _ = _trust_run(tmp_path, monkeypatch, trust, [_live_pane("w1", KIND, str(tmp_path))])
+    assert fake.cwds == [str(short.resolve())]
+
+
+def test_the_linked_workspace_hosts_the_tab_when_no_pane_exists(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "home").mkdir()
+    trust = _trust_file(tmp_path / "trust.json", tmp_path / "home")
+    fake, _ = _trust_run(tmp_path, monkeypatch, trust, [], linked="w7")
+    assert fake.cwds == [str((tmp_path / "home").resolve())]
+    assert [t["workspace_id"] for t in fake.tabs.values()] == []  # closed
+    assert any(entry[1] == "create" for entry in fake.sent)
+
+
+@pytest.mark.parametrize("flavour", ["missing", "malformed", "version", "huge", "empty"])
+def test_an_unknown_trust_file_keeps_the_old_choice(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, flavour: str
+) -> None:
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    (tmp_path / "home").mkdir()
+    path = tmp_path / "trust.json"
+    if flavour == "malformed":
+        path.write_text("{not json")
+    elif flavour == "version":
+        _trust_file(path, tmp_path / "home", version=2)
+    elif flavour == "huge":
+        path.write_text(" " * (1024 * 1024 + 1))
+    elif flavour == "empty":
+        _trust_file(path)
+    fake, result = _trust_run(
+        tmp_path, monkeypatch, str(path), [_live_pane("w1", KIND, str(scratch))]
+    )
+    assert result.error is None
+    assert fake.cwds == [str(scratch)]
+
+
+def test_a_symlinked_pane_folder_resolves_to_its_trusted_target(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    real = tmp_path / "real"
+    real.mkdir()
+    link = tmp_path / "link"
+    link.symlink_to(real)
+    (tmp_path / "home").mkdir()
+    trust = _trust_file(tmp_path / "trust.json", real, tmp_path / "home")
+    fake, _ = _trust_run(tmp_path, monkeypatch, trust, [_live_pane("w1", KIND, str(link))])
+    assert fake.cwds == [str(link)]  # the pane's own folder, trusted through its real path
+
+
+def test_a_recipe_without_a_trust_store_is_unchanged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    fake, _ = _trust_run(tmp_path, monkeypatch, None, [_live_pane("w1", KIND, str(scratch))])
+    assert fake.cwds == [str(scratch)]
+
+
+def test_the_trust_store_is_never_written(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    (tmp_path / "home").mkdir()
+    trust = _trust_file(tmp_path / "trust.json", tmp_path / "home")
+    before = Path(trust).read_bytes(), Path(trust).stat().st_mtime_ns
+    _trust_run(tmp_path, monkeypatch, trust, [_live_pane("w1", KIND, str(tmp_path))])
+    assert (Path(trust).read_bytes(), Path(trust).stat().st_mtime_ns) == before
+
+
+def test_the_trust_store_path_is_validated() -> None:
+    for bad in ("relative.json", "~/../x", "", 7):
+        _rejected(_recipe() | {"trust_store": bad})
+
+
+def test_the_shipped_muse_recipe_reads_its_trust_file_and_kiro_has_none() -> None:
+    by_binary = {
+        e.tui.binary: e.tui for e in load_catalog().entries if e.limits == FORMAT_ID and e.tui
+    }
+    assert by_binary["muse"].trust_store == "~/.config/muse/trust.json"
+    assert by_binary["kiro-cli"].trust_store is None
+
+
+# -- the empty probe folder ------------------------------------------------------
+
+
+def _probe_run(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    trusted: list[Path],
+    panes: list[dict[str, Any]],
+) -> tuple[FakeHerdr, Path]:
+    probe = tmp_path / "probe"
+    probe.mkdir(exist_ok=True)
+    trust = _trust_file(tmp_path / "trust.json", *trusted)
+    home = tmp_path / "home"
+    home.mkdir(exist_ok=True)
+    monkeypatch.setenv("HOME", str(home))
+    fake = FakeHerdr()
+    fake.inventory = panes
+    data = _recipe() | {"trust_store": trust, "probe_dir": "{state_dir}/probe"}
+    TuiUsagePaneProvider().fetch(_ctx(tmp_path, fake, data))
+    return fake, probe
+
+
+def test_a_trusted_probe_folder_wins_over_everything(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    (tmp_path / "home").mkdir()
+    probe = tmp_path / "probe"
+    probe.mkdir()
+    fake, probe = _probe_run(
+        tmp_path,
+        monkeypatch,
+        [project, tmp_path / "home", probe],
+        [_live_pane("w1", KIND, str(project))],
+    )
+    assert fake.cwds == [str(probe.resolve())]
+    assert list(probe.iterdir()) == []  # nothing is ever written into it
+
+
+def test_an_untrusted_probe_folder_falls_back_to_the_old_choices(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    fake, probe = _probe_run(
+        tmp_path, monkeypatch, [project], [_live_pane("w1", KIND, str(project))]
+    )
+    assert fake.cwds == [str(project)]
+    assert list(probe.iterdir()) == []
+
+
+def test_probe_folder_creation_is_private_and_leaves_an_existing_folder_alone(
+    tmp_path: Path,
+) -> None:
+    from relaydeck.usage.limits_plane.trust_store import ensure_probe_folder, probe_folder
+
+    folder = probe_folder("{state_dir}/muse-probe", tmp_path)
+    assert folder == tmp_path / "muse-probe"
+    assert ensure_probe_folder(folder)
+    assert (folder.stat().st_mode & 0o777) == 0o700 and list(folder.iterdir()) == []
+    (tmp_path / "other").mkdir(mode=0o755)
+    assert ensure_probe_folder(tmp_path / "other")
+    assert ((tmp_path / "other").stat().st_mode & 0o777) == 0o755
+    link = tmp_path / "link"
+    link.symlink_to(folder)
+    assert ensure_probe_folder(link) is False
+
+
+def test_the_probe_dir_is_validated_and_shipped_for_muse_only() -> None:
+    for bad in ("/abs/path", "{state_dir}/../x", "relative", "{state_dir}/{state_dir}/x", 3):
+        _rejected(_recipe() | {"probe_dir": bad})
+    by_binary = {
+        e.tui.binary: e.tui for e in load_catalog().entries if e.limits == FORMAT_ID and e.tui
+    }
+    assert by_binary["muse"].probe_dir == "{state_dir}/muse-probe"
+    assert by_binary["kiro-cli"].probe_dir is None
+
+
+def test_the_refresh_status_names_the_probe_folder_only_after_an_untrusted_stop(
+    tmp_path: Path,
+) -> None:
+    scheduler, _provider, store, state, _clock = _od_scheduler(tmp_path, [])
+    try:
+        spec = scheduler._specs[PROVIDER_KEY]
+        assert spec.tui is not None
+        recipe = replace(spec.tui.recipe, probe_dir="{state_dir}/probe")
+        scheduler._specs[PROVIDER_KEY] = replace(spec, tui=replace(spec.tui, recipe=recipe))
+        assert scheduler.refresh_status()[KIND]["probe_dir"] is None
+        state.record_attempt(KIND, "a1", NOW, "workspace_untrusted")
+        assert scheduler.refresh_status()[KIND]["probe_dir"] == str(tmp_path / "probe")
+        state.record_attempt(KIND, "a2", NOW + 1, "ok")
+        assert scheduler.refresh_status()[KIND]["probe_dir"] is None
+    finally:
+        store.close()

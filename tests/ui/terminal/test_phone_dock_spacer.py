@@ -8,6 +8,7 @@ from relaydeck.client.features.composer.domain import SUBMISSION_PROGRESS, SUBMI
 from relaydeck.client.features.terminal.agent_session import AGENT_LIVE
 from relaydeck.client.features.terminal.surfaces import mount_agent_screen, phone_composer
 from tests.support.host_harness import render_component, run
+from tests.support.terminal.direct_typing import open_compose
 from tests.support.terminal.sessions import _agent_session
 from tests.support.ui.phone_terminal import _ancestry, _shape
 
@@ -31,18 +32,40 @@ def test_compose_tap_renders_the_remembered_spacer_in_the_same_frame() -> None:
             engine_shape = _shape(_ancestry(app, term))
             await _measure(app, 84.0)
             assert app.find("agent-input-spacer").height == 84.0
-            await app.set_props_and_fire("agent-compose-toggle", {}, "click")
+            await open_compose(app)
             await _measure(app, 128.0)
             assert app.find("agent-input-spacer").height == 128.0
             await app.set_props_and_fire("agent-workflow-toggle", {}, "click")
             await _measure(app, 90.0)
             assert app.find("agent-input-spacer").height == 90.0
             # Each known shape renders its height at once, with no new measurement.
-            await app.set_props_and_fire("agent-compose-toggle", {}, "click")
+            await open_compose(app)
             assert app.find("agent-input-spacer").height == 128.0
             await app.set_props_and_fire("agent-workflow-toggle", {}, "click")
             assert app.find("agent-input-spacer").height == 90.0
             assert _shape(_ancestry(app, term)) == engine_shape
+        finally:
+            await session.dispose()
+
+    run(scenario())
+
+
+def test_a_hidden_screen_measuring_zero_never_becomes_the_remembered_height() -> None:
+    async def scenario() -> None:
+        session, _ops, _factory, _submitted = _agent_session()
+        session.open()
+        assert await session.confirm_takeover() == AGENT_LIVE
+        app = await render_component(
+            mount_agent_screen, session, phone=True, touch=True, viewport_height=700
+        )
+        try:
+            await _measure(app, 84.0)
+            assert app.find("agent-input-spacer").height == 84.0
+            # A parked or hidden screen reports 0 for a dock that still has a text box.
+            await _measure(app, 0.0)
+            session._notify()
+            await app.settle()
+            assert app.find("agent-input-spacer").height == 84.0
         finally:
             await session.dispose()
 

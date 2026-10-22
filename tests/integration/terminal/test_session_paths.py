@@ -23,13 +23,13 @@ from typing import Any
 from relaydeck_terminal import protocol
 from relaydeck_terminal.terminal import RelayDeckTerminal
 
-from relaydeck.client.adapters.fake import FakeClipboard
 from relaydeck.client.features.shell import ScriptedShellGatewayOps, ShellSession
 from relaydeck.client.features.sync.transport import TerminalSocket, TransportError
 from relaydeck.client.features.terminal.agent_session import AGENT_LIVE, AgentSession
 from relaydeck.client.features.terminal.output_log import OUTPUT_LOG_LIMIT
 from relaydeck.client.features.terminal.paste_policy import BRACKET_END, BRACKET_START
-from relaydeck.gateway import terminal_wire
+from relaydeck.contracts.wire import terminal as terminal_wire
+from tests.support.fakes import FakeClipboard
 from tests.support.host_harness import run
 
 PROBE_BYTES = 12 * 1024 * 1024

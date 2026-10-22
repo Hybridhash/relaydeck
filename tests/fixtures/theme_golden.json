@@ -357,7 +357,8 @@
     },
     "SURFACE_RADIUS": 8,
     "TEXT_FONT_FALLBACK": [
-      "Noto Sans Symbols 2"
+      "Noto Sans Symbols 2",
+      "Noto Sans Symbols"
     ],
     "THEMES": {
       "dark": {

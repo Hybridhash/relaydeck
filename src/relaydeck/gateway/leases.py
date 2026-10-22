@@ -146,6 +146,16 @@ class LeaseStore:
 
     # -- lookup ------------------------------------------------------
 
+    def live_mode_counts(self) -> tuple[int, int]:
+        """(control, view) leases that are still live."""
+        control = sum(1 for rec in self._leases.values() if rec.live and rec.mode == "control")
+        view = sum(1 for rec in self._leases.values() if rec.live and rec.mode != "control")
+        return control, view
+
+    def lease_mode(self, lease_id: str) -> str | None:
+        rec = self._leases.get(lease_id)
+        return rec.mode if rec is not None and rec.live else None
+
     def get_attachment(self, attachment_id: str) -> Attachment | None:
         return self._attachments.get(attachment_id)
 

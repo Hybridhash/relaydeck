@@ -508,4 +508,4 @@ SURFACE_RADIUS = 8
 # imports tokens, which imports this module (see tokens.py).
 from relaydeck.client.components.design_system.fonts import FAMILY_SYMBOLS  # noqa: E402
 
-TEXT_FONT_FALLBACK: tuple[str, ...] = (FAMILY_SYMBOLS,)
+TEXT_FONT_FALLBACK: tuple[str, ...] = (FAMILY_SYMBOLS, "Noto Sans Symbols")

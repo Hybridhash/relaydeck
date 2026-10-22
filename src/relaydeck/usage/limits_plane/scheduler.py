@@ -31,6 +31,7 @@ from relaydeck.usage.limits_plane.contracts import (
     RefreshDecision,
 )
 from relaydeck.usage.limits_plane.refresh_state import RefreshState
+from relaydeck.usage.limits_plane.trust_store import probe_folder
 from relaydeck.usage.store import SqliteUsageStore
 
 MAX_FETCH_BYTES = 1024 * 1024  # stdout kept per fetch; the rest is discarded
@@ -479,6 +480,11 @@ class LimitsScheduler:
                     available, reason = True, None
                 until = self._refresh.cooldown_until(spec.kind) if self._refresh else 0
                 last = self._refresh.last_attempt(spec.kind) if self._refresh else None
+                probe = (
+                    probe_folder(spec.tui.recipe.probe_dir, spec.tui.state_path.parent)
+                    if spec.tui is not None
+                    else None
+                )
                 out[spec.kind] = {
                     "available": available,
                     "reason": reason,
@@ -494,6 +500,12 @@ class LimitsScheduler:
                         if last is not None
                         else None
                     ),
+                    # Named only when the last read stopped at the trust question.
+                    "probe_dir": str(probe)
+                    if probe is not None
+                    and last is not None
+                    and last.result == "workspace_untrusted"
+                    else None,
                 }
             return out
 

@@ -3,6 +3,7 @@ import 'dart:js_interop';
 
 import 'package:web/web.dart' as web;
 
+import 'field_paste.dart';
 import 'picture_paste_core.dart';
 
 const _pendingLifetime = Duration(seconds: 150);
@@ -62,20 +63,23 @@ class PicturePasteSource {
     if (data == null) return;
 
     // File references are taken here, synchronously; items are the primary list
-    // and `files` only a fallback so one file is never counted twice.
+    // and `files` only a fallback so one file is never counted twice. While
+    // Python cannot take pictures the files are not looked at.
     final files = <web.File>[];
-    final items = data.items;
-    for (var i = 0; i < items.length; i++) {
-      final item = items[i];
-      if (item.kind != 'file') continue;
-      final file = item.getAsFile();
-      if (file != null) files.add(file);
-    }
-    if (files.isEmpty) {
-      final list = data.files;
-      for (var i = 0; i < list.length; i++) {
-        final file = list.item(i);
+    if (region.picturesEnabled()) {
+      final items = data.items;
+      for (var i = 0; i < items.length; i++) {
+        final item = items[i];
+        if (item.kind != 'file') continue;
+        final file = item.getAsFile();
         if (file != null) files.add(file);
+      }
+      if (files.isEmpty) {
+        final list = data.files;
+        for (var i = 0; i < list.length; i++) {
+          final file = list.item(i);
+          if (file != null) files.add(file);
+        }
       }
     }
 
@@ -84,24 +88,34 @@ class PicturePasteSource {
         PasteCandidate(mime: file.type, size: file.size, name: file.name),
     ];
     final result = classifyPaste(candidates);
-    switch (result.verdict) {
-      case PasteVerdict.none:
-        // Text-only: a terminal pastes it through its own policy exactly once;
-        // any other field keeps the browser's native insertion.
-        if (dispatcher.pasteText(data.getData('text/plain'))) {
-          event.preventDefault();
-          event.stopImmediatePropagation();
-        }
+    final field = focusedEditable();
+    final text = data.getData('text/plain');
+    final decision = decidePaste(
+      pictures: result,
+      text: text,
+      terminalFocused: dispatcher.terminalOwnsPaste,
+      fieldFocused: field != null,
+      pictureBusy: _ledger.occupied,
+    );
+    if (!decision.takesEvent) return;
+    // One insertion only: the browser's own paste never runs for a taken event,
+    // and Flutter's paste shortcut was already left to the browser.
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    switch (decision.action) {
+      case PasteAction.ignore:
         return;
-      case PasteVerdict.accept:
-        // One picture at a time: a second paste while one is pending is refused
-        // with feedback and never disturbs the active request.
-        if (_ledger.occupied) {
-          _reject(event, region, 'busy');
-          return;
-        }
-        event.preventDefault();
-        event.stopImmediatePropagation();
+      case PasteAction.reject:
+        // A refused paste is explained; a filename never lands in the field.
+        region.onReject(decision.reason);
+        return;
+      case PasteAction.terminal:
+        region.onText(text);
+        return;
+      case PasteAction.field:
+        if (!pasteIntoField(field!, text)) region.onReject('no_text');
+        return;
+      case PasteAction.offer:
         final candidate = result.candidate!;
         final file = files[candidates.indexWhere((c) =>
             c.size == candidate.size &&
@@ -112,26 +126,7 @@ class PicturePasteSource {
         _retain(requestId, file, region.ownerId);
         region.onOffer(requestId, candidate.normalizedMime, candidate.size);
         return;
-      case PasteVerdict.multiple:
-        _reject(event, region, 'multiple');
-        return;
-      case PasteVerdict.unsupported:
-        _reject(event, region, 'unsupported');
-        return;
-      case PasteVerdict.empty:
-        _reject(event, region, 'empty');
-        return;
-      case PasteVerdict.tooLarge:
-        _reject(event, region, 'too_large');
-        return;
     }
-  }
-
-  void _reject(web.ClipboardEvent event, PictureRegion region, String reason) {
-    // A refused picture is explained; its filename never lands in the field.
-    event.preventDefault();
-    event.stopImmediatePropagation();
-    region.onReject(reason);
   }
 
   void _retain(String requestId, web.File file, String owner) {

@@ -28,6 +28,7 @@ SUBMIT_ERRORS = {
     "command_conflict": "Already submitted with different content.",
     "rate_limited": "Too many requests. Wait a moment.",
     "too_large": "Content is too large.",
+    "internal": "Something went wrong on the Mac.",
 }
 
 

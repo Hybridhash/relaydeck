@@ -1,4 +1,4 @@
-"""auth boundary (callback parsing, service flow, components)."""
+"""auth boundary (callback parsing, service flow)."""
 
 from __future__ import annotations
 
@@ -8,20 +8,17 @@ from urllib.parse import parse_qsl, urlparse
 
 import pytest
 
-from relaydeck.client.adapters.fake import FakeCredentialStore
 from relaydeck.client.features.auth.callback import (
     CallbackError,
     parse_callback,
     state_matches,
 )
-from relaydeck.client.features.auth.components import AccountRow, LoginScreen
 from relaydeck.client.features.auth.service import (
     AuthService,
-    AuthSnapshot,
     AuthState,
     GatewayConfig,
 )
-from tests.support.host_harness import render_component, run
+from tests.support.fakes import FakeCredentialStore
 
 
 def test_callback_custom_scheme_ok() -> None:
@@ -196,49 +193,6 @@ def test_untrusted_gateway_rejected() -> None:
             await service.begin_login()
 
     asyncio.run(scenario())
-
-
-def test_login_screen_states() -> None:
-    async def scenario() -> None:
-        calls: list[str] = []
-        app = await render_component(
-            LoginScreen,
-            snapshot=AuthSnapshot(AuthState.SIGNED_OUT),
-            on_sign_in=lambda: calls.append("sign-in"),
-            on_cancel=lambda: calls.append("cancel"),
-            on_retry=lambda: calls.append("retry"),
-        )
-        assert app.find("auth-title").value == "RelayDeck"
-        button = app.find("auth-sign-in")
-        await app.session.dispatch_event(button._i, "click", "")
-        assert calls == ["sign-in"]
-        waiting = await render_component(
-            LoginScreen,
-            snapshot=AuthSnapshot(AuthState.WAITING_CALLBACK),
-            on_sign_in=lambda: None,
-            on_cancel=lambda: calls.append("cancel"),
-            on_retry=lambda: None,
-        )
-        assert waiting.find("auth-waiting-text").value.startswith("Complete")
-        error = await render_component(
-            LoginScreen,
-            snapshot=AuthSnapshot(AuthState.ERROR, error="boom", can_retry=True),
-            on_sign_in=lambda: None,
-            on_cancel=lambda: None,
-            on_retry=lambda: calls.append("retry"),
-        )
-        assert error.find("auth-error-text").value == "boom"
-        retry = error.find("auth-retry")
-        await error.session.dispatch_event(retry._i, "click", "")
-        assert calls[-1] == "retry"
-        row = await render_component(
-            AccountRow,
-            account="ada-account",
-            on_logout=lambda: calls.append("logout"),
-        )
-        assert row.find("account-label").value == "ada-account"
-
-    run(scenario())
 
 
 # -- logout device_ref (client sends the known push ref) ---------------------

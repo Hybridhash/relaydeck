@@ -2,7 +2,7 @@
 
 import asyncio
 
-from relaydeck.gateway.app import reconcile_terminal_routes
+from relaydeck.gateway.terminal_epochs import reconcile_terminal_routes
 from tests.support.terminal.lease_gateway import _attach, _client, _headers, _lease, _ticket, _token
 
 

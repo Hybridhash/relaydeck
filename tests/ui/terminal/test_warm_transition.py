@@ -21,7 +21,7 @@ from relaydeck.client.features.shell.ops import (
 from relaydeck.client.features.sync.transport import TransportError
 from relaydeck.client.features.terminal.agent_session import AgentSession
 from relaydeck.client.features.terminal.ui_resume import terminal_transition
-from relaydeck.gateway import terminal_wire
+from relaydeck.contracts.wire import terminal as terminal_wire
 from tests.support.host_harness import run
 from tests.support.scripted_sessions import ScriptedTerminalSocket
 from tests.support.terminal.resume import _MuxConn, _report

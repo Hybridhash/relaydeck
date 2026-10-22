@@ -17,12 +17,11 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from relaydeck.client.theme import DESKTOP, WIDE_BREAKPOINT, layout_mode
+from relaydeck.client.theme import DESKTOP, layout_mode
 
 DESTINATIONS = ("agents", "terminals", "usage", "settings")
 # Legacy: the Hosts destination is now a Settings section. Its links still resolve here.
 SETTINGS_SECTIONS = ("hosts",)
-WIDE_WIDTH = WIDE_BREAKPOINT
 DEFAULT_HEIGHT = 800
 
 

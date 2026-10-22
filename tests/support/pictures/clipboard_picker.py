@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from relaydeck.client.adapters.fake import FakeClipboard
+from tests.support.fakes import FakeClipboard
 
 
 class _Blocked(FakeClipboard):

@@ -16,7 +16,6 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
-from relaydeck.client.adapters.fake import FakeClipboard
 from relaydeck.client.features.terminal.projection import TerminalProjection
 from relaydeck.client.features.terminal.selection_model import (
     SelectionRange,
@@ -24,7 +23,8 @@ from relaydeck.client.features.terminal.selection_model import (
     document_from_projection,
 )
 from relaydeck.client.features.terminal.stream import TerminalByteStream
-from relaydeck.gateway import terminal_wire
+from relaydeck.contracts.wire import terminal as terminal_wire
+from tests.support.fakes import FakeClipboard
 
 OSC52_BEL = b"\x1b]52;c;aGVsbG8gd29ybGQ=\x07"
 OSC52_ST = b"\x1b]52;c;aGVsbG8gd29ybGQ=\x1b\\"

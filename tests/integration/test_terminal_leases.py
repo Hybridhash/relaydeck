@@ -14,12 +14,10 @@ import json
 
 from starlette.websockets import WebSocketDisconnect
 
-from relaydeck.gateway import terminal_wire
-from relaydeck.gateway.app import (
-    release_lease_and_close,
-    revoke_account_and_close,
-)
+from relaydeck.contracts.wire import terminal as terminal_wire
 from relaydeck.gateway.backend import BackendError
+from relaydeck.gateway.revocation import revoke_account_and_close
+from relaydeck.gateway.terminal_epochs import release_lease_and_close
 from tests.support.terminal.lease_gateway import _attach, _client, _headers, _lease, _ticket, _token
 
 VIEW_CAPS = frozenset({"sessions.read", "terminal.view"})

@@ -13,7 +13,6 @@ import flet as ft
 import httpx
 import pytest
 
-from relaydeck.client.adapters.fake import FakeClipboard, FakeCredentialStore
 from relaydeck.client.features.auth.service import ACCESS_KEY, REFRESH_KEY
 from relaydeck.client.features.sync.controller import SyncController
 from relaydeck.client.features.sync.sse import SseFrame, SseParser
@@ -25,6 +24,7 @@ from relaydeck.gateway.metadata_follower import MAX_PENDING_METADATA
 from relaydeck.gateway.production import JournalBackend
 from relaydeck.journal import CommandJournal
 from tests.security.helpers import ALL_CAPS, NOW, make_state
+from tests.support.fakes import FakeClipboard, FakeCredentialStore
 from tests.support.host_harness import render_component, run
 from tests.support.sync.scripted_sync import _ScriptedTransport
 from tests.support.ui.packaged import Preferences

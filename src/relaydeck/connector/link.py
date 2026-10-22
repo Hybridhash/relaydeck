@@ -46,6 +46,7 @@ from websockets.asyncio.client import ClientConnection
 from relaydeck.connector.herdr import HerdrError
 from relaydeck.connector.journal import ACK_KIND, ConnectorDispatch
 from relaydeck.connector.source import LinkSource, LiveSource
+from relaydeck.contracts import paths
 from relaydeck.contracts.schemas import SchemaError, validate
 from relaydeck.contracts.tunnel import SEND_TIMEOUT_S, parse_terminal_input
 from relaydeck.journal import CommandJournal, digest_for
@@ -167,9 +168,9 @@ class TunnelTransport(Protocol):
 def _ws_url(gateway_url: str) -> str:
     base = gateway_url.rstrip("/")
     if base.startswith("https://"):
-        return "wss://" + base[len("https://") :] + "/v1/connectors"
+        return "wss://" + base[len("https://") :] + paths.CONNECTORS
     if base.startswith("http://"):
-        return "ws://" + base[len("http://") :] + "/v1/connectors"
+        return "ws://" + base[len("http://") :] + paths.CONNECTORS
     raise LinkError(f"gateway URL must be http(s): {gateway_url!r}")
 
 

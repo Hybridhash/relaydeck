@@ -305,14 +305,21 @@ def main(argv: list[str] | None = None) -> int:
                 "(set --cursor-secret, --cursor-secret-file, or RELAYDECK_CURSOR_SECRET).",
                 file=sys.stderr,
             )
+        from relaydeck.gateway.bounds import GRACEFUL_SHUTDOWN_S, WS_MAX_SIZE
+        from relaydeck.logging_setup import logging_config
+
         state = build_serve_state(options)
         print(f"serving gateway on http://{options.host}:{options.port} (loopback only)")
         uvicorn.run(
             create_app(state),
             host=options.host,
             port=options.port,
-            log_config=options.log_config or None,
+            log_config=options.log_config or logging_config(),
             access_log=False,
+            # Same limits as the companion: bounded frames and shutdown, no trusted proxy headers.
+            ws_max_size=WS_MAX_SIZE,
+            timeout_graceful_shutdown=GRACEFUL_SHUTDOWN_S,
+            proxy_headers=False,
         )
         return 0
     return 2

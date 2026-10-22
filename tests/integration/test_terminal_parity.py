@@ -43,7 +43,6 @@ from unittest.mock import patch
 
 import httpx
 
-from relaydeck.client.adapters.fake import FakeClipboard
 from relaydeck.client.features.create.commands import shell_create_command
 from relaydeck.client.features.shell import (
     DISCONNECT_MESSAGE,
@@ -85,6 +84,7 @@ from relaydeck.client.features.terminal.stream import INCOMPLETE_HISTORY
 from relaydeck.client.features.terminal.surfaces import DRIVE_REFUSED_EXITED
 from relaydeck.gateway.app import GatewayState, create_app
 from relaydeck.gateway.backend import FakeBackend
+from tests.support.fakes import FakeClipboard
 from tests.support.host_harness import button_label, render_component, run
 from tests.support.live_server import LiveGateway
 
@@ -506,6 +506,7 @@ def _shell_render_kwargs() -> dict[str, Any]:
         "on_open_selection": lambda: None,
         "on_copy_selection": lambda a, f: None,
         "on_close_selection": lambda: None,
+        "on_dismiss_notice": lambda notice: None,
         "on_paste": lambda: None,
         "on_mode_change": lambda m: None,
         "on_key": lambda name: None,

@@ -22,7 +22,7 @@ import websockets.asyncio.client as ws_client
 
 from relaydeck.connector.enrollment import claim_enrollment, generate_keys
 from relaydeck.connector.fixture import fixture_event, fixture_snapshot
-from relaydeck.gateway import terminal_wire
+from relaydeck.contracts.wire import terminal as terminal_wire
 from relaydeck.gateway.app import create_app
 from relaydeck.gateway.cli import (
     ServeConfigError,

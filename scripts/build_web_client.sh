@@ -162,11 +162,11 @@ EOF
 # fallback fonts from <fontFallbackBaseUrl><family>/v<N>/<file>, which is
 # assets/fonts/ locally. Extract the engine's path list from the built
 # main.dart.js (version segments move with Flutter) and vendor each file
-# from gstatic through a persistent cache. CJK is excluded by default
-# (size); RD_WEB_CJK_FONTS=1 includes it. Any fetch failure fails the
-# build loudly; there is no partial silent success.
+# from gstatic through a persistent cache. All five CJK families are included
+# by default; RD_WEB_CJK_FONTS=0 excludes all five for an explicit small build.
+# Font validation or missing copyright/OFL notices fails the build.
 RD_FONT_CACHE="${RD_FONT_CACHE:-$HOME/Library/Caches/RelayDeck/web-fonts}"
-"$ROOT/.venv/bin/python" "$ROOT/scripts/web_fonts.py" "$OUT" "$RD_FONT_CACHE" "${RD_WEB_CJK_FONTS:-0}"
+"$ROOT/.venv/bin/python" "$ROOT/scripts/web_fonts.py" "$OUT" "$RD_FONT_CACHE" "${RD_WEB_CJK_FONTS:-1}"
 
 # the pinned-shell service worker. Runs after every other post-process
 # step so its BUILD digest covers the final shell files. It replaces Flet's stub at the same URL,

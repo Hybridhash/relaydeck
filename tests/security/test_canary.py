@@ -21,8 +21,7 @@ from typing import Any
 import pytest
 from starlette.websockets import WebSocketDisconnect
 
-from relaydeck.client.adapters.fake import FakeClipboard
-from relaydeck.gateway.app import revoke_account_and_close
+from relaydeck.gateway.revocation import revoke_account_and_close
 from tests.security.helpers import (
     ALL_CAPS,
     NOW,
@@ -34,6 +33,7 @@ from tests.security.helpers import (
     mint_token,
     ticket,
 )
+from tests.support.fakes import FakeClipboard
 
 CANARY_PASSWORD = "canary-pw-7f3a9c2e-hunter2"
 CANARY_DRAFT = "canary-draft-4b8d1e6f-type-this"
@@ -140,20 +140,26 @@ def test_ws_close_reasons_are_fixed_codes() -> None:
     fixed code set or an enum-bound value (error code, ring status,
     reset detail) -- never requester or victim data."""
     root = Path(__file__).resolve().parent.parent.parent / "src" / "relaydeck"
-    app_source = (root / "gateway" / "app.py").read_text()
+    # The WebSocket handlers live in the sockets router; app.py keeps the rest.
+    sources = [
+        (root / "gateway" / "app.py").read_text(),
+        (root / "gateway" / "api" / "sockets.py").read_text(),
+    ]
+    app_source = "\n".join(sources)
     import ast
     import re
 
     reasons = [
         ast.unparse(keyword.value)
-        for node in ast.walk(ast.parse(app_source))
+        for source in sources
+        for node in ast.walk(ast.parse(source))
         if isinstance(node, ast.Call)
         and isinstance(node.func, ast.Attribute)
         and node.func.attr == "close"
         for keyword in node.keywords
         if keyword.arg == "reason"
     ]
-    assert reasons, "expected close reasons in app.py"
+    assert reasons, "expected close reasons in the gateway app and sockets router"
     allowed_vars = {"exc.code", "stream.status", "push_detail"}
     for reason in reasons:
         reason = reason.strip()

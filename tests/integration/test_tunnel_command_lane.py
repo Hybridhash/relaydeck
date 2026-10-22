@@ -10,7 +10,7 @@ from contextlib import suppress
 
 import pytest
 
-from relaydeck.gateway import app as gateway_module
+from relaydeck.gateway.api import sockets as sockets_module
 from relaydeck.gateway.app import GatewayState, create_app
 from relaydeck.gateway.production import JournalBackend
 from relaydeck.journal import CommandJournal
@@ -282,7 +282,7 @@ def test_command_and_snapshot_admissions_share_encoded_byte_budget(monkeypatch, 
         token = state.hosts.enroll("home-mac", account="acct-1")
         entered, release = asyncio.Event(), threading.Event()
         _hold(monkeypatch, backend, "command_owner", entered, release)
-        monkeypatch.setattr(gateway_module, "BoundedInbox", lambda: BoundedInbox(byte_limit=1024))
+        monkeypatch.setattr(sockets_module, "BoundedInbox", lambda: BoundedInbox(byte_limit=1024))
         socket = await _open(state, token)
         try:
             await _send(socket, {**_reply(), "padding": "x" * 700})

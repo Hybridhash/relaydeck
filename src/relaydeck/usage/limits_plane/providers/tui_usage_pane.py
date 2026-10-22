@@ -56,6 +56,7 @@ from relaydeck.usage.limits_plane.refresh_state import (
     session_scope,
     socket_identity,
 )
+from relaydeck.usage.limits_plane.trust_store import is_trusted, probe_folder, trusted_folders
 
 FORMAT_ID = "tui-usage-pane-v1"
 
@@ -64,6 +65,8 @@ NOTE_CLEANUP_FAILED = "cleanup_failed"
 NOTE_NOT_REPORTED = "not_reported"
 NOTE_IDLE = "idle"
 NOTE_REFUSED = "refused"
+NOTE_WORKSPACE_UNTRUSTED = "workspace_untrusted"
+NOTE_NO_WARMUP = "no_warmup"
 # Each abort carries a fixed step code so a failed read says where it stopped.
 NOTE_DEADLINE = "deadline"
 NOTE_PANE_LIST_FAILED = "pane_list_failed"
@@ -87,10 +90,10 @@ MAX_AMOUNT = 1e18
 MAX_PARSE_CHARS = 256 * 1024
 
 _CALL_S = 10.0
+_SHELL_SETTLE_S = 2.0  # a prompt hook (git status and the like) briefly holds the foreground
 _START_S = 30.0
 _USAGE_S = 15.0
 _QUIT_S = 15.0
-_SHELL_S = 10.0
 _IDLE_RECHECK_S = 5.0  # the tool may not have finished signing in when /usage first ran
 _ENTER_RETRIES = 3
 _TYPED_SETTLE_S = 0.8  # an Enter right behind typed text reads as part of a paste (Muse 1.4.10)
@@ -277,12 +280,17 @@ class _Run:
 
     # -- workspace choice ----------------------------------------------------
 
+    def trusted_folders(self) -> tuple[Path, ...] | None:
+        store = self.recipe.trust_store
+        return trusted_folders(store) if store else None
+
     def choose_workspace(self) -> tuple[str, str | None]:
         """(workspace_id, cwd or None). Raises _Abort(no_space) when nowhere fits."""
         try:
             panes = self.seam.pane_list(self.budget(_CALL_S))
         except (SeamTimeout, SeamError):
             raise _Abort(LimitError.UNAVAILABLE, NOTE_PANE_LIST_FAILED) from None
+        spots: list[tuple[str, str]] = []
         for pane in panes:
             if not isinstance(pane, dict) or pane.get("agent") != self.ctx.kind:
                 continue
@@ -295,9 +303,28 @@ class _Run:
                 and "\x00" not in cwd
                 and Path(cwd).is_dir()
             ):
-                return workspace, cwd
+                spots.append((workspace, cwd))
         linked = self.ctx.linked_workspace
-        if isinstance(linked, str) and linked and "\x00" not in linked:
+        if not (isinstance(linked, str) and linked and "\x00" not in linked):
+            linked = None
+        trusted = self.trusted_folders()
+        if trusted:
+            probe = probe_folder(self.recipe.probe_dir, self.bundle.state_path.parent)
+            workspace = spots[0][0] if spots else linked
+            if probe is not None and workspace is not None and is_trusted(str(probe), trusted):
+                return workspace, str(probe.resolve())
+            for workspace, cwd in spots:
+                if is_trusted(cwd, trusted):
+                    return workspace, cwd
+            # No pane sits in a trusted folder: open in the home folder (else the shortest
+            # trusted one), in the workspace a same-kind pane lives in, else the linked one.
+            workspace = spots[0][0] if spots else linked
+            if workspace is not None:
+                home = os.path.expanduser("~")
+                return workspace, home if is_trusted(home, trusted) else str(trusted[0])
+        if spots:
+            return spots[0]
+        if linked is not None:
             return linked, None
         raise _Abort(LimitError.UNAVAILABLE, NOTE_NO_SPACE)
 
@@ -414,13 +441,23 @@ class _Run:
         info = self.seam.process_info(pane_id, self.budget(_CALL_S))
         return _foreground_basename(info)
 
+    def shell_settled(self, pane_id: str) -> bool:
+        deadline = time.monotonic() + min(_SHELL_SETTLE_S, self.budget(_SHELL_SETTLE_S))
+        while self.foreground(pane_id) not in SHELL_NAMES:
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(0.1)
+        return True
+
     def require_foreground(self, pane_id: str, names: frozenset[str]) -> None:
         if not _matches_binary(self.foreground(pane_id), names):
             raise _Abort(LimitError.TIMEOUT, NOTE_FOREGROUND_LOST)
 
     # -- the interactive flow ----------------------------------------------------------
 
-    def send_and_confirm(self, pane_id: str, text: str | None, marker: str, wait_ms: int) -> None:
+    def send_and_confirm(
+        self, pane_id: str, text: str | None, marker: str, wait_ms: int, enters: int = 1
+    ) -> None:
         """Send text/enter, retrying Enter until the marker shows (every
         write is verified; screen text plus the pre-write foreground check)."""
         self.require_foreground(pane_id, frozenset({self.recipe.binary}))
@@ -431,7 +468,10 @@ class _Run:
                 # marker; once the input is empty again, a fresh run prints the full one.
                 self.seam.send_text(pane_id, text, self.budget(_CALL_S))
                 time.sleep(_TYPED_SETTLE_S)
-            self.seam.send_keys(pane_id, ("enter",), self.budget(_CALL_S))
+            for press in range(enters):
+                if press:
+                    time.sleep(_TYPED_SETTLE_S)
+                self.seam.send_keys(pane_id, ("enter",), self.budget(_CALL_S))
             if self.seam.wait_output(
                 pane_id,
                 marker,
@@ -463,7 +503,7 @@ class _Run:
     def launch(self, tab: _Tab, resume_id: str | None) -> str | None:
         """Start the tool; returns the resumed id (or None for fresh). A
         definitely dead resumed id clears the saved id and raises _RetryFresh."""
-        if self.foreground(tab.pane_id) not in SHELL_NAMES:
+        if not self.shell_settled(tab.pane_id):
             raise _Abort(LimitError.UNAVAILABLE, NOTE_NOT_SHELL_AT_START)
         if resume_id is not None:
             if self.recipe.launch_resume is None:
@@ -476,6 +516,8 @@ class _Run:
             argv = [item.replace("{id}", resume_id) for item in template]
         else:
             argv = list(self.recipe.launch_new)
+            if self.recipe.warmup_prompt is not None:
+                argv.append(self.recipe.warmup_prompt)  # shlex.join quotes it for the shell
             resume_id = None
         self.seam.pane_run(tab.pane_id, shlex.join(argv), self.budget(_CALL_S))
         if self.seam.wait_output(
@@ -501,6 +543,8 @@ class _Run:
         if self.foreground(tab.pane_id) in SHELL_NAMES and resume_id is None:
             raise _Abort(LimitError.UNAVAILABLE, NOTE_EXITED_BEFORE_PROMPT)
         # A start-up or sign-in screen needs the user; never answer it.
+        if any(re.search(pattern, screen, re.MULTILINE) for pattern in self.recipe.untrusted):
+            raise _Abort(LimitError.TIMEOUT, NOTE_WORKSPACE_UNTRUSTED)
         raise _Abort(LimitError.TIMEOUT, NOTE_NEEDS_ATTENTION)
 
     def session_root(self) -> Path | None:
@@ -516,7 +560,7 @@ class _Run:
         if root is None or "/" in session_id or session_id in (".", ".."):
             return False
         try:
-            return (root / f"{session_id}.json").is_file()
+            return (root / self.recipe.session_entry.replace("{id}", session_id)).exists()
         except OSError:
             return False
 
@@ -643,16 +687,46 @@ class _Run:
         if root is None:
             return False
         try:
-            birth = getattr(os.stat(root / f"{session_id}.json"), "st_birthtime", None)
+            entry = root / self.recipe.session_entry.replace("{id}", session_id)
+            birth = getattr(os.stat(entry), "st_birthtime", None)
         except OSError:
             return False
         return birth is not None and birth * 1000 >= self.ctx.now_ms
 
+    def warm_up(self, tab: _Tab) -> None:
+        """The tool shows no usage before its first reply: wait for the launch message's answer
+        and for the prompt to come back. Nothing is typed here."""
+        assert self.recipe.warmup_marker is not None
+        wait_ms = int(_USAGE_S * 1000)
+        if not self.seam.wait_output(
+            tab.pane_id,
+            self.recipe.warmup_marker,
+            wait_ms,
+            self.recipe.max_lines,
+            self.budget(wait_ms / 1000 + 5.0),
+        ):
+            raise _Abort(LimitError.TIMEOUT, NOTE_NO_WARMUP)
+        if not self.seam.wait_output(
+            tab.pane_id,
+            self.recipe.prompt_marker,
+            wait_ms,
+            self.recipe.max_lines,
+            self.budget(wait_ms / 1000 + 5.0),
+        ):
+            raise _Abort(LimitError.TIMEOUT, NOTE_NO_WARMUP)
+        time.sleep(_TYPED_SETTLE_S)
+
     def run_in_tab(self, tab: _Tab, resume_id: str | None) -> list[LimitWindow]:
         launched = self.launch(tab, resume_id)
+        if self.recipe.warmup_marker is not None and launched is None:
+            self.warm_up(tab)
         try:
             self.send_and_confirm(
-                tab.pane_id, "/usage", self.recipe.usage_marker, int(_USAGE_S * 1000)
+                tab.pane_id,
+                "/usage",
+                self.recipe.usage_marker,
+                int(_USAGE_S * 1000),
+                self.recipe.usage_enters,
             )
         except _Abort as abort:
             if abort.error is LimitError.TIMEOUT and self.recipe.refuse:
@@ -671,7 +745,11 @@ class _Run:
                 # One more look before believing it: right after start the screen can lag.
                 time.sleep(_IDLE_RECHECK_S)
                 self.send_and_confirm(
-                    tab.pane_id, "/usage", self.recipe.usage_marker, int(_USAGE_S * 1000)
+                    tab.pane_id,
+                    "/usage",
+                    self.recipe.usage_marker,
+                    int(_USAGE_S * 1000),
+                    self.recipe.usage_enters,
                 )
                 screen = self.seam.pane_read(
                     tab.pane_id, self.recipe.max_lines, self.budget(_CALL_S)

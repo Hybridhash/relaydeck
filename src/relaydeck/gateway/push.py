@@ -68,7 +68,6 @@ from datetime import UTC, datetime
 from enum import Enum
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
 
 # Exact wire key set. Asserted equal to the extension guard's
 # ALLOWED_KEYS by the lock-screen audit test (gateway stays stdlib-only
@@ -93,7 +92,6 @@ PREF_CATEGORY_TO_UI = {value: key for key, value in PREF_UI_TO_CATEGORY.items()}
 PLATFORMS = frozenset({"android"})
 
 LINK_PURPOSE_OPEN = "open-event"
-LINK_PATH_PREFIX = "/app/n/"
 LINK_TOKEN_PREFIX = "rdl_"
 
 DEFAULT_PUSH_TTL_MS = 24 * 60 * 60 * 1000
@@ -110,8 +108,6 @@ MAX_HOST_ID_CHARS = 128
 MAX_SESSION_ID_CHARS = 128
 MAX_VALUE_LEN = 512
 MAX_ERROR_CHARS = 256
-
-TERMINAL_EVENT_STATUSES = frozenset({"completed", "resolved", "closed", "archived", "failed"})
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS push_meta (k TEXT PRIMARY KEY, v TEXT NOT NULL);
@@ -203,29 +199,6 @@ class ProviderPort(ABC):
         PERMANENT = token dead, tombstone the device."""
 
 
-class StubProvider(ProviderPort):
-    """Scripted provider for headless tests. Script entries may be
-    outcomes or Exceptions (raised from send, treated as retryable)."""
-
-    def __init__(
-        self,
-        script: list[ProviderOutcome | Exception] | None = None,
-        default: ProviderOutcome = ProviderOutcome.SENT,
-    ) -> None:
-        self._script = list(script) if script else []
-        self._default = default
-        self.sends: list[tuple[str, dict[str, str]]] = []
-
-    def send(self, token: str, payload: dict[str, str]) -> ProviderOutcome:
-        self.sends.append((token, dict(payload)))
-        if self._script:
-            next_item = self._script.pop(0)
-            if isinstance(next_item, Exception):
-                raise next_item
-            return next_item
-        return self._default
-
-
 @dataclass(frozen=True)
 class DeviceRecord:
     account: str
@@ -245,44 +218,6 @@ def backoff_ms(attempts: int) -> int:
     if attempts < 1:
         return 0
     return min(BACKOFF_CAP_MS, BACKOFF_BASE_MS * int(2 ** (attempts - 1)))
-
-
-def hint_relevance(category: str, current_status: str) -> str:
-    """Stale-hint relevance check against CURRENT metadata.
-
-    Opening always re-fetches; this classifies the display: an attention
-    hint for a terminal event is stale (show current state, not the
-    hint's implied urgency). Returns "relevant" or "stale".
-    """
-    if current_status in TERMINAL_EVENT_STATUSES:
-        return "stale" if category == "attention" else "relevant"
-    return "relevant"
-
-
-def link_url(public_origin: str, token: str) -> str:
-    """App-link URL for a minted token. Matches the Android app-link pathPrefix /app/."""
-    return f"{public_origin.rstrip('/')}{LINK_PATH_PREFIX}{token}"
-
-
-def token_from_url(url: str) -> str | None:
-    """Extract a deep-link token from an app-link URL. Anything that is
-    not exactly /app/n/{token} fails closed (None)."""
-    try:
-        path = urlparse(url).path
-    except ValueError:
-        return None
-    if not path.startswith(LINK_PATH_PREFIX):
-        return None
-    token = path[len(LINK_PATH_PREFIX) :]
-    if "/" in token or not token.startswith(LINK_TOKEN_PREFIX):
-        return None
-    if len(token) < len(LINK_TOKEN_PREFIX) + 16 or len(token) > 128:
-        return None
-    if any(
-        c not in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_" for c in token
-    ):
-        return None
-    return token
 
 
 def _utc_z(ms: int) -> str:

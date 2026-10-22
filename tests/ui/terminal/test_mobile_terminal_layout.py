@@ -22,9 +22,9 @@ from relaydeck.client.features.terminal.surfaces import (
     mount_agent_screen,
     request_terminal_keyboard,
 )
+from relaydeck.contracts.wire import terminal as terminal_wire
 from relaydeck.domain import reducers
 from relaydeck.domain.models import ConnectionState
-from relaydeck.gateway import terminal_wire
 from tests.support.host_harness import render_component, run
 from tests.support.terminal.direct_typing import open_compose, open_direct_input
 from tests.support.terminal.sessions import _agent_session, _session
@@ -276,7 +276,7 @@ def test_explicit_keyboard_request_enables_input_first_and_fences_writer(
 
             assert requests() == 0  # neither mount nor channel open asks for an IME
             if not shell:
-                await app.set_props_and_fire("agent-compose-toggle", {}, "click")
+                await open_compose(app)
                 request_terminal_keyboard(session, session.input_token, agent_direct=True)
                 assert requests() == 0 and session.view().workflow == WORKFLOW_AGENT_COMPOSER
                 key = "agent-workflow-toggle"
@@ -404,7 +404,7 @@ def test_keybar_restores_scroll_offset_after_composing() -> None:
                     "scroll_delta": 237.0,
                 },
             )
-            await app.set_props_and_fire("agent-compose-toggle", {}, "click")
+            await open_compose(app)
             start = len(app.conn.sent)
             await app.set_props_and_fire("agent-workflow-toggle", {}, "click")
             requests = [

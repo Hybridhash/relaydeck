@@ -36,6 +36,7 @@ from relaydeck.client.diagnostics import failure_category
 from relaydeck.client.features.terminal.events import click, spawn
 from relaydeck.client.features.terminal.key_bar import KEY_BAR_GROUPS, KeyBarItem
 from relaydeck.client.features.terminal.scrolling import ALT_SELECTION_HINT
+from relaydeck.client.features.terminal.selection_area import selected_offsets
 from relaydeck.client.features.terminal.selection_model import (
     display_width,
     normalize_range,
@@ -1054,17 +1055,12 @@ def PhoneSelectionSheet(
             set_result("Copied")
 
     async def picked(event: Any) -> None:
-        selected = event.data
-        if not live() or on_selection_change is None or not selected:
+        if not live() or on_selection_change is None:
             return
-        # The area reports only the text; any match bounds the same copy.
-        start = text.find(selected)
-        if start < 0:
-            selected = selected.replace("\n", "\r\n")
-            start = text.find(selected)
-        if start < 0:
+        offsets = selected_offsets(text, event.data)
+        if offsets is None:
             return
-        pending = on_selection_change(start, start + len(selected))
+        pending = on_selection_change(*offsets)
         if inspect.isawaitable(pending):
             await pending
 

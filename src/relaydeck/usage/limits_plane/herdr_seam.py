@@ -24,7 +24,6 @@ from typing import Any, Protocol
 
 MAX_ID_CHARS = 256
 MAX_LIST_ENTRIES = 4096
-WAIT_MARGIN_S = 5.0
 
 
 class SeamTimeout(TimeoutError):

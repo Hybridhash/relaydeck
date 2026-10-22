@@ -23,8 +23,9 @@ from relaydeck.client.features.terminal.surfaces import (
     agent_hooks,
     mount_agent_screen,
 )
-from relaydeck.gateway import terminal_wire
+from relaydeck.contracts.wire import terminal as terminal_wire
 from tests.support.host_harness import button_label, render_component, run
+from tests.support.terminal.direct_typing import open_compose
 from tests.support.terminal.sessions import _agent_session, _session
 from tests.support.ui.phone_terminal import _ancestry, _shape
 from tests.support.ui.retained_root import _render
@@ -76,7 +77,7 @@ def test_phone_focus_mode_and_keyboard_keep_confirmed_native_channel_and_output(
             frames = list(app.conn.data_frames)
             assert app.find("terminal-flex-host").expand is True
             assert app.find("agent-input-dock").expand is None
-            await app.set_props_and_fire("agent-compose-toggle", {}, "click")
+            await open_compose(app)
             assert app.find("composer-draft").max_lines == 2
             assert app.find("composer-draft").multiline is True
             assert app.find("composer-draft").on_submit is None
@@ -103,7 +104,7 @@ def test_phone_focus_mode_and_keyboard_keep_confirmed_native_channel_and_output(
             assert app.find("mobile-keybar").visible is True
             assert _missing(app, "agent-keys-scroll")
             assert session.store.draft == draft
-            await app.set_props_and_fire("agent-compose-toggle", {}, "click")
+            await open_compose(app)
             assert session.view().workflow == WORKFLOW_AGENT_COMPOSER
             assert app.find("composer-draft").value == draft
             assert _shape(_ancestry(app, term)) == engine_shape
@@ -235,7 +236,7 @@ def test_compact_composer_preserves_blocked_review_and_explicit_send_gate() -> N
         session.set_agent_status("blocked")
         session.on_draft_change("line one\nمرحبا 🐾")
         app = await render_component(mount_agent_screen, session, phone=True)
-        await app.set_props_and_fire("agent-compose-toggle", {}, "click")
+        await open_compose(app)
         try:
             draft = session.store.draft
             session.sessions.ime.begin()

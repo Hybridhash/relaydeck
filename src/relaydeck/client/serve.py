@@ -40,14 +40,13 @@ import hmac
 import json
 import logging
 import os
-import re
 import secrets
 import time
 from collections.abc import Callable
 from contextlib import asynccontextmanager
 from contextvars import ContextVar, copy_context
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, TypeVar
+from typing import TYPE_CHECKING, Any, TypeVar, cast
 from urllib.parse import urlencode, urlparse
 
 import msgpack  # type: ignore[import-untyped]
@@ -61,7 +60,8 @@ from relaydeck.client.features.auth.web_recovery import (
     BrowserRecoveryMiddleware,
 )
 from relaydeck.client.features.terminal.diagnostics import diagnostics_logger
-from relaydeck.contracts.schemas import validate
+from relaydeck.contracts import paths
+from relaydeck.contracts.schemas import AuthorizationRequest, Me, validate
 from relaydeck.devtools.dev_server import (  # noqa: F401  (re-exported for tests and the runner)
     _DEV_HOSTS,
     _DEV_LOGIN_TOKEN,
@@ -76,8 +76,14 @@ from relaydeck.devtools.dev_server import (  # noqa: F401  (re-exported for test
 )
 from relaydeck.gateway.app import BodyCapMiddleware, GatewayState
 from relaydeck.gateway.backend import FakeBackend
+from relaydeck.gateway.bounds import GRACEFUL_SHUTDOWN_S, WS_MAX_SIZE
+from relaydeck.gateway.errors import install_error_handlers
+from relaydeck.gateway.http import docs_settings, remove_docs
 from relaydeck.gateway.identity import REFRESH_TTL_MS, Session, SessionStore
+from relaydeck.gateway.metrics import install_metrics
 from relaydeck.gateway.push_io import push_io
+from relaydeck.gateway.request_id import install_request_id
+from relaydeck.gateway.ws_close import install as install_peer_closed_filter
 from relaydeck.persistence_contracts import Record, StorageUnavailable, Table
 
 if TYPE_CHECKING:
@@ -724,15 +730,15 @@ class WebSessionStore:
         digest = hashlib.sha256(verifier.encode()).digest()
         challenge = base64.urlsafe_b64encode(digest).decode().rstrip("=")
         self._pending[state] = (verifier, self.now_ms() + self.login_ttl_s * 1000)
-        request = {
+        request: AuthorizationRequest = {
             "response_type": "code",
             "code_challenge": challenge,
             "code_challenge_method": "S256",
             "state": state,
-            "redirect_uri": self.public_origin.rstrip("/") + "/v1/auth/callback",
+            "redirect_uri": self.public_origin.rstrip("/") + paths.AUTH_CALLBACK,
         }
         validate("relaydeck/gateway/v1/authorization-request", request)
-        url = gateway_base.rstrip("/") + "/v1/authorize?" + urlencode(request)
+        url = gateway_base.rstrip("/") + paths.AUTHORIZE + "?" + urlencode(request)
         return state, url
 
     def take_pending(self, state: str) -> str | None:
@@ -918,7 +924,7 @@ class PictureUploadMiddleware:
         if not (
             scope["type"] == "http"
             and scope.get("method") == "PUT"
-            and re.fullmatch(r"/v1/pictures/[a-f0-9]{32}/content", scope.get("path", ""))
+            and paths.PICTURE_CONTENT_RE.fullmatch(scope.get("path", ""))
         ):
             return await self._app(scope, receive, send)
         headers = [(key.lower(), value) for key, value in scope.get("headers", [])]
@@ -996,19 +1002,27 @@ class SessionCookieRenewalMiddleware:
 class FletGuardMiddleware:
     """Pure-ASGI guard: Origin, cookie auth, reconnect ownership (OWASP WS)."""
 
-    def __init__(self, app: Any, store: WebSessionStore, ws_path: str = WS_PATH) -> None:
+    def __init__(
+        self,
+        app: Any,
+        store: WebSessionStore,
+        ws_path: str = WS_PATH,
+        state: GatewayState | None = None,
+    ) -> None:
         self._app = app
         self._store = store
         self._ws_path = ws_path
         self._transports: dict[str, _FletTransport] = {}
         self._handoffs: dict[str, _FletTransport] = {}
+        if state is not None:
+            state.web_tabs = lambda: len(self._transports)
 
     async def __call__(self, scope: dict[str, Any], receive: Any, send: Any) -> Any:
         if scope["type"] == "websocket" and scope.get("path") == self._ws_path:
             return await self._guard_ws(scope, receive, send)
         if (
             scope["type"] == "http"
-            and scope.get("path") == "/v1/auth/logout"
+            and scope.get("path") == paths.AUTH_LOGOUT
             and scope.get("method") == "POST"
         ):
             headers = {k.decode().lower(): v.decode() for k, v in scope.get("headers", [])}
@@ -1408,7 +1422,7 @@ def build_web_app(
     if store is None:
         store = WebSessionStore(public_origin=public_origin, cookie_secret=cookie_secret)
     if store.persistence is not None:
-        from relaydeck.gateway.app import durable_session_allowed
+        from relaydeck.gateway.deps import durable_session_allowed
 
         store.gateway_sessions = gateway_state.sessions
         store.session_allowed = lambda session: durable_session_allowed(gateway_state, session)
@@ -1431,6 +1445,7 @@ def build_web_app(
     async def lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
         # Copying gateway routes does not carry its lifespan. Keep the
         # revoke consumer and Flet manager under the same cleanup boundary.
+        install_peer_closed_filter()
         async with gateway_app.router.lifespan_context(gateway_app):
             await flet_fastapi.app_manager.start()
             try:
@@ -1438,13 +1453,13 @@ def build_web_app(
             finally:
                 await flet_fastapi.app_manager.shutdown()
 
-    app = FastAPI(lifespan=lifespan)
+    app = FastAPI(lifespan=lifespan, **docs_settings(gateway_state.debug_docs))
     app.state.rd_store = store
     app.state.rd_gateway_state = gateway_state
 
     @app.exception_handler(StorageUnavailable)
     async def storage_unavailable(request: Request, exc: StorageUnavailable) -> JSONResponse:
-        from relaydeck.gateway.app import error_response
+        from relaydeck.gateway.errors import error_response
 
         return error_response(
             "unauthenticated",
@@ -1461,7 +1476,7 @@ def build_web_app(
             headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"},
         )
 
-    @app.post("/v1/auth/pairing/browser")
+    @app.post(paths.AUTH_PAIRING_BROWSER)
     async def pairing_browser(request: Request) -> Any:
         if request.headers.getlist("origin") != [store.public_origin]:
             return JSONResponse(status_code=403, content={"code": "forbidden"})
@@ -1482,7 +1497,7 @@ def build_web_app(
             headers={"Set-Cookie": value, "Cache-Control": "no-store"},
         )
 
-    @app.get("/v1/auth/session/recovery")
+    @app.get(paths.AUTH_SESSION_RECOVERY)
     async def session_recovery_page() -> Response:
         return Response(
             '<!doctype html><html><head><meta name="viewport" '
@@ -1493,7 +1508,7 @@ def build_web_app(
             headers={"Cache-Control": "no-store"},
         )
 
-    @app.post("/v1/auth/session/recovery")
+    @app.post(paths.AUTH_SESSION_RECOVERY)
     async def session_recovery(request: Request) -> Response:
         """Explicit fresh-page transition; never resurrect a revoked controller."""
         import httpx
@@ -1511,12 +1526,13 @@ def build_web_app(
                     transport=httpx.ASGITransport(app=gateway_app), base_url="http://gw"
                 ) as http:
                     response = await http.get(
-                        "/v1/me", headers={"Authorization": f"Bearer {pair[0]}"}
+                        paths.ME, headers={"Authorization": f"Bearer {pair[0]}"}
                     )
                 if response.status_code == 200:
                     principal = response.json()
                     validate("relaydeck/gateway/v1/me", principal)
-                    if (principal["account"], principal["device_id"]) == (
+                    known = cast(Me, principal)
+                    if (known["account"], known["device_id"]) == (
                         identity.account,
                         identity.device_id,
                     ):
@@ -1531,7 +1547,7 @@ def build_web_app(
             status_code=401, headers={**store.clear_cookie_headers(), "Cache-Control": "no-store"}
         )
 
-    @app.post("/v1/auth/session/check")
+    @app.post(paths.AUTH_SESSION_CHECK)
     async def session_check(request: Request) -> Response:
         """Read-only: is this browser signed in right now. Never tears down or clears."""
         import httpx
@@ -1552,7 +1568,7 @@ def build_web_app(
             async with httpx.AsyncClient(
                 transport=httpx.ASGITransport(app=gateway_app), base_url="http://gw"
             ) as http:
-                response = await http.get("/v1/me", headers={"Authorization": f"Bearer {access}"})
+                response = await http.get(paths.ME, headers={"Authorization": f"Bearer {access}"})
             if response.status_code in (401, 403):
                 return Response(status_code=401, headers=headers)
             if response.status_code != 200:
@@ -1561,14 +1577,15 @@ def build_web_app(
             validate("relaydeck/gateway/v1/me", principal)
         except Exception:  # noqa: BLE001 - authority could not be established right now
             return Response(status_code=503, headers=headers)
-        if (principal["account"], principal["device_id"]) != (
+        known = cast(Me, principal)
+        if (known["account"], known["device_id"]) != (
             identity.account,
             identity.device_id,
         ):
             return Response(status_code=401, headers=headers)
         return Response(status_code=204, headers=headers)
 
-    @app.post("/v1/ui/visibility")
+    @app.post(paths.UI_VISIBILITY)
     async def ui_visibility(request: Request) -> Response:
         response = Response(status_code=204, headers={"Cache-Control": "no-store"})
         if request.headers.getlist("origin") != [store.public_origin]:
@@ -1631,19 +1648,19 @@ def build_web_app(
             binding.report(body["state"], body["persisted"])
         return response
 
-    @app.get("/v1/auth/pairing/finish")
+    @app.get(paths.AUTH_PAIRING_FINISH)
     async def pairing_finish() -> Response:
         # No credential/id interpolated into HTML or URL. Existing per-tab Flet
         # ID plus the HttpOnly browser cookie select the server-held attempt.
         return Response(
             '<!doctype html><meta name="viewport" content="width=device-width">'
             '<p id="status">Opening protected Console…</p>'
-            '<script src="/v1/auth/pairing/finish.js"></script>',
+            f'<script src="{paths.AUTH_PAIRING_FINISH_SCRIPT}"></script>',
             media_type="text/html",
             headers={"Cache-Control": "no-store"},
         )
 
-    @app.get("/v1/auth/pairing/finish.js")
+    @app.get(paths.AUTH_PAIRING_FINISH_SCRIPT)
     async def pairing_finish_script() -> Response:
         return Response(
             """(() => {
@@ -1682,7 +1699,7 @@ def build_web_app(
             headers={"Cache-Control": "no-store"},
         )
 
-    @app.post("/v1/auth/pairing/complete")
+    @app.post(paths.AUTH_PAIRING_COMPLETE)
     async def pairing_complete(request: Request) -> Any:
         if request.headers.getlist("origin") != [store.public_origin]:
             return JSONResponse(status_code=403, content={"code": "forbidden"})
@@ -1795,7 +1812,7 @@ def build_web_app(
             transport=httpx.ASGITransport(app=gateway_app), base_url="http://gw"
         ) as http:
             me = await http.get(
-                "/v1/me", headers={"Authorization": f"Bearer {held[1]['access_token']}"}
+                paths.ME, headers={"Authorization": f"Bearer {held[1]['access_token']}"}
             )
         try:
             principal = me.json()
@@ -1825,9 +1842,9 @@ def build_web_app(
         return 200, {"ok": True}, sid
 
     if dev_login:
-        app.get("/v1/auth/dev-login")(_dev_login)
+        app.get(paths.AUTH_DEV_LOGIN)(_dev_login)
 
-    @app.get("/v1/auth/callback")
+    @app.get(paths.AUTH_CALLBACK)
     async def auth_callback(request: Request) -> Any:
         import httpx
 
@@ -1842,7 +1859,7 @@ def build_web_app(
         transport = httpx.ASGITransport(app=gateway_app)
         async with httpx.AsyncClient(transport=transport, base_url="http://gw") as http:
             token_response = await http.post(
-                "/v1/token",
+                paths.TOKEN,
                 json={"grant": "authorization_code", "code": code, "verifier": verifier},
             )
             if token_response.status_code != 200:
@@ -1851,7 +1868,7 @@ def build_web_app(
                 )
             tokens = token_response.json()
             me = await http.get(
-                "/v1/me", headers={"Authorization": f"Bearer {tokens['access_token']}"}
+                paths.ME, headers={"Authorization": f"Bearer {tokens['access_token']}"}
             )
             if me.status_code != 200:
                 return JSONResponse(status_code=502, content={"code": "upstream_incompatible"})
@@ -1867,7 +1884,7 @@ def build_web_app(
         )
         return RedirectResponse(url="/", status_code=302, headers=store.cookie_headers(sid))
 
-    @app.post("/v1/auth/logout")
+    @app.post(paths.AUTH_LOGOUT)
     async def auth_logout(request: Request) -> Any:
         sid = store.signed_sid(
             _cookies({k.lower(): v for k, v in request.headers.items()}).get(COOKIE_NAME, "")
@@ -1878,22 +1895,28 @@ def build_web_app(
 
     for route in gateway_app.routes:
         app.routes.append(route)
+    # The copied routes' SignedIn dependency reads the state and raises GatewayError.
+    app.state.relaydeck = gateway_state
+    install_request_id(app)
+    install_error_handlers(app)
     from relaydeck.client.asset_paths import CLIENT_ASSETS
 
-    app.mount(
-        "/",
-        flet_fastapi.app(
-            flet_main,
-            before_main=before_main,
-            assets_dir=str(CLIENT_ASSETS),
-            session_timeout_seconds=_flet_session_timeout(),
-        ),
+    flet_app = flet_fastapi.app(
+        flet_main,
+        before_main=before_main,
+        assets_dir=str(CLIENT_ASSETS),
+        session_timeout_seconds=_flet_session_timeout(),
     )
-    app.add_middleware(SessionCookieRenewalMiddleware, store=store)  # type: ignore[arg-type]
-    app.add_middleware(FletGuardMiddleware, store=store)  # type: ignore[arg-type]
-    app.add_middleware(PictureUploadMiddleware, store=store)  # type: ignore[arg-type]
-    app.add_middleware(BrowserRecoveryMiddleware)  # type: ignore[arg-type]
-    app.add_middleware(BodyCapMiddleware)  # type: ignore[arg-type]
+    if not gateway_state.debug_docs:
+        remove_docs(flet_app)
+    app.mount("/", flet_app)
+    app.add_middleware(SessionCookieRenewalMiddleware, store=store)
+    app.add_middleware(FletGuardMiddleware, store=store, state=gateway_state)
+    app.add_middleware(PictureUploadMiddleware, store=store)
+    app.add_middleware(BrowserRecoveryMiddleware)
+    app.add_middleware(BodyCapMiddleware)
+    # Added last = outermost: every reply, guard rejections included, is counted.
+    install_metrics(app, gateway_state.metrics)
     return app, store
 
 
@@ -1997,7 +2020,7 @@ def make_relaydeck_main(
                 generation = flow.generation
                 try:
                     if not await launcher.current.launch_url(
-                        store.public_origin + "/v1/auth/pairing/finish",
+                        store.public_origin + paths.AUTH_PAIRING_FINISH,
                         web_only_window_name="_self",
                     ):
                         raise RuntimeError("Navigation unavailable")
@@ -2084,7 +2107,7 @@ def make_relaydeck_main(
             transport = httpx.ASGITransport(app=gateway_app)
             async with httpx.AsyncClient(transport=transport, base_url="http://gw") as http:
                 response = await http.post(
-                    "/v1/token",
+                    paths.TOKEN,
                     json={"grant": "refresh_token", "refresh_token": refresh_token},
                 )
                 if response.status_code != 200:
@@ -2161,7 +2184,7 @@ def make_relaydeck_main(
                 on_logout=on_logout,
                 on_session_recovery=lambda: asyncio.create_task(
                     ft.UrlLauncher().launch_url(
-                        store.public_origin + "/v1/auth/session/recovery",
+                        store.public_origin + paths.AUTH_SESSION_RECOVERY,
                         web_only_window_name="_self",
                     )
                 ),
@@ -2389,9 +2412,19 @@ def main(argv: list[str] | None = None) -> int:
         dev_login=args.dev_login,
     )
     if args.dev_login:
-        print(f"dev login (single-use, loopback): {public_origin}/v1/auth/dev-login?token={token}")
+        print(
+            f"dev login (single-use, loopback): {public_origin}{paths.AUTH_DEV_LOGIN}?token={token}"
+        )
     print(f"serving RelayDeck web at {public_origin} (single worker)")
-    uvicorn.run(app, host=args.host, port=args.port, workers=1)
+    uvicorn.run(
+        app,
+        host=args.host,
+        port=args.port,
+        workers=1,
+        ws_max_size=WS_MAX_SIZE,
+        timeout_graceful_shutdown=GRACEFUL_SHUTDOWN_S,
+        proxy_headers=False,
+    )
     return 0
 
 

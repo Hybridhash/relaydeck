@@ -12,7 +12,6 @@ import asyncio
 from dataclasses import replace
 from typing import Any
 
-from relaydeck.client.adapters.fake import FakeClipboard
 from relaydeck.client.features.shell import ScriptedShellGatewayOps, ShellSession
 from relaydeck.client.features.shell.ops import LeaseInfo
 from relaydeck.client.features.shell.screen import SHELL_NOTICE_KEY, mount_shell_screen
@@ -20,6 +19,7 @@ from relaydeck.client.features.sync.transport import TransportError
 from relaydeck.client.features.terminal.keys import key_button_key
 from relaydeck.client.features.terminal.renewal import utc_stamp_in
 from relaydeck.client.features.terminal.screen import SURFACE_KEY
+from tests.support.fakes import FakeClipboard
 from tests.support.host_harness import render_component
 from tests.support.terminal.dispatch import _SocketFactory, run_clean
 

@@ -543,7 +543,9 @@ class FletBackend extends ChangeNotifier {
   void triggerControlEvent(Control control, String eventName,
       [dynamic eventData]) {
     if (control.get("on_$eventName") == true) {
-      debugPrint("${control.type}(${control.id}).on_$eventName($eventData)");
+      // Name and size only: event data can hold pasted or typed text.
+      debugPrint("${control.type}(${control.id}).on_$eventName "
+          "(${_payloadSize(eventData)} chars)");
       triggerControlEventById(control.id, eventName, eventData);
     }
   }
@@ -888,9 +890,14 @@ class FletBackend extends ChangeNotifier {
     }
   }
 
+  /// Length of the payload's text form, so logs never carry its contents.
+  static int _payloadSize(dynamic payload) =>
+      payload == null ? 0 : payload.toString().length;
+
   _send(Message message, {bool unbuffered = false}) {
     if (unbuffered || !isLoading) {
-      debugPrint("_send: ${message.action} ${message.payload}");
+      debugPrint(
+          "_send: ${message.action} (${_payloadSize(message.payload)} chars)");
       final encoded =
           msgpack.serialize(message.toList(), extEncoder: FletMsgpackEncoder());
       final packet = Uint8List(1 + encoded.length);

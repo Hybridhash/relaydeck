@@ -16,10 +16,11 @@ from relaydeck.gateway.notification_transitions import (
     NotificationTransitions,
 )
 from relaydeck.gateway.production import JournalBackend
-from relaydeck.gateway.push import HINT_KEYS, ProviderOutcome, PushStore, StubProvider, pump_outbox
+from relaydeck.gateway.push import HINT_KEYS, ProviderOutcome, PushStore, pump_outbox
 from relaydeck.journal import CommandJournal
 from tests.security.helpers import ALL_CAPS, NOW, make_state
 from tests.support.asgi_socket import AsgiSocket
+from tests.support.push import StubProvider
 from tests.support.sync.transport_fixtures import _wait
 
 

@@ -9,7 +9,7 @@ Client -> gateway input (0x02):
   [u8 kind][u32 len][payload]
   kind 0x01 text:   payload is UTF-8 (validated), <= 16 KiB
   kind 0x02 key:     payload is a Herdr key-combo name (validated
-                    against relaydeck.connector.keys), <= 64 bytes
+                    against relaydeck.contracts.keys), <= 64 bytes
   kind 0x03 resize:  payload is exactly [u16 cols][u16 rows], 1..1024
 
 Gateway -> client output (0x03):

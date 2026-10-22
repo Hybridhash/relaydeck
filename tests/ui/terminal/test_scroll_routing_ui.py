@@ -17,6 +17,7 @@ from relaydeck.client.features.terminal.events import click
 from relaydeck.client.features.terminal.scrolling import ALT_SELECTION_HINT, ScrollButtons
 from tests.support.host_harness import render_component, run
 from tests.support.terminal.binding import _wait_for
+from tests.support.terminal.direct_typing import open_compose
 from tests.support.terminal.latch_text import _inputs
 from tests.support.terminal.scroll_ui import _app, _scroll_packets, _view
 from tests.support.terminal.select_sheet import _sheet
@@ -123,7 +124,7 @@ def test_composer_allows_alt_scrolling_without_native_text_or_draft_changes() ->
     async def scenario() -> None:
         app, session, socket, channel = await _sheet(False)
         try:
-            await app.set_props_and_fire("agent-compose-toggle", {}, "click")
+            await open_compose(app)
             await _view(app, channel, alt=True, mouse=True)
             assert session.current_term.input_enabled
             channel.handler(protocol.encode_input(b"hello", protocol.ORIGIN_TEXT))
@@ -147,8 +148,7 @@ def test_scroll_hold_repeats_and_stops_without_replay(end: str) -> None:
             await _view(app, channel, alt=True)
             up = app.find("terminal-scroll-up-hold")
             await app.session.dispatch_event(up._i, "long_press_start", None)
-            await asyncio.sleep(0.275)
-            assert len(_inputs(socket)) >= 3
+            await _wait_for(lambda: len(_inputs(socket)) >= 3)
             if end == "release":
                 await app.session.dispatch_event(up._i, "long_press_end", None)
             elif end == "park":

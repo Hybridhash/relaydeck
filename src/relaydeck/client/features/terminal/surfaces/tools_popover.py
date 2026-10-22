@@ -17,6 +17,7 @@ from relaydeck.client.components.design_system.terminal_window import (
     SegmentedSwitch,
     key_chip,
 )
+from relaydeck.client.features.terminal.events import click
 from relaydeck.client.features.terminal.key_bar import KEY_BAR_GROUPS, KeyBarItem
 
 logger = logging.getLogger("relaydeck.terminal")
@@ -30,6 +31,29 @@ CHIP_SIZE = 44
 GROUP_GAP = 8
 _TITLE_STYLE = {"size": 12, "weight": 700, "height": 1.2}
 _ACTION_STYLE = {"size": 13, "weight": 600, "height": 1.2}
+
+
+def tools_button(on_click: Callable[[], Any], *, opened: bool, key: str) -> Any:
+    return ft.Semantics(
+        key=f"{key}-semantics",
+        label="Keys and actions",
+        button=True,
+        expanded=opened,
+        content=ft.IconButton(
+            key=key,
+            icon=ft.Icons.KEYBOARD_COMMAND_KEY,
+            icon_size=18,
+            width=32,
+            height=32,
+            padding=0,
+            style=ft.ButtonStyle(
+                bgcolor=T.PRIMARY_FILL,
+                color=T.ON_PRIMARY,
+                shape=ft.CircleBorder(),
+            ),
+            on_click=click(on_click),
+        ),
+    )
 
 
 @dataclass(frozen=True)
@@ -144,6 +168,8 @@ def ToolsPopover(
     on_mode: Callable[[str], Any] | None,
     actions: tuple[ToolAction, ...],
     visible: bool = True,
+    right: float = 4,
+    bottom: float = 4,
 ) -> Any:
     controls: list[Any] = [
         ft.Row(
@@ -172,14 +198,14 @@ def ToolsPopover(
             controls=_keys(on_item, modifier_states, keys_enabled, show_keys),
         ),
     ]
-    bottom: list[Any] = []
+    actions_row: list[Any] = []
     if on_mode is not None:
 
         def choose(value: str) -> None:
             on_close()
             on_mode(value)
 
-        bottom.append(
+        actions_row.append(
             SegmentedSwitch(
                 (
                     ("compose", "Compose", f"{MODE_KEY}-compose"),
@@ -190,14 +216,16 @@ def ToolsPopover(
                 key=MODE_KEY,
             )
         )
-    bottom.extend(_action_button(action, on_close) for action in actions)
-    if bottom:
-        controls.append(ft.Row(wrap=True, spacing=4, run_spacing=4, controls=bottom))
+    actions_row.extend(_action_button(action, on_close) for action in actions)
+    if actions_row:
+        controls.append(ft.Row(wrap=True, spacing=4, run_spacing=4, controls=actions_row))
     panel = ft.Container(
         key=PANEL_KEY,
         top=top,
+        bottom=bottom,
         left=4,
-        right=4,
+        right=right,
+        alignment=ft.Alignment.TOP_LEFT,
         padding=ft.Padding.only(left=12, right=4, top=4, bottom=12),
         border_radius=12,
         bgcolor=ft.Colors.with_opacity(0.92, T.PANEL),
@@ -205,7 +233,13 @@ def ToolsPopover(
         content=ft.Semantics(
             container=True,
             label="Keys and actions",
-            content=ft.Column(spacing=8, tight=True, controls=controls),
+            content=ft.Column(
+                key="tools-popover-scroll",
+                spacing=8,
+                tight=True,
+                scroll=ft.ScrollMode.AUTO,
+                controls=controls,
+            ),
         ),
     )
     return ft.Container(

@@ -15,7 +15,6 @@ from relaydeck_terminal import protocol
 from relaydeck_terminal.terminal import RelayDeckTerminal
 
 from relaydeck.client import serve
-from relaydeck.client.adapters.fake import FakeClipboard
 from relaydeck.client.features.shell.ops import HttpxShellGatewayOps
 from relaydeck.client.features.sync.transport import TransportError
 from relaydeck.client.features.terminal.models import TerminalViewState
@@ -24,6 +23,7 @@ from relaydeck.client.retained_sessions import RetainedSessions
 from relaydeck.client.sessions import SessionFactory
 from relaydeck.domain.models import ConnectionState
 from relaydeck.gateway.app import create_app
+from tests.support.fakes import FakeClipboard
 from tests.support.gateway.flet_gateway import _gateway_state
 from tests.support.host_harness import render_component, run
 from tests.support.scripted_sessions import make_scripted_sessions

@@ -1,8 +1,8 @@
 """The packaged runtime never ships or imports the demo fakes.
 
-The fake gateway/host/terminal adapters and the named scenarios live in
+Test doubles live under `tests/support`; the dev web server lives in
 `relaydeck.devtools`, outside the layers the native packager stages
-(client, contracts, domain). Production client code must not import them.
+(client, contracts, domain). Production client code must not import it.
 """
 
 from __future__ import annotations
@@ -13,7 +13,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 SRC = ROOT / "src" / "relaydeck"
 STAGED_LAYERS = ("client", "contracts", "domain")  # what the stager copies
-MOVED = ("fake_gateway", "fake_host", "fake_terminal", "scenarios")
+MOVED = ("fake_gateway", "fake_host", "fake_terminal", "scenarios", "fake")
 DEV_ONLY_PREFIXES = ("relaydeck.devtools",)
 SERVE = SRC / "client" / "serve.py"
 SERVE_DEV_MODULE = "relaydeck.devtools.dev_server"
@@ -33,9 +33,7 @@ def _imports(path: Path) -> set[str]:
 def test_demo_modules_are_not_in_any_staged_layer() -> None:
     for layer in STAGED_LAYERS:
         for path in (SRC / layer).rglob("*.py"):
-            assert path.stem not in MOVED, f"{path} must live in relaydeck.devtools"
-    for name in MOVED:
-        assert (SRC / "devtools" / f"{name}.py").is_file(), name
+            assert path.stem not in MOVED, f"{path} is a test double and belongs in tests/support"
     assert "devtools" not in STAGED_LAYERS
 
 

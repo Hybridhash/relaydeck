@@ -41,11 +41,15 @@ def test_typing_and_icons_share_stable_fixed_height_row(shell, tier, monkeypatch
             row_key = "shell-keyboard-row" if shell else "agent-tab-row"
             keyboard_key = "shell-keyboard-toggle" if shell else "agent-workflow-toggle"
             row = app.find(row_key)
-            keyboard, attachment = app.find(keyboard_key), app.find("terminal-attach-picture")
+            keyboard = app.find(keyboard_key)
+            # The phone agent row holds only the field and the keyboard button; the shell
+            # row still carries its own attach button.
+            attach_keys = ("terminal-attach-picture",) if shell else ()
+            attachment_ids = tuple(app.find(key)._i for key in attach_keys)
             field = app.find(_typing_key(app))
-            identity = (row._i, keyboard._i, attachment._i, field._i)
+            identity = (row._i, keyboard._i, attachment_ids, field._i)
             assert row.height == 40
-            for key in (_typing_key(app), keyboard_key, "terminal-attach-picture"):
+            for key in (_typing_key(app), keyboard_key, *attach_keys):
                 path = _ancestry(app, app.find(key))
                 assert row in path
             slot = app.find("shell-typing-slot" if shell else "agent-typing-slot")
@@ -64,7 +68,7 @@ def test_typing_and_icons_share_stable_fixed_height_row(shell, tier, monkeypatch
                 assert (
                     row._i,
                     app.find(keyboard_key)._i,
-                    app.find("terminal-attach-picture")._i,
+                    tuple(app.find(key)._i for key in attach_keys),
                     app.find(_typing_key(app))._i,
                 ) == identity
                 assert row.height == 40 and row.controls[-1].key == (
@@ -82,7 +86,11 @@ def test_typing_and_icons_share_stable_fixed_height_row(shell, tier, monkeypatch
                 assert app.find(keyboard_key)._i == identity[1]
             if tier == "compact":
                 assert app.find(keyboard_key).tooltip is None
-                assert app.find("terminal-attach-picture").tooltip is None
+                if shell:
+                    assert app.find("terminal-attach-picture").tooltip is None
+                else:
+                    with pytest.raises(KeyError):
+                        app.find("terminal-attach-picture")
                 for item in KEY_BAR:
                     if item.kind == "action":
                         continue
@@ -198,7 +206,7 @@ def test_alt_jump_resets_and_stale_jump_never_writes(reset) -> None:
                 session._term_state = replace(session.term_state, lease_mode="view")
                 session._notify()
             else:
-                await app.set_props_and_fire("agent-compose-toggle", {}, "click")
+                await open_compose(app)
                 send = app.find("composer-draft").suffix_icon
                 await app.session.dispatch_event(send._i, "click", None)
             await app.settle()

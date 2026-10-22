@@ -10,7 +10,7 @@ import websockets.asyncio.server as ws_server
 
 from relaydeck.client.features.sync.controller import TerminalStreamClient
 from relaydeck.client.features.sync.transport import WebsocketTerminalSocket
-from relaydeck.gateway import terminal_wire
+from relaydeck.contracts.wire import terminal as terminal_wire
 
 
 def test_client_against_live_server() -> None:

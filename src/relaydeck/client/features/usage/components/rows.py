@@ -21,7 +21,6 @@ from relaydeck.client.features.usage.components.primitives import (
 )
 
 BAR_HEIGHT = 5
-MIN_BAR_PX = 3  # a positive value is always at least this wide (spec §6.7)
 
 
 def _series_color(role: str | None, tokens: dict[str, str]) -> str:

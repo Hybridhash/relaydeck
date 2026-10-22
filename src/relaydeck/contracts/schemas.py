@@ -6,23 +6,46 @@ here. Schemas use a constrained Draft 2020-12 subset enforced by
 Wire version: v1. Unknown fields are rejected unless a schema opts in.
 """
 
-from __future__ import annotations
-
 import re
-from typing import Any
+from typing import Any, Final, Literal, NotRequired, TypedDict
 
 from relaydeck.contracts.catalog import CATALOG_SCHEMA
 from relaydeck.contracts.launch import RESULT_SCHEMA
 from relaydeck.contracts.pairing import PAIRING_SCHEMAS
-from relaydeck.contracts.pictures import PICTURE_SCHEMAS
-from relaydeck.contracts.terminal_ownership import TERMINAL_OWNERSHIP_SCHEMAS
-
-WIRE_VERSION = "v1"
+from relaydeck.contracts.pairing import PairingProof as PairingProof
+from relaydeck.contracts.pairing import PairingRequest as PairingRequest
+from relaydeck.contracts.pairing import PairingStatus as PairingStatus
+from relaydeck.contracts.pictures import (
+    PICTURE_SCHEMAS,
+)
+from relaydeck.contracts.pictures import (
+    PictureGrant as PictureGrant,
+)
+from relaydeck.contracts.pictures import (
+    PictureRequest as PictureRequest,
+)
+from relaydeck.contracts.pictures import (
+    PictureResult as PictureResult,
+)
+from relaydeck.contracts.server_metrics import SERVER_METRICS_SCHEMAS
+from relaydeck.contracts.server_metrics import ServerMetrics as ServerMetrics
+from relaydeck.contracts.terminal_ownership import (
+    TERMINAL_OWNERSHIP_SCHEMAS,
+)
+from relaydeck.contracts.terminal_ownership import (
+    TerminalAttachRequest as TerminalAttachRequest,
+)
+from relaydeck.contracts.terminal_ownership import (
+    TerminalControlHolder as TerminalControlHolder,
+)
+from relaydeck.contracts.terminal_ownership import (
+    TerminalLeaseRequest as TerminalLeaseRequest,
+)
 
 # envelope marker. Write paths and the event stream carry
 # it so a Herdr passthrough line can never be mistaken for a gateway
 # document (and vice versa). Auth-layer envelopes (error, token) omit it.
-GATEWAY_PROTOCOL = "relaydeck.gateway.v1"
+GATEWAY_PROTOCOL: Final = "relaydeck.gateway.v1"
 
 # Strict UTC RFC 3339 (`Z` only; the gateway mints and compares these).
 RFC3339_UTC = r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$"
@@ -37,6 +60,7 @@ CAPABILITIES = (
     "terminal.attach",
     "hosts.enroll",
     "attachments.upload",
+    "server.health",
 )
 
 COMMAND_KINDS = (
@@ -72,6 +96,7 @@ ERROR_CODES = (
     "outcome_unknown",
     "too_large",
     "rate_limited",
+    "internal",
 )
 
 # Deliberate error mappings:
@@ -84,7 +109,7 @@ ERROR_CODES = (
 #   upstream_incompatible (not retryable).
 # - Herdr command outcomes (agent_blocked, agent_not_ready, pane_not_found, ...) are not envelope
 #   codes: they ride command records and event payloads as details.upstream_code.
-# - Unhandled gateway faults -> 500 + upstream_incompatible with a safe correlation id only.
+# - Unhandled gateway faults -> 500 + internal; the request ID travels in the X-Request-ID header.
 ERROR_STATUS = {
     "unauthenticated": 401,
     "forbidden": 400,
@@ -100,6 +125,7 @@ ERROR_STATUS = {
     "outcome_unknown": 409,
     "too_large": 413,
     "rate_limited": 429,
+    "internal": 500,
 }
 
 SCHEMAS: dict[str, dict[str, Any]] = {
@@ -743,7 +769,447 @@ SCHEMAS: dict[str, dict[str, Any]] = {
 
 SCHEMAS.update(PAIRING_SCHEMAS)
 SCHEMAS.update(PICTURE_SCHEMAS)
+SCHEMAS.update(SERVER_METRICS_SCHEMAS)
 SCHEMAS.update(TERMINAL_OWNERSHIP_SCHEMAS)
+
+
+# Typed bodies for the schemas above; tests keep them identical to the JSON Schemas.
+class SnapshotHostAgentCatalogEntriesItem(TypedDict):
+    kind: str
+    available: bool
+    reason: Literal["installed", "not_installed"]
+
+
+class SnapshotHostAgentCatalog(TypedDict):
+    status: Literal["ready", "error"]
+    source: Literal["companion-path", "synthetic"]
+    observed_ms: int
+    entries: list[SnapshotHostAgentCatalogEntriesItem]
+
+
+class SnapshotHost(TypedDict):
+    id: str
+    label: NotRequired[str]
+    agent_catalog: NotRequired[SnapshotHostAgentCatalog]
+    epoch: str
+    reachable: bool
+    protocol: NotRequired[int]
+    version: NotRequired[str]
+    capabilities: NotRequired[
+        list[
+            Literal[
+                "sessions.read",
+                "terminal.view",
+                "terminal.control",
+                "agents.prompt",
+                "agents.start",
+                "shells.create",
+                "terminal.attach",
+                "hosts.enroll",
+                "attachments.upload",
+                "server.health",
+            ]
+        ]
+    ]
+
+
+class SnapshotWorkspace(TypedDict):
+    id: str
+    host_id: str
+    number: NotRequired[int]
+    label: NotRequired[str]
+    focused: NotRequired[bool]
+    pane_count: NotRequired[int]
+    tab_count: NotRequired[int]
+    active_tab_id: NotRequired[str]
+    agent_status: NotRequired[Literal["idle", "working", "blocked", "done", "unknown"]]
+
+
+class SnapshotTab(TypedDict):
+    id: str
+    host_id: str
+    workspace_id: str
+    number: NotRequired[int]
+    label: NotRequired[str]
+    focused: NotRequired[bool]
+    pane_count: NotRequired[int]
+    agent_status: NotRequired[Literal["idle", "working", "blocked", "done", "unknown"]]
+
+
+class SnapshotPane(TypedDict):
+    id: str
+    host_id: str
+    workspace_id: str
+    tab_id: str
+    focused: NotRequired[bool]
+    agent_status: NotRequired[Literal["idle", "working", "blocked", "done", "unknown"]]
+
+
+class SnapshotAgent(TypedDict):
+    terminal_id: str
+    host_id: str
+    workspace_id: str
+    tab_id: str
+    pane_id: str
+    name: NotRequired[str]
+    agent: NotRequired[str]
+    title: NotRequired[str]
+    status: Literal["idle", "working", "blocked", "done", "unknown"]
+    focused: NotRequired[bool]
+    launch_pending: NotRequired[bool]
+    interactive_ready: NotRequired[bool]
+    state_change_seq: NotRequired[int]
+    revision: int
+
+
+class Snapshot(TypedDict):
+    host: SnapshotHost
+    cursor: str
+    workspaces: list[SnapshotWorkspace]
+    tabs: list[SnapshotTab]
+    panes: list[SnapshotPane]
+    agents: list[SnapshotAgent]
+
+
+class MetadataEvent(TypedDict):
+    protocol: Literal["relaydeck.gateway.v1"]
+    event_id: str
+    host_id: str
+    host_epoch: str
+    sequence: int
+    cursor: str
+    type: Literal[
+        "host.status",
+        "workspace.upserted",
+        "tab.upserted",
+        "pane.upserted",
+        "agent.upserted",
+        "resource.removed",
+        "command.updated",
+        "capabilities.changed",
+        "resync.required",
+    ]
+    resource_id: NotRequired[str]
+    resource_revision: NotRequired[int]
+    observed_at: str
+    payload: NotRequired[dict[str, Any]]
+
+
+class CommandSubmit(TypedDict):
+    protocol: Literal["relaydeck.gateway.v1"]
+    command_id: str
+    host_id: str
+    host_epoch: str
+    kind: Literal["agent.prompt", "agent.start", "agent.rename", "shell.create", "session.close"]
+    expected_revision: NotRequired[int]
+    target: dict[str, str]
+    payload: dict[str, Any]
+    expires_at: NotRequired[str]
+
+
+class CommandRecordResult(TypedDict):
+    type: Literal["agent_started", "tab_created", "agent_prompted", "ok", "partial_creation"]
+    workspace_id: NotRequired[str]
+    tab_id: NotRequired[str]
+    pane_id: NotRequired[str]
+    agent_id: NotRequired[str]
+
+
+class CommandRecord(TypedDict):
+    protocol: Literal["relaydeck.gateway.v1"]
+    command_id: str
+    host_id: str
+    kind: Literal["agent.prompt", "agent.start", "agent.rename", "shell.create", "session.close"]
+    target: dict[str, str]
+    status: Literal["accepted", "dispatched", "succeeded", "failed", "rejected", "unknown"]
+    error_code: NotRequired[str]
+    updated_ms: NotRequired[int]
+    result: NotRequired[CommandRecordResult]
+
+
+class CommandDispatch(TypedDict):
+    kind: Literal["command.dispatch"]
+    command_id: str
+    principal: str
+    host_id: str
+    host_epoch: str
+    gateway_kind: Literal[
+        "agent.prompt", "agent.start", "agent.rename", "shell.create", "session.close"
+    ]
+    target: dict[str, str]
+    payload: dict[str, Any]
+    digest: str
+    generation: int
+    expires_ms: int
+
+
+class TerminalControl(TypedDict):
+    kind: Literal["ack", "gap", "reset", "bye", "history_reset"]
+    applied: NotRequired[int]
+    epoch: NotRequired[str]
+    offset: NotRequired[int]
+    incomplete: NotRequired[bool]
+    detail: NotRequired[str]
+    generation: NotRequired[int]
+    input_seq: NotRequired[int]
+
+
+class TerminalTicketRequest(TypedDict):
+    lease_id: str
+
+
+class TerminalTicket(TypedDict):
+    ticket: str
+    expires_in: int
+
+
+class Error(TypedDict):
+    code: Literal[
+        "unauthenticated",
+        "forbidden",
+        "not_found",
+        "stale_epoch",
+        "stale_revision",
+        "command_conflict",
+        "unsupported_capability",
+        "host_offline",
+        "lease_conflict",
+        "lease_expired",
+        "upstream_incompatible",
+        "outcome_unknown",
+        "too_large",
+        "rate_limited",
+        "internal",
+    ]
+    message: str
+    retryable: NotRequired[bool]
+    details: NotRequired[dict[str, Any]]
+
+
+class AuthorizationRequest(TypedDict):
+    response_type: Literal["code"]
+    code_challenge_method: Literal["S256"]
+    code_challenge: str
+    state: str
+    redirect_uri: str
+
+
+class TokenExchange(TypedDict):
+    grant: Literal["authorization_code", "refresh_token"]
+    code: NotRequired[str]
+    verifier: NotRequired[str]
+    refresh_token: NotRequired[str]
+
+
+class TokenResponse(TypedDict):
+    access_token: str
+    refresh_token: str
+    expires_in: int
+
+
+class NonceClaim(TypedDict):
+    nonce: str
+    host_id: str
+
+
+class EnrollmentCreate(TypedDict):
+    host_label: str
+    pubkey: str
+    ttl_seconds: NotRequired[int]
+
+
+class Enrollment(TypedDict):
+    id: str
+    code: str
+    qr: str
+    fingerprint: str
+    expires_at: str
+    host_label: str
+
+
+EnrollmentState = Literal["pending", "claimed", "expired", "burned"]
+
+
+class EnrollmentStatus(TypedDict):
+    id: str
+    status: EnrollmentState
+
+
+class EnrollmentRedeem(TypedDict):
+    code: str
+    host_id: str
+    pubkey: str
+    proof: str
+
+
+class EnrollmentResult(TypedDict):
+    host_id: str
+    host_token: str
+    fingerprint: str
+
+
+class Me(TypedDict):
+    account: str
+    device_id: str
+    capabilities: list[str]
+    hosts: list[str]
+    protocol_version: Literal["relaydeck.gateway.v1"]
+
+
+class HostsHostsItemAgentCatalogEntriesItem(TypedDict):
+    kind: str
+    available: bool
+    reason: Literal["installed", "not_installed"]
+
+
+class HostsHostsItemAgentCatalog(TypedDict):
+    status: Literal["ready", "error"]
+    source: Literal["companion-path", "synthetic"]
+    observed_ms: int
+    entries: list[HostsHostsItemAgentCatalogEntriesItem]
+
+
+class HostsHostsItemUpstream(TypedDict):
+    protocol: int
+    version: NotRequired[str]
+    compatible: bool
+
+
+class HostsHostsItem(TypedDict):
+    host_id: str
+    label: NotRequired[str]
+    agent_catalog: NotRequired[HostsHostsItemAgentCatalog]
+    epoch: str
+    reachable: bool
+    last_seen_at: NotRequired[str]
+    fingerprint: NotRequired[str]
+    upstream: HostsHostsItemUpstream
+
+
+class Hosts(TypedDict):
+    hosts: list[HostsHostsItem]
+
+
+class AgentsPageAgentsItem(TypedDict):
+    terminal_id: str
+    name: str
+    agent: str
+    title: str
+    status: Literal["idle", "working", "blocked", "done", "unknown"]
+    focused: bool
+    revision: int
+    workspace_id: NotRequired[str]
+    tab_id: NotRequired[str]
+    pane_id: NotRequired[str]
+    project: NotRequired[str]
+    last_activity_ms: NotRequired[int]
+    activity_id: NotRequired[str]
+    unread: NotRequired[bool]
+
+
+class AgentsPage(TypedDict):
+    host_id: str
+    host_epoch: NotRequired[str]
+    total: NotRequired[int]
+    agents: list[AgentsPageAgentsItem]
+    next_page_token: NotRequired[str]
+
+
+class DeviceRegistration(TypedDict):
+    device_id: str
+    platform: Literal["android"]
+    status: Literal["active"]
+
+
+class DeepLinkResolutionRoute(TypedDict):
+    host_id: str
+    session_id: str
+
+
+class DeepLinkResolution(TypedDict):
+    notification_id: str
+    event_ref: str
+    host_ref: str
+    session_ref: str
+    host_id: str
+    session_id: str
+    category: Literal["attention", "completion"]
+    route: DeepLinkResolutionRoute
+
+
+class DevicesDevicesItem(TypedDict):
+    device_id: str
+    current: bool
+    platform: Literal["android", "web", "unknown"]
+    status: Literal["active", "refresh_only", "notifications_only", "revoked"]
+    auth_sessions: int
+    push_status: Literal["active", "tombstoned", "none"]
+    access_expires_at: NotRequired[str]
+    refresh_expires_at: NotRequired[str]
+    registered_at: NotRequired[str]
+
+
+class Devices(TypedDict):
+    current_device_id: str
+    truncated: bool
+    devices: list[DevicesDevicesItem]
+
+
+class HostRevoke(TypedDict):
+    ok: Literal[True]
+
+
+class DeviceRevoke(TypedDict):
+    ok: Literal[True]
+
+
+class AgentRead(TypedDict):
+    host_id: str
+    host_epoch: str
+    agent_id: str
+    activity_id: str
+    unread: bool
+
+
+TYPED_SCHEMAS: dict[str, type] = {
+    "relaydeck/gateway/v1/snapshot": Snapshot,
+    "relaydeck/gateway/v1/metadata-event": MetadataEvent,
+    "relaydeck/gateway/v1/command-submit": CommandSubmit,
+    "relaydeck/gateway/v1/command-record": CommandRecord,
+    "relaydeck/gateway/v1/command-dispatch": CommandDispatch,
+    "relaydeck/gateway/v1/terminal-control": TerminalControl,
+    "relaydeck/gateway/v1/terminal-ticket-request": TerminalTicketRequest,
+    "relaydeck/gateway/v1/terminal-ticket": TerminalTicket,
+    "relaydeck/gateway/v1/error": Error,
+    "relaydeck/gateway/v1/authorization-request": AuthorizationRequest,
+    "relaydeck/gateway/v1/token-exchange": TokenExchange,
+    "relaydeck/gateway/v1/token-response": TokenResponse,
+    "relaydeck/gateway/v1/nonce-claim": NonceClaim,
+    "relaydeck/gateway/v1/enrollment-create": EnrollmentCreate,
+    "relaydeck/gateway/v1/enrollment": Enrollment,
+    "relaydeck/gateway/v1/enrollment-status": EnrollmentStatus,
+    "relaydeck/gateway/v1/enrollment-redeem": EnrollmentRedeem,
+    "relaydeck/gateway/v1/enrollment-result": EnrollmentResult,
+    "relaydeck/gateway/v1/me": Me,
+    "relaydeck/gateway/v1/hosts": Hosts,
+    "relaydeck/gateway/v1/agents-page": AgentsPage,
+    "relaydeck/gateway/v1/device-registration": DeviceRegistration,
+    "relaydeck/gateway/v1/deep-link-resolution": DeepLinkResolution,
+    "relaydeck/gateway/v1/devices": Devices,
+    "relaydeck/gateway/v1/host-revoke": HostRevoke,
+    "relaydeck/gateway/v1/device-revoke": DeviceRevoke,
+    "relaydeck/gateway/v1/agent-read": AgentRead,
+    "relaydeck/gateway/v1/pairing-request": PairingRequest,
+    "relaydeck/gateway/v1/pairing-proof": PairingProof,
+    "relaydeck/gateway/v1/pairing-status": PairingStatus,
+    "relaydeck/gateway/v1/picture-request": PictureRequest,
+    "relaydeck/gateway/v1/server-metrics": ServerMetrics,
+    "relaydeck/gateway/v1/picture-grant": PictureGrant,
+    "relaydeck/gateway/v1/picture-result": PictureResult,
+    "relaydeck/gateway/v1/terminal-attach-request": TerminalAttachRequest,
+    "relaydeck/gateway/v1/terminal-control-holder": TerminalControlHolder,
+    "relaydeck/gateway/v1/terminal-lease-request": TerminalLeaseRequest,
+}
 
 
 class SchemaError(ValueError):

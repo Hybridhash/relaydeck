@@ -15,7 +15,6 @@ import pytest
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
 
-from relaydeck.client.adapters.fake import FakeClipboard, FakeCredentialStore, FakeNotifications
 from relaydeck.client.features.auth.service import ACCESS_KEY, AuthState
 from relaydeck.client.notifications_runtime import NotificationRuntime
 from relaydeck.client.packaged_runtime import PackagedRuntime
@@ -32,6 +31,7 @@ from relaydeck.gateway.authorization import (
 from relaydeck.gateway.identity import pkce_challenge
 from tests.security.helpers import ALL_CAPS, NOW, make_state
 from tests.support.companion.asgi_companion import AsgiServer, config_file
+from tests.support.fakes import FakeClipboard, FakeCredentialStore, FakeNotifications
 from tests.support.host_harness import render_component, run
 from tests.support.ui.packaged import Preferences
 

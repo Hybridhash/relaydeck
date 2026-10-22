@@ -193,6 +193,7 @@ class LimitsRefresh:
     cooldown_until_ms: int | None = None
     last_error: str | None = None  # timeout | auth_required | parse | ...
     last_attempt: RefreshAttempt | None = None
+    probe_dir: str | None = None  # the folder to trust once, named when the last read stopped there
 
 
 @dataclass(frozen=True)
@@ -451,6 +452,12 @@ def _setup(value: object) -> LimitsSetup | None:
     )
 
 
+def _probe_dir(value: object) -> str | None:
+    if not isinstance(value, str) or not value.startswith("/") or len(value) > 512:
+        return None
+    return None if any(ord(c) < 32 for c in value) else value
+
+
 def _refresh(value: object) -> LimitsRefresh | None:
     """The kind's on-demand limits read. Absent or malformed means an older server: no button."""
     if not isinstance(value, Mapping):
@@ -480,6 +487,7 @@ def _refresh(value: object) -> LimitsRefresh | None:
         else None,
         last_error=_label(doc.get("last_error")),
         last_attempt=last,
+        probe_dir=_probe_dir(doc.get("probe_dir")),
     )
 
 

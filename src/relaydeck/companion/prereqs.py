@@ -31,14 +31,6 @@ STATE_NOT_RUNNING = "not_running"
 STATE_NOT_LOGGED_IN = "not_logged_in"
 STATE_NEEDS_ACTION = "needs_action"
 STATE_UNKNOWN = "unknown"
-STATES = (
-    STATE_OK,
-    STATE_MISSING,
-    STATE_NOT_RUNNING,
-    STATE_NOT_LOGGED_IN,
-    STATE_NEEDS_ACTION,
-    STATE_UNKNOWN,
-)
 
 TIMEOUT_S = 15
 UV_VERSION = re.compile(r"\buv (\d+\.\d+\.\d+)")

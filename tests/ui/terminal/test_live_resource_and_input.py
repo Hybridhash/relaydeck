@@ -30,6 +30,7 @@ from relaydeck.client.features.terminal.surfaces import (
 from relaydeck.client.theme import MIN_TOUCH, palette
 from tests.support.host_harness import HostApp, render_component, run
 from tests.support.scripted_sessions import ScriptedSessions, make_scripted_sessions
+from tests.support.terminal.direct_typing import open_compose
 from tests.support.terminal.selection import _mark_ready, _open_with_snapshot
 from tests.support.ui.open_terminal import AGENT_KEY, _TwoHostTransport
 
@@ -72,7 +73,7 @@ def test_integrated_agent_axes_preserve_draft_and_live_terminal(width: int, dark
                 await app.set_props_and_fire("console-search", {}, "click")
             assert "inventory-query" in focus_order(app.page)
         if width < 1024:
-            await app.set_props_and_fire("agent-compose-toggle", {}, "click")
+            await open_compose(app)
         await app.set_props_and_fire(
             "composer-draft", {"value": "draft 中文 العربية"}, "change", "draft 中文 العربية"
         )
@@ -88,7 +89,7 @@ def test_integrated_agent_axes_preserve_draft_and_live_terminal(width: int, dark
             assert app.find("composer-draft").can_request_focus is False
             assert app.find("composer-draft").disabled is True
             assert session.composer_props()["draft"] == "draft 中文 العربية"
-            await app.set_props_and_fire("agent-compose-toggle", {}, "click")
+            await open_compose(app)
             assert app.find("composer-draft").value == "draft 中文 العربية"
             assert app.find("mobile-keybar").visible is False
         else:

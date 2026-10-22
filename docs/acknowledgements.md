@@ -92,8 +92,8 @@ including `uvicorn`'s optional extras as resolved in the lock).
 
 ## 4. Fonts
 
-Bundled fonts are served from the app's own assets; no font is fetched at
-runtime. Each is under the SIL Open Font License 1.1; the license text of each
+Bundled fonts are served from the app's own assets; no third-party font CDN
+is used at runtime. Each is under the SIL Open Font License 1.1; the license text of each
 family ships next to the fonts. Provenance, sources and hashes:
 `src/relaydeck/client/assets/design_system/PROVENANCE.md`.
 
@@ -102,13 +102,21 @@ family ships next to the fonts. Provenance, sources and hashes:
 | Bricolage Grotesque v9 (latin subset) | `BricolageGrotesque-{Regular,Medium,SemiBold,Bold,ExtraBold}.ttf` | 2022 The Bricolage Grotesque Project Authors (https://github.com/ateliertriay/bricolage) | `design_system/OFL-BricolageGrotesque.txt` |
 | JetBrains Mono v24 (latin subset) | `JetBrainsMono-{Regular,SemiBold,Bold}.ttf` | 2020 The JetBrains Mono Project Authors (https://github.com/JetBrains/JetBrainsMono) | `design_system/OFL-JetBrainsMono.txt` |
 | Noto Sans Symbols 2 (subset to the symbol ranges agents emit; modified by subsetting) | `NotoSansSymbols2-Regular.ttf` | 2022 The Noto Project Authors (https://github.com/notofonts/symbols) | `design_system/OFL-NotoSansSymbols2.txt` |
+| Noto Sans Symbols v2.003 (full published Regular TTF, unmodified) | `NotoSansSymbols-Regular.ttf` | 2022 The Noto Project Authors (https://github.com/notofonts/symbols) | `design_system/OFL-NotoSansSymbols.txt` |
 
 Web build fallback fonts: `scripts/web_fonts.py` downloads the fallback font
 files the Flutter web engine references (Noto Sans families from
-`fonts.gstatic.com`; CJK families excluded by default) and validates each file
-before it enters the build or its cache. They are not committed and are not
-listed here individually; upstream distributes the Noto families under the SIL
-Open Font License 1.1. The one committed sample, the test fixture
+`fonts.gstatic.com`) and validates each file before it enters the build or its
+cache. The web build includes all five CJK families (SC, TC, HK, JP and KR)
+by default; `RD_WEB_CJK_FONTS=0` explicitly excludes all five. The 563 CJK
+font files total 12,366,440 bytes (11.79 MiB) with Flutter 3.44.8. The font binaries
+are not committed. Full copyright and OFL 1.1 notices for all 145 fallback
+families are pinned in `design_system/fonts/web-fallback-notices.json`, from
+Google Fonts commit `47d54ca1ebb14fd864695f1d39dc734f39017c33`. The build
+appends every vendored family's full notice to its existing `assets/NOTICES`,
+preserving Flutter's notices; a missing, truncated or mismatched notice fails
+the build. Sources and per-notice hashes live in that manifest and
+`design_system/PROVENANCE.md`. The one committed sample, the test fixture
 `tests/fixtures/fallback-sample.woff2` (a Noto Sans Lycian subset), has its
 notice in `tests/fixtures/OFL-fallback-sample.txt`.
 

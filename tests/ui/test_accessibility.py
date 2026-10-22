@@ -34,8 +34,6 @@ from relaydeck.client.features.a11y import (
     interactive_controls,
     iter_controls,
 )
-from relaydeck.client.features.auth.components import AccountRow, LoginScreen
-from relaydeck.client.features.auth.service import AuthSnapshot, AuthState
 from relaydeck.client.features.composer.components import (
     REVIEW_CANCEL_KEY,
     REVIEW_CONFIRM_KEY,
@@ -71,7 +69,7 @@ from relaydeck.client.features.terminal.models import (
 from relaydeck.client.features.terminal.paste_policy import PasteReview
 from relaydeck.client.features.terminal.paste_review import PasteReviewSheet
 from relaydeck.client.features.terminal.screen import TerminalScreen, status_announcement
-from relaydeck.client.features.terminal.selection_sheet import SelectTextSheet
+from relaydeck.client.features.terminal.selection_sheet import SELECT_AREA_KEY, SelectTextSheet
 from relaydeck.client.features.terminal.surfaces import AgentTerminalScreen
 from relaydeck.client.theme import DARK, LIGHT, MIN_TOUCH, STATUS_LABELS
 from relaydeck.domain.models import (
@@ -88,6 +86,7 @@ from relaydeck.domain.models import (
     scope_key,
 )
 from tests.support.host_harness import HostApp, render_component, run
+from tests.support.terminal.direct_typing import open_compose
 from tests.support.ui.find_optional import find_or_none as _find_or_none
 
 
@@ -205,6 +204,7 @@ async def _render_agent_detail(**kw: Any) -> HostApp:
         "on_open_selection": _noop,
         "on_copy_selection": _noop,
         "on_close_selection": _noop,
+        "on_dismiss_notice": _noop,
         "on_draft_change": _noop,
         "on_send": _noop,
         "on_confirm_blocked": _noop,
@@ -240,6 +240,7 @@ async def _render_shell_screen(**kw: Any) -> HostApp:
         "on_open_selection": _noop,
         "on_copy_selection": _noop,
         "on_close_selection": _noop,
+        "on_dismiss_notice": _noop,
         "on_paste": _noop,
         "on_mode_change": _noop,
         "on_key": _noop,
@@ -518,22 +519,6 @@ def test_every_action_has_an_accessible_name() -> None:
             await _render_shell_screen(
                 view=ShellViewState(phase=SHELL_CONFLICT, terminal_id="t", owner_label="desk")
             ),
-            await render_component(
-                LoginScreen,
-                snapshot=AuthSnapshot(state=AuthState.SIGNED_OUT),
-                on_sign_in=_noop,
-                on_cancel=_noop,
-                on_retry=_noop,
-                on_open_browser=_noop,
-            ),
-            await render_component(
-                LoginScreen,
-                snapshot=AuthSnapshot(state=AuthState.ERROR, error="boom", can_retry=True),
-                on_sign_in=_noop,
-                on_cancel=_noop,
-                on_retry=_noop,
-            ),
-            await render_component(AccountRow, account="tester", on_logout=_noop),
         ]
 
         def semantic_action_name(app: HostApp, action: Any) -> str:
@@ -700,27 +685,6 @@ def test_focus_orders_match_declared_sequences() -> None:
                 ),
             ),
             ("agent-composer", await _render_agent_detail()),
-            (
-                "login",
-                await render_component(
-                    LoginScreen,
-                    snapshot=AuthSnapshot(state=AuthState.SIGNED_OUT),
-                    on_sign_in=_noop,
-                    on_cancel=_noop,
-                    on_retry=_noop,
-                    on_open_browser=_noop,
-                ),
-            ),
-            (
-                "login-error",
-                await render_component(
-                    LoginScreen,
-                    snapshot=AuthSnapshot(state=AuthState.ERROR, error="boom", can_retry=True),
-                    on_sign_in=_noop,
-                    on_cancel=_noop,
-                    on_retry=_noop,
-                ),
-            ),
         ]
         from tests.support.ui.management import _render as render_management_root
 
@@ -943,7 +907,7 @@ def test_phone_composer_send_keeps_focus_and_announces_status() -> None:
             on_composer_focus=_recorder(calls, "focus"),
             on_typing_exit=_recorder(calls, "exit"),
         )
-        await app.set_props_and_fire("agent-compose-toggle", {}, "click")
+        await open_compose(app)
         await app.set_props_and_fire("composer-draft", {}, "focus")
         field = app.find("composer-draft")
         await app.session.dispatch_event(field.suffix_icon.controls[0]._i, "click", "")
@@ -964,7 +928,7 @@ def test_phone_composer_send_keeps_focus_and_announces_status() -> None:
     run(scenario())
 
 
-def test_keyboard_only_composer_terminal_and_login() -> None:
+def test_keyboard_only_composer_and_terminal() -> None:
     async def scenario() -> None:
         # Composer: draft, Send.
         composer_calls: list[tuple[str, tuple[Any, ...]]] = []
@@ -1011,7 +975,7 @@ def test_keyboard_only_composer_terminal_and_login() -> None:
             on_copy=_recorder(sheet_calls, "copy"),
             on_close=_recorder(sheet_calls, "close"),
         )
-        await _drive_keyboard_order(sheet, skip=frozenset({"select-text-field"}))
+        await _drive_keyboard_order(sheet, skip=frozenset({SELECT_AREA_KEY}))
         assert [name for name, _ in sheet_calls] == ["copy", "close"]
         assert sheet_calls[0][1] == (0, 3)
 
@@ -1059,29 +1023,6 @@ def test_keyboard_only_composer_terminal_and_login() -> None:
             "draft",
             "send",
         ]
-
-        # Login: sign in, re-open, retry, cancel.
-        login_calls: list[tuple[str, tuple[Any, ...]]] = []
-        login = await render_component(
-            LoginScreen,
-            snapshot=AuthSnapshot(state=AuthState.SIGNED_OUT),
-            on_sign_in=_recorder(login_calls, "sign-in"),
-            on_cancel=_recorder(login_calls, "cancel"),
-            on_retry=_recorder(login_calls, "retry"),
-            on_open_browser=_recorder(login_calls, "reopen"),
-        )
-        await _drive_keyboard_order(login)
-        assert [name for name, _ in login_calls] == ["sign-in", "reopen"]
-        login_calls.clear()
-        error = await render_component(
-            LoginScreen,
-            snapshot=AuthSnapshot(state=AuthState.ERROR, error="boom", can_retry=True),
-            on_sign_in=_recorder(login_calls, "sign-in"),
-            on_cancel=_recorder(login_calls, "cancel"),
-            on_retry=_recorder(login_calls, "retry"),
-        )
-        await _drive_keyboard_order(error)
-        assert [name for name, _ in login_calls] == ["retry", "cancel"]
 
     run(scenario())
 
@@ -1235,24 +1176,8 @@ def test_theme_contrast_and_no_color_only_status() -> None:
             await _render_shell_screen(
                 view=ShellViewState(phase=SHELL_CONFLICT, terminal_id="t", owner_label="desk")
             ),
-            await render_component(
-                LoginScreen,
-                snapshot=AuthSnapshot(state=AuthState.SIGNED_OUT),
-                on_sign_in=_noop,
-                on_cancel=_noop,
-                on_retry=_noop,
-                on_open_browser=_noop,
-            ),
-            await render_component(
-                LoginScreen,
-                snapshot=AuthSnapshot(state=AuthState.ERROR, error="boom", can_retry=True),
-                on_sign_in=_noop,
-                on_cancel=_noop,
-                on_retry=_noop,
-            ),
-            await render_component(AccountRow, account="tester", on_logout=_noop),
         ]
-        assert len(apps) == 20
+        assert len(apps) == 17
         light_apps = [
             await _render_shell(selected, dark=False),
             await _render_agent_detail(dark=False),
@@ -1371,15 +1296,6 @@ def test_touch_targets_meet_48dp() -> None:
             await _render_shell_screen(
                 view=ShellViewState(phase=SHELL_CONFLICT, terminal_id="t", owner_label="desk")
             ),
-            await render_component(
-                LoginScreen,
-                snapshot=AuthSnapshot(state=AuthState.SIGNED_OUT),
-                on_sign_in=_noop,
-                on_cancel=_noop,
-                on_retry=_noop,
-                on_open_browser=_noop,
-            ),
-            await render_component(AccountRow, account="tester", on_logout=_noop),
         ]
         checked = 0
         for app in apps:

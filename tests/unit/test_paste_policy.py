@@ -29,7 +29,7 @@ from relaydeck.client.features.terminal.paste_policy import (
     unsafe_reason,
     validate,
 )
-from relaydeck.gateway.terminal_wire import MAX_INPUT_CHUNK
+from relaydeck.contracts.wire.terminal import MAX_INPUT_CHUNK
 
 
 def test_permitted_text_matrix() -> None:

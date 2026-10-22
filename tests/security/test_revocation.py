@@ -14,7 +14,7 @@ import json
 import pytest
 from starlette.websockets import WebSocketDisconnect
 
-from relaydeck.gateway.app import revoke_account_and_close, revoke_host_and_close
+from relaydeck.gateway.revocation import revoke_account_and_close, revoke_host_and_close
 from tests.security.helpers import (
     ALL_CAPS,
     NOW,

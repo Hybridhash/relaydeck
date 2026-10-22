@@ -17,12 +17,7 @@ from fastapi.testclient import TestClient
 
 from relaydeck.gateway.app import GatewayState, create_app
 from relaydeck.gateway.backend import FakeBackend
-from relaydeck.gateway.push import (
-    LINK_PURPOSE_OPEN,
-    PushStore,
-    link_url,
-    token_from_url,
-)
+from relaydeck.gateway.push import LINK_PURPOSE_OPEN, PushStore
 
 FIXTURES = Path(__file__).resolve().parent.parent / "fixtures" / "gateway"
 SECRET = b"deep-link-test-secret-32bytes!!!!"
@@ -83,24 +78,6 @@ def test_mint_resolve_round_trip() -> None:
     assert resolved["session_id"] == "term-1"
     assert resolved["route"] == {"host_id": "home-mac", "session_id": "term-1"}
     assert resolved["category"] == "attention"
-
-
-def test_link_url_round_trip_matches_manifest_prefix() -> None:
-    state, _ = _state()
-    row = _notify(state)
-    url = link_url("https://gw.example", str(row["link_token"]))
-    assert url.startswith("https://gw.example/app/n/rdl_")
-    assert token_from_url(url) == row["link_token"]
-
-
-def test_token_from_url_rejects_non_links() -> None:
-    assert token_from_url("https://gw.example/app/n/") is None
-    assert token_from_url("https://gw.example/app/other/rdl_x") is None
-    assert token_from_url("dev.relaydeck.app://oauth?code=c1") is None
-    assert token_from_url("https://gw.example/app/n/not-a-link-token") is None
-    assert token_from_url("https://gw.example/app/n/rdl_a/b") is None
-    assert token_from_url("not a url at all") is None
-    assert token_from_url("") is None
 
 
 def test_http_resolve_by_token() -> None:

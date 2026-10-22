@@ -9,7 +9,7 @@ from typing import Any
 from fastapi.testclient import TestClient
 
 from relaydeck.contracts.schemas import validate
-from relaydeck.gateway import terminal_wire
+from relaydeck.contracts.wire import terminal as terminal_wire
 from relaydeck.gateway.app import GatewayState, create_app
 from relaydeck.gateway.backend import FakeBackend
 from relaydeck.gateway.cursors import encode_cursor

@@ -27,6 +27,8 @@ import urllib.request
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
 REPO = Path(__file__).resolve().parents[2]
 REL = "notosanssymbols2/v1/probe.woff2"
 
@@ -36,7 +38,7 @@ def _run_vendoring_script() -> None:
     assert "web client ready" in script
     # The build must call the shipped script with OUT, cache and the CJK flag,
     # before it writes the reproducibility manifest and reports success.
-    call = 'scripts/web_fonts.py" "$OUT" "$RD_FONT_CACHE" "${RD_WEB_CJK_FONTS:-0}"'
+    call = 'scripts/web_fonts.py" "$OUT" "$RD_FONT_CACHE" "${RD_WEB_CJK_FONTS:-1}"'
     assert call in script
     assert script.index(call) < script.rindex("web client ready")
     runpy.run_path(str(REPO / "scripts/web_fonts.py"), run_name="__main__")
@@ -119,6 +121,7 @@ def _run(
     js: str,
     cache_bytes: dict[str, bytes] | None = None,
     response: bytes | _FakeResponse | Exception | None = None,
+    cjk: str = "0",
 ):
     root = Path(tempfile.mkdtemp(prefix="web-fonts-", dir="/private/tmp"))
     out = root / "out"
@@ -143,7 +146,7 @@ def _run(
 
     error = None
     with (
-        patch.object(sys, "argv", ["vendor", str(out), str(cache), "0"]),
+        patch.object(sys, "argv", ["vendor", str(out), str(cache), cjk]),
         patch.object(urllib.request, "urlopen", fetch),
         contextlib.redirect_stdout(io.StringIO()),
     ):
@@ -313,3 +316,62 @@ def test_overlapping_meta_priv_rejected() -> None:
     out, _cache, _calls, error = _run(json.dumps(REL), response=font)
     assert error is not None
     assert not _dest(out).exists()
+
+
+def test_font_notices_packaged_with_original_flutter_notices_and_idempotent() -> None:
+    good = _valid_woff2()
+    out, cache, _calls, error = _run(json.dumps(REL), cache_bytes={REL: good})
+    assert error is None, error
+    api = runpy.run_path(str(REPO / "scripts/web_fonts.py"))
+    dest = out / "assets/NOTICES"
+    dest.write_text("Original Flutter notices\n" + dest.read_text())
+    with patch.object(sys, "argv", ["vendor", str(out), str(cache), "0"]):
+        _run_vendoring_script()
+        _run_vendoring_script()
+    notice = json.loads(api["FONT_NOTICES"].read_text())["notosanssymbols2"]["text"]
+    assert notice in dest.read_text()
+    assert dest.read_text().startswith("Original Flutter notices\n")
+    assert dest.read_text().count(api["NOTICE_MARKER"]) == 1
+
+
+@pytest.mark.parametrize("broken", ["missing", "truncated"])
+def test_missing_or_corrupt_font_notice_fails_build(tmp_path: Path, broken: str) -> None:
+    api = runpy.run_path(str(REPO / "scripts/web_fonts.py"))
+    notice = tmp_path / "notices.json"
+    rows = json.loads(api["FONT_NOTICES"].read_text())
+    if broken == "missing":
+        del rows["notosanssymbols2"]
+    else:
+        rows["notosanssymbols2"]["text"] = "Copyright; SIL OPEN FONT LICENSE Version 1.1"
+    notice.write_text(json.dumps(rows))
+    api["_notices"].__globals__["FONT_NOTICES"] = notice
+    with pytest.raises(api["FontError"], match="missing or invalid fallback font notice"):
+        api["_notices"]([REL])
+
+
+def test_unknown_font_family_fails_before_download_or_publication() -> None:
+    rel = "notosansexampleunlicensed/v1/probe.woff2"
+    out, cache, calls, error = _run(json.dumps(rel), response=_valid_woff2())
+    assert error is not None and "missing or invalid fallback font notice" in error
+    assert calls == []
+    assert not _dest(out, rel).exists()
+    assert not (cache / rel).exists()
+
+
+def test_cjk_fonts_all_five_or_none_and_notices_packaged() -> None:
+    families = ("notosanskr", "notosansjp", "notosanshk", "notosanstc", "notosanssc")
+    paths = [REL, *(f"{family}/v1/probe.woff2" for family in families)]
+    cached = dict.fromkeys(paths, _valid_woff2())
+    out, _cache, calls, error = _run(json.dumps(paths), cache_bytes=cached, cjk="1")
+    assert error is None, error
+    assert calls == []
+    for rel in paths:
+        assert _dest(out, rel).is_file()
+        assert rel.split("/")[0] in (out / "assets/NOTICES").read_text()
+    out, _cache, calls, error = _run(json.dumps(paths), cache_bytes=cached, cjk="0")
+    assert error is None, error
+    assert calls == []
+    assert _dest(out).is_file()
+    assert all(not _dest(out, rel).exists() for rel in paths[1:])
+    _out, _cache, _calls, error = _run(json.dumps(paths[:-1]), cache_bytes=cached, cjk="1")
+    assert error is not None and "all five" in error

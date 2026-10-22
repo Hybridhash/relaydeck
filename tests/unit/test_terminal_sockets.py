@@ -16,9 +16,10 @@ import pytest
 from fastapi.routing import APIRoute, APIWebSocketRoute
 from starlette.websockets import WebSocket, WebSocketState
 
-from relaydeck.gateway import terminal_wire
-from relaydeck.gateway.app import GatewayState, create_app, revoke_account_and_close
+from relaydeck.contracts.wire import terminal as terminal_wire
+from relaydeck.gateway.app import GatewayState, create_app
 from relaydeck.gateway.backend import BackendError, FakeBackend
+from relaydeck.gateway.revocation import revoke_account_and_close
 from relaydeck.gateway.sockets import SocketRegistry
 from tests.support.asgi_socket import AsgiSocket
 from tests.support.terminal.sockets import CAPS, _grant, _state
@@ -363,7 +364,7 @@ def test_registry_host_tracking() -> None:
 
 
 def test_revoke_host_severs_tunnel_and_leases() -> None:
-    from relaydeck.gateway.app import revoke_host_and_close
+    from relaydeck.gateway.revocation import revoke_host_and_close
 
     async def scenario() -> None:
         backend = FakeBackend(now_ms=lambda: 1_000_000)

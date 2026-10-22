@@ -6,12 +6,12 @@ import asyncio
 from collections import deque
 from typing import Any
 
-from relaydeck.client.adapters.fake import FakeClipboard
 from relaydeck.client.adapters.ports import CredentialStore
 from relaydeck.client.features.shell.ops import ScriptedShellGatewayOps
 from relaydeck.client.features.shell.session import ShellSession
 from relaydeck.client.features.sync.transport import TerminalSocket, TransportError
 from relaydeck.client.features.terminal.agent_session import AgentSession
+from tests.support.fakes import FakeClipboard
 
 
 class _Socket(TerminalSocket):

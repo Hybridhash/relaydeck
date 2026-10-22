@@ -8,7 +8,7 @@ environment:
   flutter: ">=3.19.0"
 
 dependencies:
-  flet: ^1.0.3
+  flet: 1.0.3
   flutter:
     sdk: flutter
   firebase_core: ^4.15.0

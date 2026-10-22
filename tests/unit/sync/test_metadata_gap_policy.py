@@ -13,9 +13,9 @@ import pytest
 from relaydeck.client.features.sync.controller import SyncController, snapshot_from_wire
 from relaydeck.client.features.sync.sse import SseFrame
 from relaydeck.client.features.sync.transport import HttpxGatewayTransport, TransportError
+from relaydeck.contracts.cursors import AFTER_SEQUENCE_HEADER
 from relaydeck.domain import reducers
 from relaydeck.domain.models import ConnectionState
-from relaydeck.gateway.cursors import AFTER_SEQUENCE_HEADER
 from tests.support.sync.scripted_sync import _meta, _ScriptedTransport, _snapshot_doc
 
 

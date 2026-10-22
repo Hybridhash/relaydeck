@@ -25,6 +25,7 @@ Mount contract (screen owner):
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable
 from typing import Any
 
@@ -44,8 +45,9 @@ from relaydeck.client.features.composer.domain import (
     StagedMarker,
 )
 from relaydeck.client.features.composer.draft_field import use_draft_value
+from relaydeck.client.features.composer.keyboard_toggle import keep_focus, keyboard_toggle
 from relaydeck.client.features.composer.shortcut import use_send_shortcut
-from relaydeck.client.features.terminal.events import click, value_change
+from relaydeck.client.features.terminal.events import click, spawn, value_change
 from relaydeck.client.features.terminal.paste_policy import PasteReview
 from relaydeck.client.theme import FONT_SIZE, MIN_TOUCH, palette
 
@@ -137,6 +139,7 @@ def ComposerBox(
     on_focus_change: Callable[[bool], Any] | None = None,
     fill_lines: int | None = None,
     working: bool = True,
+    keyboard: str = "",
 ) -> Any:
     """Presentation: reference `.composer` frame (draft field plus
     staged/validation/error notices) with a `.composer-footer` row
@@ -145,10 +148,11 @@ def ComposerBox(
     is unchanged. Optional props (both default off, defaults render exactly as before):
     `on_focus_change(bool)` reports the draft field gaining/losing focus;
     `fill_lines` fixes the field to that many visible lines (text scrolls
-    inside, the layout never grows); `working` is the agent's own status, so
-    the progress notice ends when the agent stops. Only plain TextField props change, never
-    the widget structure or wrappers, so the field keeps its identity and its
-    focus while the box moves between layouts."""
+    inside, the layout never grows); `keyboard` ("hide"/"show") puts the keyboard button in
+    the field, and taps elsewhere (Send included) keep the keyboard up; `working` is the
+    agent's own status, so the progress notice ends when the agent stops. Only plain
+    TextField props change, never the widget structure or wrappers, so the field keeps its
+    identity and its focus while the box moves between layouts."""
     tokens = palette(dark)
     hint = _validation_hint(blockers)
     staged = markers_line(markers)
@@ -161,6 +165,24 @@ def ComposerBox(
         draft=draft, can_send=not send_disabled, send=lambda: on_send()
     )
 
+    field_ref: Any = ft.use_ref(None)
+    closing, set_closing = ft.use_state(False)
+
+    def hide_keyboard() -> None:
+        # A brief disable is what drops focus (and the keyboard) on iOS.
+        set_closing(True)
+
+        async def reopen() -> None:
+            await asyncio.sleep(0.05)
+            set_closing(False)
+
+        spawn(reopen(), label="Close composer keyboard")
+
+    def show_keyboard() -> None:
+        # Screen-reader activation only; a touch lands on the field itself.
+        if field_ref.current is not None:
+            spawn(field_ref.current.focus(), label="Show composer keyboard")
+
     def focus_changed(focused: bool) -> None:
         shortcut.focus(focused)
         if on_focus_change is not None:
@@ -171,7 +193,11 @@ def ComposerBox(
 
     draft_control = ft.TextField(
         key=DRAFT_KEY,
+        ref=field_ref,
         expand=True,
+        disabled=closing,
+        suffix_icon=keyboard_toggle(keyboard, False, hide_keyboard, show_keyboard),
+        on_tap_outside=keep_focus if keyboard else None,
         value=draft_value,
         multiline=True,
         min_lines=fill_lines or 1,

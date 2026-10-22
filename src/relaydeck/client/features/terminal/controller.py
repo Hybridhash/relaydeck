@@ -19,6 +19,7 @@ from relaydeck.client.features.sync.controller import TerminalStreamClient
 from relaydeck.client.features.sync.transport import TerminalSocket, TransportError
 from relaydeck.client.features.terminal.keys import KeyInputError
 from relaydeck.client.features.terminal.models import (
+    OLDER_OUTPUT_NOT_KEPT,
     TONE_WARN,
     NoticeModel,
     TerminalViewState,
@@ -26,6 +27,7 @@ from relaydeck.client.features.terminal.models import (
     apply_gap,
     apply_live,
     apply_reset,
+    history_notice,
 )
 from relaydeck.client.features.terminal.paste_policy import PasteError
 from relaydeck.client.features.terminal.session.recovery_state import (
@@ -279,6 +281,11 @@ class TerminalController:
         self.state = state
         self.on_state(state)
 
+    def dismiss_notice(self, notice: NoticeModel) -> None:
+        """Clear `notice` only if it is still the one showing."""
+        if self.state.notice is notice:
+            self._set(replace(self.state, notice=None))
+
     @property
     def live_output_received(self) -> bool:
         """Preserved live metadata alone does not prove this reader has delivered a frame."""
@@ -314,7 +321,7 @@ class TerminalController:
                 notice_text = (
                     self._history_notice if self._history_notice is not None else decision.notice
                 )
-                notice = NoticeModel(TONE_WARN, notice_text) if notice_text else None
+                notice = history_notice(notice_text) if notice_text else None
                 self._set(apply_live(self.state, self._stream.epoch, offset, notice))
             self._set(apply_bytes(self.state, len(event.data)))
         elif event.kind == EVENT_GAP:
@@ -340,9 +347,7 @@ class TerminalController:
             return False
         self._stream = TerminalByteStream(doc["epoch"], doc["offset"])
         self.emulator = EMULATOR_FRESH
-        self._history_notice = (
-            "History incomplete: earlier output unavailable." if doc["incomplete"] else ""
-        )
+        self._history_notice = OLDER_OUTPUT_NOT_KEPT if doc["incomplete"] else ""
         self.live_edge_pending = False
         self._live_edge_opening = False
         self.pending_resume = None
@@ -439,9 +444,7 @@ class TerminalController:
         self._set(
             replace(
                 apply_gap(self.state, "overflow"),
-                notice=NoticeModel(
-                    TONE_WARN, "History incomplete: resuming live; earlier output unavailable."
-                ),
+                notice=history_notice(OLDER_OUTPUT_NOT_KEPT),
             )
         )
 

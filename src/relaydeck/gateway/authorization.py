@@ -23,6 +23,7 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
 
 from relaydeck.companion.private import read_private
+from relaydeck.contracts import paths
 from relaydeck.contracts.schemas import CAPABILITIES, SchemaError, validate
 from relaydeck.gateway.identity import pkce_challenge
 
@@ -81,7 +82,7 @@ class AuthorizationFlow:
             raise AuthorizationError("Private HTTPS origin required")
         base = origin.rstrip("/")
         redirect = query.get("redirect_uri", "")
-        permitted = {NATIVE_CALLBACK, base + "/app/oauth", base + "/v1/auth/callback"}
+        permitted = {NATIVE_CALLBACK, base + "/app/oauth", base + paths.AUTH_CALLBACK}
         if (
             set(query)
             - {"response_type", "code_challenge", "code_challenge_method", "state", "redirect_uri"}
@@ -102,7 +103,7 @@ class AuthorizationFlow:
             redirect,
             secrets.token_urlsafe(32),
             secrets.token_urlsafe(48),
-            base + "/v1/identity/callback",
+            base + paths.IDENTITY_CALLBACK,
             now + FLOW_TTL_MS,
         )
         self.pending[state] = attempt

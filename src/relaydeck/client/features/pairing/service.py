@@ -11,12 +11,13 @@ import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, cast
 
 from relaydeck.client.adapters.ports import CredentialStore
+from relaydeck.contracts import paths
 from relaydeck.contracts.endpoints import origin
 from relaydeck.contracts.pairing import DEVICE_CAPABILITIES, MAX_POLLS, REQUEST_TTL_MS
-from relaydeck.contracts.schemas import validate
+from relaydeck.contracts.schemas import Me, PairingStatus, TokenResponse, validate
 
 PENDING_KEY = "pairing_pending_key"
 
@@ -147,21 +148,22 @@ class PairingFlow:
                     await self.credentials.set(PENDING_KEY, key)
             if not current():
                 return
-            status, row = await self.post(endpoint + "/v1/pairing/requests", body)
+            status, row = await self.post(endpoint + paths.PAIRING_REQUESTS, body)
             if not current():
                 return
             if status != 201:
                 raise ValueError("pairing window unavailable")
             validate("relaydeck/gateway/v1/pairing-status", row)
+            granted = cast(PairingStatus, row)
             if (
-                row["origin"] != endpoint
-                or row["host_id"] != host_id
-                or row["state"] != "pending"
-                or sorted(row["capabilities"]) != sorted(DEVICE_CAPABILITIES)
+                granted["origin"] != endpoint
+                or granted["host_id"] != host_id
+                or granted["state"] != "pending"
+                or sorted(granted["capabilities"]) != sorted(DEVICE_CAPABILITIES)
             ):
                 raise ValueError("pairing binding mismatch")
             expires = int(
-                datetime.strptime(row["expires_at"], "%Y-%m-%dT%H:%M:%SZ")
+                datetime.strptime(granted["expires_at"], "%Y-%m-%dT%H:%M:%SZ")
                 .replace(tzinfo=UTC)
                 .timestamp()
                 * 1000
@@ -173,24 +175,24 @@ class PairingFlow:
                 endpoint=endpoint,
                 phase="waiting",
                 busy=False,  # waiting on local approval remains explicitly cancellable
-                request_id=row["request_id"],
-                matching_code=row["matching_code"],
-                fingerprint=row["host_fingerprint"],
-                scope=", ".join(row["capabilities"]),
-                expiry=row["expires_at"],
+                request_id=granted["request_id"],
+                matching_code=granted["matching_code"],
+                fingerprint=granted["host_fingerprint"],
+                scope=", ".join(granted["capabilities"]),
+                expiry=granted["expires_at"],
                 message="Compare code, fingerprint and scope, then approve locally on your Mac.",
             )
             self.emit(snapshot)
-            expected = {k: v for k, v in row.items() if k != "state"}
+            expected = {k: v for k, v in granted.items() if k != "state"}
             proof = {"origin": endpoint, "host_id": host_id, "verifier": verifier}
             for _ in range(MAX_POLLS):
-                await self.sleep(row["poll_interval_ms"] / 1000)
+                await self.sleep(granted["poll_interval_ms"] / 1000)
                 if not current():
                     return
                 if self.now_ms() >= expires:
                     raise ValueError("pairing expired")
                 status, polled = await self.post(
-                    endpoint + f"/v1/pairing/{row['request_id']}/status", proof
+                    endpoint + paths.pairing_status(granted["request_id"]), proof
                 )
                 if not current():
                     return
@@ -215,24 +217,26 @@ class PairingFlow:
                 )
             )
             status, tokens = await self.post(
-                endpoint + f"/v1/pairing/{row['request_id']}/redeem", proof
+                endpoint + paths.pairing_redeem(granted["request_id"]), proof
             )
             if not current():
                 return
             if status != 200:
                 raise ValueError("redemption uncertain; start a new pairing attempt")
             validate("relaydeck/gateway/v1/token-response", tokens)
+            issued = cast(TokenResponse, tokens)
             status, principal = await self.get(
-                endpoint + "/v1/me", {"Authorization": f"Bearer {tokens['access_token']}"}
+                endpoint + paths.ME, {"Authorization": f"Bearer {issued['access_token']}"}
             )
             if not current():
                 return
             validate("relaydeck/gateway/v1/me", principal)
+            me = cast(Me, principal)
             if (
                 status != 200
-                or principal["device_id"] != row["device_id"]
-                or principal["hosts"] != [host_id]
-                or sorted(principal["capabilities"]) != sorted(DEVICE_CAPABILITIES)
+                or me["device_id"] != granted["device_id"]
+                or me["hosts"] != [host_id]
+                or sorted(me["capabilities"]) != sorted(DEVICE_CAPABILITIES)
             ):
                 raise ValueError("issued session binding mismatch")
             # Cleanup must succeed before either adapter publishes credentials.

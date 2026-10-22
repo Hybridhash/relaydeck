@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from relaydeck.client.features.sync.transport import TransportError
-from relaydeck.gateway import terminal_wire
+from relaydeck.contracts.wire import terminal as terminal_wire
 from relaydeck.gateway.backend import BackendError
 from relaydeck.gateway.leases import READER_HANDOFF_TTL_MS
 from relaydeck.gateway.ring import VIEWER_QUEUE_MAX_BYTES

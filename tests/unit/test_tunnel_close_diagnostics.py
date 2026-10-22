@@ -77,7 +77,7 @@ def test_gateway_stopwatches_receive_handler_outbox_and_final_idle(
 ) -> None:
     from fastapi.routing import APIWebSocketRoute
 
-    from relaydeck.gateway import app as gateway_module
+    from relaydeck.gateway.api import sockets as sockets_module
     from relaydeck.gateway.app import create_app
     from tests.support.terminal.sockets import _state
 
@@ -91,7 +91,7 @@ def test_gateway_stopwatches_receive_handler_outbox_and_final_idle(
             if isinstance(r, APIWebSocketRoute) and r.path == "/v1/connectors"
         )
         now = [100.0]
-        monkeypatch.setattr(gateway_module, "time", SimpleNamespace(monotonic=lambda: now[0]))
+        monkeypatch.setattr(sockets_module, "time", SimpleNamespace(monotonic=lambda: now[0]))
         epochs = backend.epochs_for_host
         ingest = backend.ingest_terminal_output
 
@@ -159,7 +159,8 @@ def test_real_wire_pong_updates_monotonic_age_and_keeps_builtin_acknowledgement(
         future: asyncio.Future[float] = asyncio.get_running_loop().create_future()
         connection.pending_pings[b"synthetic"] = (future, connection.loop.time() - 0.1)
         connection.process_event(Frame(Opcode.PONG, b"synthetic"))
-        assert future.done() and future.result() >= 0.1
+        # The loop clock is a large float: subtracting 0.1 and measuring back can round just under.
+        assert future.done() and future.result() >= 0.1 - 1e-6
         assert not connection.pending_pings
         assert 0 <= connection.loop.time() - connection.last_pong_at < 0.1
 

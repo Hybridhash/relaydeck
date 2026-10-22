@@ -30,6 +30,7 @@ from relaydeck.client.theme import BANNER_TONES, MIN_TOUCH, SURFACE_RADIUS, pale
 SURFACE_KEY = "terminal-surface"
 NOTICE_KEY = "terminal-notice"
 NOTICE_TEXT_KEY = "terminal-notice-text"
+NOTICE_DISMISS_KEY = "terminal-notice-dismiss"
 JUMP_KEY = "scroll-jump"
 STATUS_KEY = "terminal-status"
 SELECT_BUTTON_KEY = "terminal-select-text"
@@ -115,6 +116,7 @@ def TerminalScreen(
     selection_text: str = "",
     on_copy_selection: Callable[[int, int], Any] | None = None,
     on_close_selection: Callable[[], Any] | None = None,
+    on_dismiss_notice: Callable[[Any], Any] | None = None,
     on_selection_change: Callable[[int, int], Any] | None = None,
     input_enabled: bool = False,
     on_terminal: Callable[[RelayDeckTerminal | None], Any] | None = None,
@@ -276,7 +278,23 @@ def TerminalScreen(
     tokens = palette(dark)
     controls: list[Any] = []
     selection_overlay: Any = None
-    if state.notice is not None:
+    notice = state.notice
+    if notice is not None:
+        dismiss = on_dismiss_notice
+        dismiss_button = (
+            ft.Semantics(
+                label="Dismiss notice",
+                content=ft.IconButton(
+                    ft.Icons.CLOSE,
+                    key=NOTICE_DISMISS_KEY,
+                    icon_size=18,
+                    tooltip="Dismiss notice",
+                    on_click=click(lambda: dismiss(notice)),
+                ),
+            )
+            if notice.dismissible and dismiss is not None
+            else None
+        )
         controls.append(
             ft.Card(
                 key=NOTICE_KEY,
@@ -285,7 +303,8 @@ def TerminalScreen(
                         ft.Icons.WARNING,
                         color=BANNER_TONES["warning"],
                     ),
-                    title=ft.Text(state.notice.text, key=NOTICE_TEXT_KEY),
+                    title=ft.Text(notice.text, key=NOTICE_TEXT_KEY),
+                    trailing=dismiss_button,
                 ),
             )
         )

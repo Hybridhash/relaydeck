@@ -24,9 +24,9 @@ from relaydeck.client.features.terminal.agent_session import AgentSession
 from relaydeck.client.features.terminal.foreground_recovery import ForegroundRecovery
 from relaydeck.client.features.terminal.models import NoticeModel
 from relaydeck.client.resources import AppResources
+from relaydeck.contracts.wire import terminal as terminal_wire
 from relaydeck.domain import reducers
 from relaydeck.domain.models import ConnectionState
-from relaydeck.gateway import terminal_wire
 from tests.support.host_harness import run
 from tests.support.terminal.resume import _hello, _MuxConn, _report
 from tests.support.ui.instant_inventory import valid_inventory

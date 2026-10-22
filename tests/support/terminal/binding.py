@@ -7,7 +7,7 @@ import json
 from typing import Any
 
 from relaydeck.client.features.sync.transport import TransportError
-from relaydeck.gateway import terminal_wire
+from relaydeck.contracts.wire import terminal as terminal_wire
 
 
 def _output(epoch: str, offset: int, data: bytes) -> tuple[str, Any]:

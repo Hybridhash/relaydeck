@@ -10,9 +10,6 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from relaydeck.contracts.catalog import AGENT_KIND
-
-# compat: remove in Q4-cleanup after remaining server/test importers migrate.
-from relaydeck.contracts.endpoints import is_trusted_endpoint as is_trusted_endpoint
 from relaydeck.contracts.launch import (
     agent_name_error,
     display_name_error,

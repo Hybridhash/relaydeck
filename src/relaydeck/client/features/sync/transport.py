@@ -13,12 +13,12 @@ from abc import ABC, abstractmethod
 from collections.abc import AsyncGenerator, Callable
 from dataclasses import dataclass
 from typing import Any
-from urllib.parse import quote
 
 import httpx
 import websockets.asyncio.client as ws_client
 
 from relaydeck.client.features.sync.sse import SseFrame, SseParser
+from relaydeck.contracts import paths
 from relaydeck.contracts.cursors import AFTER_SEQUENCE_HEADER, MAX_CURSOR_LEN
 from relaydeck.contracts.schemas import SchemaError, validate
 
@@ -144,11 +144,11 @@ class HttpxGatewayTransport(GatewayTransport):
             raise TransportError("host_offline", str(exc), True) from exc
 
     async def me(self) -> dict[str, Any]:
-        response = await self._request("GET", f"{self.base_url}/v1/me")
+        response = await self._request("GET", self.base_url + paths.ME)
         return self._management_doc(response, "me")
 
     async def hosts(self) -> dict[str, Any]:
-        response = await self._request("GET", f"{self.base_url}/v1/hosts")
+        response = await self._request("GET", self.base_url + paths.HOSTS)
         return self._management_doc(response, "hosts")
 
     async def usage(
@@ -180,7 +180,7 @@ class HttpxGatewayTransport(GatewayTransport):
             params["bucket"] = bucket
         response = await self._request(
             "GET",
-            f"{self.base_url}/v1/hosts/{quote(host_id, safe='')}/usage",
+            self.base_url + paths.usage(host_id),
             params=params,
         )
         if 200 <= response.status_code < 300:
@@ -195,7 +195,7 @@ class HttpxGatewayTransport(GatewayTransport):
     async def register_device(self, device_id: str, token: str) -> dict[str, Any]:
         response = await self._request(
             "POST",
-            f"{self.base_url}/v1/devices",
+            self.base_url + paths.DEVICES,
             json={
                 "device_id": device_id,
                 "token": token,
@@ -210,7 +210,7 @@ class HttpxGatewayTransport(GatewayTransport):
     async def resolve_notification(self, value: str, *, link: bool = False) -> dict[str, Any]:
         response = await self._request(
             "POST",
-            f"{self.base_url}/v1/deep-links/resolve",
+            self.base_url + paths.DEEP_LINK_RESOLVE,
             json={
                 "token" if link else "notification_id": value,
             },
@@ -222,7 +222,7 @@ class HttpxGatewayTransport(GatewayTransport):
 
     async def web_push_state(self) -> dict[str, bool]:
         """Whether web push is on for this companion and whether THIS device is subscribed."""
-        response = await self._request("GET", f"{self.base_url}/v1/push/web/key")
+        response = await self._request("GET", self.base_url + paths.PUSH_KEY)
         doc = self._checked(response)
         if (
             set(doc) != {"publicKey", "enabled", "subscribed", "csrf", "choice"}
@@ -234,7 +234,7 @@ class HttpxGatewayTransport(GatewayTransport):
 
     async def web_push_preferences(self) -> list[str]:
         """This device's choice: the categories it receives (blocked and done)."""
-        response = await self._request("GET", f"{self.base_url}/v1/push/prefs")
+        response = await self._request("GET", self.base_url + paths.PUSH_PREFS)
         doc = self._checked(response)
         values = doc.get("categories")
         if set(doc) != {"categories"} or not isinstance(values, list):
@@ -248,7 +248,7 @@ class HttpxGatewayTransport(GatewayTransport):
 
     async def set_web_push_preferences(self, categories: list[str]) -> list[str]:
         response = await self._request(
-            "PUT", f"{self.base_url}/v1/push/prefs", json={"categories": list(categories)}
+            "PUT", self.base_url + paths.PUSH_PREFS, json={"categories": list(categories)}
         )
         doc = self._checked(response)
         if set(doc) != {"categories"} or not isinstance(doc["categories"], list):
@@ -257,7 +257,7 @@ class HttpxGatewayTransport(GatewayTransport):
 
     async def web_push_disable(self) -> None:
         """Settings > Notifications > Turn off: the same DELETE the browser sends, bearer-authed."""
-        response = await self._request("DELETE", f"{self.base_url}/v1/push/web/subscription")
+        response = await self._request("DELETE", self.base_url + paths.PUSH_SUBSCRIPTION)
         if response.status_code != 204:
             raise TransportError("upstream_incompatible", "web push not turned off", True)
 
@@ -265,7 +265,7 @@ class HttpxGatewayTransport(GatewayTransport):
         """Resolve a notification tap to a device-owned category, host and session.
         A refused, expired or foreign token raises TransportError; the caller stays on Console."""
         response = await self._request(
-            "POST", f"{self.base_url}/v1/push/web/resolve", json={"route": token}
+            "POST", self.base_url + paths.PUSH_RESOLVE, json={"route": token}
         )
         doc = self._checked(response)
         fields = ("category", "host_id", "session_id")
@@ -293,29 +293,27 @@ class HttpxGatewayTransport(GatewayTransport):
             validate("relaydeck/gateway/v1/enrollment-create", body)
         except SchemaError:
             raise TransportError("forbidden", "invalid enrollment request", False) from None
-        response = await self._request("POST", f"{self.base_url}/v1/enrollments", json=body)
+        response = await self._request("POST", self.base_url + paths.ENROLLMENTS, json=body)
         return self._management_doc(response, "enrollment")
 
     async def revoke_host(self, host_id: str) -> dict[str, Any]:
-        response = await self._request(
-            "DELETE", f"{self.base_url}/v1/hosts/{quote(host_id, safe='')}"
-        )
+        response = await self._request("DELETE", self.base_url + paths.host(host_id))
         return self._management_doc(response, "host-revoke")
 
     async def devices(self) -> dict[str, Any]:
-        response = await self._request("GET", f"{self.base_url}/v1/devices")
+        response = await self._request("GET", self.base_url + paths.DEVICES)
         return self._management_doc(response, "devices")
 
+    async def metrics(self) -> dict[str, Any]:
+        response = await self._request("GET", self.base_url + paths.METRICS)
+        return self._management_doc(response, "server-metrics")
+
     async def enrollment_status(self, enrollment_id: str) -> dict[str, Any]:
-        response = await self._request(
-            "GET", f"{self.base_url}/v1/enrollments/{quote(enrollment_id, safe='')}"
-        )
+        response = await self._request("GET", self.base_url + paths.enrollment(enrollment_id))
         return self._management_doc(response, "enrollment-status")
 
     async def revoke_device(self, device_id: str) -> dict[str, Any]:
-        response = await self._request(
-            "DELETE", f"{self.base_url}/v1/devices/{quote(device_id, safe='')}"
-        )
+        response = await self._request("DELETE", self.base_url + paths.device(device_id))
         doc = self._checked(response)
         try:
             validate("relaydeck/gateway/v1/device-revoke", doc)
@@ -326,7 +324,7 @@ class HttpxGatewayTransport(GatewayTransport):
         return doc
 
     async def snapshot(self, host_id: str) -> dict[str, Any]:
-        response = await self._request("GET", f"{self.base_url}/v1/hosts/{host_id}/snapshot")
+        response = await self._request("GET", self.base_url + paths.host_snapshot(host_id))
         return self._checked(response)
 
     async def agents(
@@ -346,7 +344,7 @@ class HttpxGatewayTransport(GatewayTransport):
             if value:
                 params[key] = value
         response = await self._request(
-            "GET", f"{self.base_url}/v1/hosts/{host_id}/agents", params=params
+            "GET", self.base_url + paths.host_agents(host_id), params=params
         )
         doc = self._checked(response)
         try:
@@ -366,8 +364,7 @@ class HttpxGatewayTransport(GatewayTransport):
     ) -> dict[str, Any]:
         response = await self._request(
             "POST",
-            f"{self.base_url}/v1/hosts/{quote(host_id, safe='')}"
-            f"/agents/{quote(agent_id, safe='')}/read",
+            self.base_url + paths.agent_read(host_id, agent_id),
             json={"host_epoch": host_epoch, "activity_id": activity_id},
         )
         doc = self._checked(response)
@@ -398,7 +395,7 @@ class HttpxGatewayTransport(GatewayTransport):
         try:
             async with self.client.stream(
                 "GET",
-                f"{self.base_url}/v1/events",
+                self.base_url + paths.EVENTS,
                 params=params,
                 headers=_auth_headers(await self._token()),
                 timeout=self.timeout,
@@ -436,7 +433,7 @@ class HttpxGatewayTransport(GatewayTransport):
             await self.commands.begin(command)
         response = await self._request(
             "POST",
-            f"{self.base_url}/v1/hosts/{command['host_id']}/commands",
+            self.base_url + paths.host_commands(command["host_id"]),
             json=command,
             _command_version=version,
         )
@@ -448,8 +445,7 @@ class HttpxGatewayTransport(GatewayTransport):
     async def command_status(self, host_id: str, command_id: str) -> dict[str, Any] | None:
         response = await self._request(
             "GET",
-            f"{self.base_url}/v1/hosts/{quote(host_id, safe='')}/commands/"
-            f"{quote(command_id, safe='')}",
+            self.base_url + paths.host_command(host_id, command_id),
             _command_version=self.commands.version() if self.commands is not None else None,
         )
         doc = None if response.status_code == 404 else self._checked(response)
@@ -459,7 +455,7 @@ class HttpxGatewayTransport(GatewayTransport):
 
     async def terminal_ticket(self, lease_id: str) -> dict[str, Any]:
         response = await self._request(
-            "POST", f"{self.base_url}/v1/terminal-tickets", json={"lease_id": lease_id}
+            "POST", self.base_url + paths.TERMINAL_TICKETS, json={"lease_id": lease_id}
         )
         return self._checked(response)
 
@@ -475,7 +471,7 @@ class HttpxGatewayTransport(GatewayTransport):
     ) -> dict[str, Any]:
         response = await self._request(
             "POST",
-            f"{self.base_url}/v1/hosts/{host_id}/terminals/{terminal_id}/attachments",
+            self.base_url + paths.terminal_attachments(host_id, terminal_id),
             json={"kind": kind, "takeover": takeover, "cols": cols, "rows": rows},
         )
         return self._checked(response)
@@ -483,15 +479,13 @@ class HttpxGatewayTransport(GatewayTransport):
     async def create_lease(self, attachment_id: str, *, mode: str) -> dict[str, Any]:
         response = await self._request(
             "POST",
-            f"{self.base_url}/v1/terminal-attachments/{attachment_id}/leases",
+            self.base_url + paths.attachment_leases(attachment_id),
             json={"mode": mode},
         )
         return self._checked(response)
 
     async def renew_lease(self, lease_id: str) -> dict[str, Any]:
-        response = await self._request(
-            "POST", f"{self.base_url}/v1/terminal-leases/{lease_id}/renew", json={}
-        )
+        response = await self._request("POST", self.base_url + paths.lease_renew(lease_id), json={})
         return self._checked(response)
 
     def _checked(self, response: httpx.Response) -> dict[str, Any]:

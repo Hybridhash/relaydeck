@@ -15,15 +15,18 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from relaydeck.client.components.design_system.font_versions import versioned_url
+
 ASSETS_DIR = Path(__file__).resolve().parent.parent.parent / "assets" / "design_system"
 FONTS_DIR = ASSETS_DIR / "fonts"
 
 FAMILY_INTERFACE = "Bricolage Grotesque"
 FAMILY_MONO = "JetBrains Mono"
 FAMILY_SYMBOLS = "Noto Sans Symbols 2"
+FAMILY_SYMBOLS_REGULAR = "Noto Sans Symbols"
 
 # (family alias, file name, weight). Aliases are the `page.fonts` keys.
-# The symbols face is a single weight-400 file used only through
+# The two symbols faces are weight-400 files used only through
 # `font_family_fallback` (UI text and terminal); `face()` never maps to
 # it because no style uses it as a primary family.
 WEIGHT_FILES: tuple[tuple[str, str, int], ...] = (
@@ -36,6 +39,7 @@ WEIGHT_FILES: tuple[tuple[str, str, int], ...] = (
     ("JetBrains Mono SemiBold", "JetBrainsMono-SemiBold.ttf", 600),
     ("JetBrains Mono Bold", "JetBrainsMono-Bold.ttf", 700),
     (FAMILY_SYMBOLS, "NotoSansSymbols2-Regular.ttf", 400),
+    (FAMILY_SYMBOLS_REGULAR, "NotoSansSymbols-Regular.ttf", 400),
 )
 
 DOT_TILE = ASSETS_DIR / "dots" / "dot_tile.png"
@@ -76,7 +80,7 @@ def page_fonts(asset_base: str = "design_system") -> dict[str, str]:
     `asset_base` is the assets mount point (preview serves the
     design_system folder itself; the application passes the packaged prefix).
     """
-    return {alias: f"{asset_base}/fonts/{name}" for alias, name, _ in WEIGHT_FILES}
+    return {alias: versioned_url(asset_base, name) for alias, name, _ in WEIGHT_FILES}
 
 
 def dot_tile_src(asset_base: str = "design_system") -> str:

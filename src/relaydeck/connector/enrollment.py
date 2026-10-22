@@ -23,6 +23,7 @@ from relaydeck.connector.pubkey import (
     parse_qr_payload,
     sign_proof,
 )
+from relaydeck.contracts import paths
 
 DEFAULT_CREDS = "~/.config/relaydeck/connector.json"
 DEFAULT_KEY = "~/.config/relaydeck/connector_key.json"
@@ -181,7 +182,7 @@ async def claim_enrollment(
         raise EnrollmentError("keys invalid") from exc
     signature = sign_proof(seed, invitation_id, host_id)
     status, payload = await post_json(
-        f"{gateway_url.rstrip('/')}/v1/enrollments/{invitation_id}/redeem",
+        gateway_url.rstrip("/") + paths.enrollment_redeem(invitation_id),
         {
             "code": code,
             "host_id": host_id,

@@ -1,11 +1,4 @@
-"""Select Text sheet.
-
-Declarative Flet sheet: read-only, selectable,
-monospaced output with an anchored initial selection, an explicit Copy
-button, and explicit Done dismissal. Presentational only: the parent owns
-the text, the anchor/focus, and the clipboard write; this module never
-touches the input path or any draft.
-"""
+"""Native selection over a frozen terminal snapshot, with explicit copy and dismissal."""
 
 from __future__ import annotations
 
@@ -16,25 +9,23 @@ from typing import Any
 import flet as ft
 
 from relaydeck.client.components.appearance import chrome_style
-from relaydeck.client.features.terminal.events import click, selection_change
-from relaydeck.client.features.terminal.selection_model import (
-    normalize_range,
-    str_to_utf16_offset,
-    utf16_to_str_offset,
-)
+from relaydeck.client.components.design_system.fonts import FAMILY_MONO
+from relaydeck.client.features.terminal.events import click
+from relaydeck.client.features.terminal.selection_area import selected_offsets
+from relaydeck.client.features.terminal.selection_model import normalize_range
 from relaydeck.client.theme import FONT_SIZE, MIN_TOUCH
 
 SELECT_SHEET_KEY = "select-text-sheet"
 SELECT_TITLE_KEY = "select-text-title"
 SELECT_RANGE_KEY = "select-text-range"
 SELECT_FIELD_KEY = "select-text-field"
+SELECT_AREA_KEY = "select-text-area"
 SELECT_COPY_KEY = "select-text-copy"
 SELECT_CLOSE_KEY = "select-text-close"
 SELECT_ERROR_KEY = "select-text-error"
 
 MONO_STYLE = ft.TextStyle(
-    font_family="monospace",
-    font_family_fallback=["Courier New", "Courier", "Roboto Mono"],
+    font_family=FAMILY_MONO,
     size=14,
 )
 
@@ -61,20 +52,12 @@ def SelectTextSheet(
     dark: bool = True,
 ) -> Any:
     resolved = normalize_range(anchor, focus, text)
-    selection = ft.TextSelection(
-        base_offset=str_to_utf16_offset(text, resolved.anchor),
-        extent_offset=str_to_utf16_offset(text, resolved.focus),
-    )
 
-    async def _forward_selection(base_utf16: int, extent_utf16: int) -> None:
-        # Fully controlled sheet: the parent owns the CURRENT range, so
-        # Copy always binds the live anchor/focus, never a stale open.
-        if on_selection_change is None:
+    async def picked(event: Any) -> None:
+        offsets = selected_offsets(text, event.data)
+        if on_selection_change is None or offsets is None:
             return
-        result = on_selection_change(
-            utf16_to_str_offset(text, base_utf16),
-            utf16_to_str_offset(text, extent_utf16),
-        )
+        result = on_selection_change(*offsets)
         if inspect.isawaitable(result):
             await result
 
@@ -95,17 +78,17 @@ def SelectTextSheet(
         controls.append(ft.Text(error, key=SELECT_ERROR_KEY))
     controls.extend(
         [
-            ft.TextField(
-                key=SELECT_FIELD_KEY,
-                value=text,
-                read_only=True,
-                label="Read-only terminal output",
-                multiline=True,
+            ft.Column(
                 expand=True,
-                autofocus=False,
-                text_style=MONO_STYLE,
-                selection=selection,
-                on_selection_change=selection_change(_forward_selection),
+                scroll=ft.ScrollMode.AUTO,
+                horizontal_alignment=ft.CrossAxisAlignment.STRETCH,
+                controls=[
+                    ft.SelectionArea(
+                        key=SELECT_AREA_KEY,
+                        on_change=picked,
+                        content=ft.Text(text, key=SELECT_FIELD_KEY, style=MONO_STYLE),
+                    )
+                ],
             ),
             ft.Row(
                 wrap=True,

@@ -10,7 +10,7 @@ from __future__ import annotations
 from relaydeck.contracts.schemas import ERROR_CODES, ERROR_STATUS, validate
 
 
-def test_error_table_has_exactly_fourteen_codes() -> None:
+def test_error_table_has_exactly_fifteen_codes() -> None:
     assert ERROR_CODES == (
         "unauthenticated",
         "forbidden",
@@ -26,6 +26,7 @@ def test_error_table_has_exactly_fourteen_codes() -> None:
         "outcome_unknown",
         "too_large",
         "rate_limited",
+        "internal",
     )
 
 
@@ -43,6 +44,7 @@ def test_error_status_covers_table() -> None:
     assert ERROR_STATUS["lease_expired"] == 410
     assert ERROR_STATUS["upstream_incompatible"] == 500
     assert ERROR_STATUS["outcome_unknown"] == 409
+    assert ERROR_STATUS["internal"] == 500
     assert ERROR_STATUS["too_large"] == 413
     assert ERROR_STATUS["rate_limited"] == 429
 

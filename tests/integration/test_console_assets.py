@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from types import SimpleNamespace
 from typing import Any, cast
+from urllib.parse import urlsplit
 
 import flet as ft
 import httpx
@@ -39,7 +40,7 @@ def test_actual_web_mount_serves_exact_local_fonts_and_tile() -> None:
                     assert "://" not in path
                     response = await client.get(f"/{path}")
                     assert response.status_code == 200, path
-                    assert response.content == (CLIENT_ASSETS / path).read_bytes()
+                    assert response.content == (CLIENT_ASSETS / urlsplit(path).path).read_bytes()
                 # Serving public fonts must not open the recovered API boundary.
                 private = await client.get("/v1/hosts/home-mac/snapshot")
                 assert private.status_code == 401

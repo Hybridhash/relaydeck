@@ -9,7 +9,8 @@ from typing import Any
 import pytest
 
 from relaydeck.gateway import push
-from relaydeck.gateway.push import PushDenied, PushStore, StubProvider, pump_outbox
+from relaydeck.gateway.push import PushDenied, PushStore, pump_outbox
+from tests.support.push import StubProvider
 
 ACCOUNT = "acct-1"
 HOSTS = frozenset({"home-mac"})

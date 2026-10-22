@@ -42,6 +42,15 @@ class SocketRegistry:
     def leases(self) -> tuple[str, ...]:
         return tuple(self._by_lease)
 
+    def terminal_count(self) -> int:
+        return len(self._keys)
+
+    def host_tunnel_count(self) -> int:
+        return len(self._hosts)
+
+    def lease_socket_counts(self) -> dict[str, int]:
+        return {lease_id: len(keys) for lease_id, keys in self._by_lease.items()}
+
     def has_device_lease(
         self, account: str, device_id: str, lease_id: str, *, excluding: Any = None
     ) -> bool:

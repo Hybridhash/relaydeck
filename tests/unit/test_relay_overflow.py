@@ -1,7 +1,6 @@
 """RELAY-OVERFLOW: one terminal's output burst is a per-terminal condition. It never stops the
-link, it never takes another terminal down, that terminal resyncs, a slow drain backs up into the
-PTY instead of the relay, and a burst of resize events replays the screen once. Synthetic bytes;
-no terminal content is asserted or logged."""
+link, it never takes another terminal down, that terminal resyncs, and a burst of resize events
+replays the screen once. Synthetic bytes; no terminal content is asserted or logged."""
 
 from __future__ import annotations
 
@@ -45,42 +44,6 @@ def test_an_overflow_drops_only_that_terminal_and_asks_for_a_resync(
     assert source.drain_terminal_resets() == {"loud": "e-l"}
     # After the reset went out, that terminal stages again (old-epoch frames are fenced upstream).
     assert source.script_output("loud", "e-l", b"fresh") == 1
-
-
-@pytest.mark.skip(reason="PTY backpressure was removed: it could spin the event loop")
-def test_a_slow_drain_backs_up_into_the_pty_not_the_relay(tmp_path: Path) -> None:
-    class Pty(AttachSession):
-        def __init__(self) -> None:
-            super().__init__(["synthetic"])
-            self.reads = 0
-
-        @property
-        def running(self) -> bool:
-            return True
-
-        def read(self, max_bytes: int = 65536, timeout: float = 5) -> bytes:
-            return self.read_available(max_bytes)
-
-        def read_available(self, max_bytes: int = 65536) -> bytes:
-            self.reads += 1
-            return b"b" * max_bytes
-
-    source = _source(tmp_path)
-    pty = Pty()
-    source._attached["shell:t1"] = (pty, "t1", "")
-    source._epochs = {"t1": "e1"}
-    # A sender that never finishes: batches are taken but not released.
-    for _ in range(100):
-        source.pump_attached(lambda _t: "e1")
-        source.take_output_batch()
-    assert source.relay.overflow_count == 0 and not source.relay.overflowed
-    assert source.relay.load <= MAX_RELAY_BYTES
-    reads = pty.reads
-    # Held back: the PTY is not read while the relay has no room.
-    assert source.pump_attached(lambda _t: "e1") == 0 and pty.reads == reads
-    # The sender releases: reading resumes.
-    source.release_output_batch(source.relay.load)
-    assert source.pump_attached(lambda _t: "e1") > 0
 
 
 def test_the_link_does_not_fail_the_source_for_an_output_overflow(tmp_path: Path) -> None:

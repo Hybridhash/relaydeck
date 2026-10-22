@@ -8,6 +8,7 @@ from flet.messaging.protocol import MessageAction
 from relaydeck.client.components.appearance import AppearanceBridge
 from relaydeck.client.features.inventory.routing import RouteBridge
 from tests.support.host_harness import run
+from tests.support.terminal.direct_typing import open_compose
 from tests.support.ui.editor_patches import assert_only_editor_idle_patches
 from tests.support.ui.phone_terminal import _ancestry, _shape
 from tests.support.ui.retained_root import _render
@@ -25,9 +26,12 @@ def test_native_compose_edit_survives_parent_render_before_change_dispatch(
         )
         try:
             await app.set_props_and_fire("agent-home-mac:term-1", {}, "click")
+            await app.set_props_and_fire(
+                "agent-takeover-confirm", {}, "click"
+            )  # tools need control
             session = pool.foreground.session
             session.on_draft_change("old draft")
-            await app.set_props_and_fire("agent-compose-toggle", {}, "click")
+            await open_compose(app)
             field = app.find("composer-draft")
             ancestry = _shape(_ancestry(app, field))
             term = session.current_term
@@ -88,10 +92,13 @@ def test_compose_word_selection_and_equal_text_have_no_round_trip_render(width: 
         )
         try:
             await app.set_props_and_fire("agent-home-mac:term-1", {}, "click")
+            await app.set_props_and_fire(
+                "agent-takeover-confirm", {}, "click"
+            )  # tools need control
             session = pool.foreground.session
             text = "select this word\n" * 16
             session.on_draft_change(text)
-            await app.set_props_and_fire("agent-compose-toggle", {}, "click")
+            await open_compose(app)
             field = app.find("composer-draft")
             ancestry = _shape(_ancestry(app, field))
             notifications: list[object] = []

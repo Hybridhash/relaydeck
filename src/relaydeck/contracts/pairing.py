@@ -1,6 +1,6 @@
 """RelayDeck device pairing v1; distinct from connector enrollment and OIDC."""
 
-from typing import Any
+from typing import Any, Literal, TypedDict
 
 DEVICE_CAPABILITIES = (
     "sessions.read",
@@ -11,6 +11,7 @@ DEVICE_CAPABILITIES = (
     "shells.create",
     "terminal.attach",
     "attachments.upload",
+    "server.health",
 )
 MAX_BODY_BYTES = 2048
 MAX_WINDOW_S = 300
@@ -73,3 +74,43 @@ PAIRING_SCHEMAS = {
         },
     ),
 }
+
+
+# Typed bodies for the schemas above; tests keep them identical to the JSON Schemas.
+class PairingRequest(TypedDict):
+    origin: str
+    host_id: str
+    code_challenge: str
+    code_challenge_method: Literal["S256"]
+    device_label: str
+
+
+class PairingProof(TypedDict):
+    origin: str
+    host_id: str
+    verifier: str
+
+
+class PairingStatus(TypedDict):
+    origin: str
+    host_id: str
+    request_id: str
+    matching_code: str
+    device_id: str
+    host_fingerprint: str
+    capabilities: list[
+        Literal[
+            "sessions.read",
+            "terminal.view",
+            "terminal.control",
+            "agents.prompt",
+            "agents.start",
+            "shells.create",
+            "terminal.attach",
+            "attachments.upload",
+            "server.health",
+        ]
+    ]
+    state: Literal["pending", "approved", "denied"]
+    expires_at: str
+    poll_interval_ms: Literal[2000]

@@ -16,7 +16,6 @@ from typing import Any
 
 import pytest
 
-from relaydeck.client.adapters.fake import FakeClipboard, FakeConnectivity, FakeCredentialStore
 from relaydeck.client.adapters.ports import ConnectivityState
 from relaydeck.client.features.composer.domain import (
     LOST_DELIVERY_MESSAGE,
@@ -84,11 +83,12 @@ from relaydeck.client.features.terminal.controller import TerminalController
 from relaydeck.client.features.terminal.keys import KeyInputError
 from relaydeck.client.features.terminal.paste_policy import PasteError
 from relaydeck.client.features.terminal.paste_review import REQUEST_REVIEW, STALE_MESSAGE
+from relaydeck.contracts.wire import terminal as terminal_wire
 from relaydeck.domain.models import ConnectionState
-from relaydeck.gateway import terminal_wire
 from relaydeck.gateway.backend import FakeBackend
 from relaydeck.gateway.leases import CONTROL_LEASE_TTL_MS
 from relaydeck.gateway.ring import STATUS_OK
+from tests.support.fakes import FakeClipboard, FakeConnectivity, FakeCredentialStore
 from tests.support.sync.lifecycle import _agent, _shell, _SocketFactory
 
 FIXTURES = FsPath(__file__).resolve().parent.parent / "fixtures" / "gateway"

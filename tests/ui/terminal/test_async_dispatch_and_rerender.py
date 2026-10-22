@@ -28,7 +28,7 @@ from relaydeck.client.features.terminal.surfaces import (
     AGENT_WORKFLOW_DIRECT_KEY,
     mount_agent_screen,
 )
-from relaydeck.gateway import terminal_wire
+from relaydeck.contracts.wire import terminal as terminal_wire
 from tests.support.host_harness import render_component
 from tests.support.terminal.dispatch import _agent_session, _SocketFactory, run_clean
 

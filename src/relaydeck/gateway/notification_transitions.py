@@ -195,7 +195,8 @@ class NotificationTransitions:
                 except Exception:  # noqa: BLE001 - isolate push storage from source synchronization
                     self.error = "notification_outbox_unavailable"
                 try:
-                    await asyncio.wait_for(stop.wait(), 0.25)
+                    async with asyncio.timeout(0.25):
+                        await stop.wait()
                 except TimeoutError:
                     pass
         finally:

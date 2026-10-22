@@ -20,6 +20,7 @@ from typing import Any
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, Response
 
+from relaydeck.contracts import paths
 from relaydeck.gateway import webpush
 from relaydeck.gateway.push import PREF_CATEGORY_TO_UI, PREF_UI_TO_CATEGORY
 from relaydeck.gateway.push_io import push_io
@@ -102,7 +103,7 @@ def build_router(
             return _error(403, "forbidden")
         return None
 
-    @router.get("/v1/push/web/key")
+    @router.get(paths.PUSH_KEY)
     async def public_key(request: Request) -> Response:
         who = identity(request)
         if who is None:
@@ -124,7 +125,7 @@ def build_router(
             )
         )
 
-    @router.put("/v1/push/web/subscription")
+    @router.put(paths.PUSH_SUBSCRIPTION)
     async def subscribe(request: Request) -> Response:
         who = identity(request)
         if who is None:
@@ -163,7 +164,7 @@ def build_router(
             return _error(400, "invalid")
         return _no_store(JSONResponse({"ok": True}, status_code=201))
 
-    @router.delete("/v1/push/web/subscription")
+    @router.delete(paths.PUSH_SUBSCRIPTION)
     async def unsubscribe(request: Request) -> Response:
         who = identity(request)
         if who is None:
@@ -174,7 +175,7 @@ def build_router(
         await push_io(store, "delete_subscription", who[0], who[1])
         return _no_store(Response(status_code=204))
 
-    @router.post("/v1/push/web/resolve")
+    @router.post(paths.PUSH_RESOLVE)
     async def resolve(request: Request) -> Response:
         """Tap path: returns the category only when the route belongs to this device and is current.
         It authorizes nothing and sends no input. The app then fetches current state as usual."""
@@ -199,7 +200,7 @@ def build_router(
             return _error(404, "not_found")
         return _no_store(JSONResponse(found))
 
-    @router.get("/v1/push/prefs")
+    @router.get(paths.PUSH_PREFS)
     async def get_preferences(request: Request) -> Response:
         who = identity(request)
         if who is None:
@@ -209,7 +210,7 @@ def build_router(
             JSONResponse({"categories": sorted(PREF_CATEGORY_TO_UI[name] for name in chosen)})
         )
 
-    @router.put("/v1/push/prefs")
+    @router.put(paths.PUSH_PREFS)
     async def put_preferences(request: Request) -> Response:
         """The choice for THIS device only. Unknown values are refused; [] means none."""
         who = identity(request)

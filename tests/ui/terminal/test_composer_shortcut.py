@@ -25,6 +25,7 @@ from relaydeck.client.features.inventory.routing import RouteBridge
 from relaydeck.client.features.terminal.paste_policy import PasteReview
 from relaydeck.client.theme import MIN_TOUCH
 from tests.support.host_harness import HostApp, render_component, run
+from tests.support.terminal.direct_typing import open_compose
 from tests.support.ui.retained_root import _active, _render
 
 
@@ -208,7 +209,7 @@ def test_the_phone_composer_sends_with_ctrl_enter_only(width: int) -> None:
             await app.set_props_and_fire("agent-takeover-confirm", {}, "click")
             session = pool.foreground.session
             session.on_draft_change("from the keyboard")
-            await app.set_props_and_fire("agent-compose-toggle", {}, "click")
+            await open_compose(app)
             await app.set_props_and_fire("composer-draft", {}, "focus")
             assert _active(app, "composer-draft")
             before = len(session.store.messages)

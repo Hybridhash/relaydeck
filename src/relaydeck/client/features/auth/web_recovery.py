@@ -10,7 +10,9 @@ from __future__ import annotations
 
 from typing import Any
 
-RECOVERY_PATH = "/v1/auth/recovery.js"
+from relaydeck.contracts import paths
+
+RECOVERY_PATH = paths.AUTH_RECOVERY_SCRIPT
 RECOVERY_REASON = "session_recovery_required"
 MAX_INDEX_BYTES = 256 * 1024
 

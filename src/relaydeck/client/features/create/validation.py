@@ -9,7 +9,6 @@ from dataclasses import dataclass
 from relaydeck.contracts.launch import agent_name_error, has_control, valid_new_workspace
 
 # Defaults are for standalone validation; Root passes the selected host catalog.
-MAX_NAME = 32
 MAX_LABEL = 64
 MAX_ARGV_ITEMS = 32
 MAX_ARGV_ITEM_CHARS = 512

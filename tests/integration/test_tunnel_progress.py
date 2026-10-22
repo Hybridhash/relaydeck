@@ -4,7 +4,7 @@ import asyncio
 import json
 
 from relaydeck.contracts.tunnel import SnapshotIntake
-from relaydeck.gateway import app as gateway_module
+from relaydeck.gateway.api import sockets as sockets_module
 from relaydeck.gateway.app import create_app
 from relaydeck.tunnel_queue import BoundedInbox
 from tests.support.asgi_socket import AsgiSocket
@@ -16,7 +16,7 @@ def test_journal_wait_does_not_block_tunnel_ping_or_receive(monkeypatch) -> None
         state, _, _ = _state()
         token = state.hosts.enroll("home-mac", account="acct-1")
         entered, release = asyncio.Event(), asyncio.Event()
-        original = gateway_module.command_io
+        original = sockets_module.command_io
 
         async def command_io(backend, operation, *args):
             if operation == "command_owner":
@@ -25,7 +25,7 @@ def test_journal_wait_does_not_block_tunnel_ping_or_receive(monkeypatch) -> None
                 return None
             return await original(backend, operation, *args)
 
-        monkeypatch.setattr(gateway_module, "command_io", command_io)
+        monkeypatch.setattr(sockets_module, "command_io", command_io)
         socket = await AsgiSocket(create_app(state), "/v1/connectors", token=token).open()
         try:
             assert json.loads(await socket.recv_text())["kind"] == "hello"
@@ -59,7 +59,7 @@ def test_fourteen_full_cadence_agents_survive_a_100ms_command_wait(monkeypatch):
         state, backend, _ = _state()
         token = state.hosts.enroll("home-mac", account="acct-1")
         entered, release = asyncio.Event(), asyncio.Event()
-        original = gateway_module.command_io
+        original = sockets_module.command_io
         received = []
 
         async def command_io(backend, operation, *args):
@@ -71,7 +71,7 @@ def test_fourteen_full_cadence_agents_survive_a_100ms_command_wait(monkeypatch):
                 return {}
             return await original(backend, operation, *args)
 
-        monkeypatch.setattr(gateway_module, "command_io", command_io)
+        monkeypatch.setattr(sockets_module, "command_io", command_io)
         monkeypatch.setattr(backend, "ingest_terminal_output", lambda *args: received.append(args))
         socket = await AsgiSocket(create_app(state), "/v1/connectors", token=token).open()
         try:
@@ -118,7 +118,7 @@ def test_idle_snapshot_transfer_still_has_a_deadline(monkeypatch):
         state, _, _ = _state()
         token = state.hosts.enroll("home-mac", account="acct-1")
         intake = SnapshotIntake()
-        monkeypatch.setattr(gateway_module, "SnapshotIntake", lambda: intake)
+        monkeypatch.setattr(sockets_module, "SnapshotIntake", lambda: intake)
         socket = await AsgiSocket(create_app(state), "/v1/connectors", token=token).open()
         try:
             await socket.recv_text()
@@ -150,7 +150,7 @@ def test_gateway_byte_overflow_closes_with_distinct_fixed_reason(monkeypatch):
         state, _, _ = _state()
         token = state.hosts.enroll("home-mac", account="acct-1")
         entered, release = asyncio.Event(), asyncio.Event()
-        original = gateway_module.command_io
+        original = sockets_module.command_io
 
         async def command_io(backend, operation, *args):
             if operation == "command_owner":
@@ -159,8 +159,8 @@ def test_gateway_byte_overflow_closes_with_distinct_fixed_reason(monkeypatch):
                 return None
             return await original(backend, operation, *args)
 
-        monkeypatch.setattr(gateway_module, "command_io", command_io)
-        monkeypatch.setattr(gateway_module, "BoundedInbox", lambda: BoundedInbox(byte_limit=1024))
+        monkeypatch.setattr(sockets_module, "command_io", command_io)
+        monkeypatch.setattr(sockets_module, "BoundedInbox", lambda: BoundedInbox(byte_limit=1024))
         socket = await AsgiSocket(create_app(state), "/v1/connectors", token=token).open()
         try:
             await socket.recv_text()

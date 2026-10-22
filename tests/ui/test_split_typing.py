@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 
@@ -145,7 +146,8 @@ def test_split_layout_places_input_beside_the_terminal() -> None:
                 "agent-input-spacer",
             ]
             assert app.find("agent-input-spacer").height == 0
-            assert _has(app, "agent-keys-toggle") and _has(app, "agent-workflow-group")
+            assert _has(app, "agent-tools-toggle") and _has(app, "agent-workflow-group")
+            assert not _has(app, "agent-keys-toggle")
             assert _has(app, AGENT_MORE_KEY)  # slim header: title, dot, more
             assert not _has(app, "agent-window-state")
         finally:
@@ -171,17 +173,17 @@ def test_message_box_shows_many_lines_scrolls_inside_and_reports_focus() -> None
     run(scenario())
 
 
-def test_dock_opens_inside_the_input_column_never_over_the_terminal() -> None:
+def test_split_uses_the_tools_popover_instead_of_the_column_key_dock() -> None:
     async def scenario() -> None:
         app, session, _log = await split_mounted(split=True, dock=True)
         try:
-            assert _has(app, AGENT_KEYS_SCROLL_KEY)
+            assert not _has(app, AGENT_KEYS_SCROLL_KEY)
             assert not _has(app, "agent-keys-overlay")
             assert AGENT_KEYS_SCROLL_KEY not in keys_of(app.find(AGENT_DETAIL_KEY))
-            dock = app.find("agent-split-dock")
-            assert dock.right is not None and dock.width and dock.height <= 0.34 * 480
-            # the dock sits under the draft frame, top-anchored.
-            assert dock.top is not None and dock.bottom is None
+            assert not _has(app, "agent-split-dock")
+            await app.set_props_and_fire("agent-tools-toggle", {}, "click")
+            assert app.find("tools-popover").visible
+            assert app.find("tools-popover-scroll").scroll == ft.ScrollMode.AUTO
         finally:
             await session.dispose()
 
@@ -407,14 +409,14 @@ def test_split_polish_draft_is_capped_with_the_keyboard_down_and_fills_it_when_u
     assert 3 <= down <= 40 and down < up
 
 
-def test_split_polish_key_row_lives_in_the_column_and_keys_toggle_is_present() -> None:
+def test_split_polish_key_row_is_replaced_by_the_tools_toggle() -> None:
     async def scenario() -> None:
         app, session, _log = await split_mounted(split=True)
         try:
             assert app.find("terminal-flex-host") is not None
             # The terminal window does not draw its own key row under the terminal.
             assert not _has(app, "terminal-keys")
-            assert _has(app, "agent-keys-toggle")
+            assert _has(app, "agent-tools-toggle") and not _has(app, "agent-keys-toggle")
         finally:
             await session.dispose()
 
@@ -476,7 +478,7 @@ def test_unmeasured_split_uses_the_viewport_width_not_the_800_fallback() -> None
             assert side != typing_split_widths(800.0)[1]
             assert app.find("agent-composer-slot").width == side
             assert app.find("agent-input-controls").width == side
-            assert _has(app, "agent-keys-toggle") and _has(app, "agent-workflow-group")
+            assert _has(app, "agent-tools-toggle") and _has(app, "agent-workflow-group")
         finally:
             await session.dispose()
 
@@ -492,6 +494,53 @@ def test_measured_width_wins_once_a_size_event_arrives() -> None:
             )
             _terminal, side = typing_split_widths(900.0)
             assert app.find("agent-composer-slot").width == side
+        finally:
+            await session.dispose()
+
+    run(scenario())
+
+
+def test_split_composer_has_the_phone_keyboard_button_and_send_keeps_the_keyboard() -> None:
+    """In the iPad typing column the keyboard goes up and down only through its button."""
+    from relaydeck.client.features.composer.components import DRAFT_KEY
+
+    async def scenario(keyboard_up: bool) -> None:
+        session, _ops, _factory, _submitted = _agent_session()
+        session.open()
+        await session.confirm_takeover()
+        app = await render_component(_PolishHarness, session, keyboard_up)
+        try:
+            await app.set_props_and_fire(
+                "agent-detail-panel", {}, "size_change", {"w": 1224.0, "h": 900.0}
+            )
+            field = app.find(DRAFT_KEY)
+            # A tap outside the field, Send included, never drops the keyboard.
+            assert field.on_tap_outside is not None
+            toggle = field.suffix_icon
+            if not keyboard_up:
+                assert toggle.content.key == "composer-show-keyboard"
+                return
+            assert toggle.content.key == "composer-hide-keyboard"
+            await app.session.dispatch_event(toggle.content._i, "click", "")
+            await asyncio.sleep(0.02)
+            assert app.find(DRAFT_KEY).disabled
+            await asyncio.sleep(0.1)
+            await app.settle()
+            assert not app.find(DRAFT_KEY).disabled
+        finally:
+            await session.dispose()
+
+    run(scenario(True))
+    run(scenario(False))
+
+
+def test_desktop_composer_has_no_keyboard_button() -> None:
+    from relaydeck.client.features.composer.components import DRAFT_KEY
+
+    async def scenario() -> None:
+        app, session, _log = await split_mounted(split=False)
+        try:
+            assert app.find(DRAFT_KEY).suffix_icon is None
         finally:
             await session.dispose()
 

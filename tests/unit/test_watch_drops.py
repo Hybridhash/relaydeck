@@ -16,7 +16,7 @@ from relaydeck.client.features.terminal import agent_session
 from relaydeck.client.features.terminal.stream import EMULATOR_PRESERVED
 from relaydeck.client.features.terminal.warm_watch import watch_only
 from relaydeck.client.retained_sessions import RetainedSessions
-from relaydeck.gateway import terminal_wire
+from relaydeck.contracts.wire import terminal as terminal_wire
 from tests.support.scripted_sessions import ScriptedTerminalSocket, make_scripted_sessions
 from tests.support.terminal.watch_drops import until, watching
 

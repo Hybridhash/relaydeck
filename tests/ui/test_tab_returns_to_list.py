@@ -7,11 +7,11 @@ from typing import Any
 import pytest
 from flet.messaging.protocol import MessageAction
 
-from relaydeck.client.adapters.fake import FakeCredentialStore
 from relaydeck.client.features.a11y.focus import iter_controls
 from relaydeck.client.features.inventory.routing import RouteBridge
 from relaydeck.client.packaged_runtime import ScopedDrafts
-from relaydeck.gateway import terminal_wire
+from relaydeck.contracts.wire import terminal as terminal_wire
+from tests.support.fakes import FakeCredentialStore
 from tests.support.host_harness import run
 from tests.support.pictures.attachments import (
     IDENTIFIER,
@@ -37,9 +37,10 @@ async def _fire(app: Any, key: str, event: str = "click", value: str | None = No
 
 
 async def _compose(app: Any) -> None:
-    # Narrow layouts show the idle text box; focusing it starts composing.
+    # Narrow layouts start composing from the tools popover; wider ones focus the text box.
     try:
-        await _fire(app, "agent-compose-toggle")
+        await _fire(app, "terminal-tools-button")
+        await _fire(app, "tools-mode-compose")
     except KeyError:
         await _fire(app, "composer-draft", "focus")
 

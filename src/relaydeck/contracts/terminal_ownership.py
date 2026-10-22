@@ -1,7 +1,7 @@
 """Optional compare-and-acquire fields for gateway terminal ownership."""
 
 import re
-from typing import Any
+from typing import Any, Literal, NotRequired, TypedDict
 
 CONTROL_REVISION_PATTERN = r"^[0-9a-f]{64}$"
 
@@ -63,3 +63,28 @@ TERMINAL_OWNERSHIP_SCHEMAS: dict[str, dict[str, Any]] = {
         ],
     },
 }
+
+
+# Typed bodies for the schemas above; tests keep them identical to the JSON Schemas.
+class TerminalAttachRequest(TypedDict):
+    kind: Literal["agent", "shell"]
+    takeover: NotRequired[bool]
+    cols: NotRequired[int]
+    rows: NotRequired[int]
+    expected_control_revision: NotRequired[str]
+
+
+class TerminalControlHolderHolder(TypedDict):
+    device_id: str
+
+
+class TerminalControlHolder(TypedDict):
+    held: bool
+    mine: bool
+    control_revision: str
+    holder: NotRequired[TerminalControlHolderHolder]
+
+
+class TerminalLeaseRequest(TypedDict):
+    mode: Literal["view", "control"]
+    expected_generation: NotRequired[int]

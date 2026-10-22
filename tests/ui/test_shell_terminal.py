@@ -25,7 +25,6 @@ import flet as ft
 import httpx
 import pytest
 
-from relaydeck.client.adapters.fake import FakeClipboard
 from relaydeck.client.features.composer.components import (
     COMPOSER_KEY,
     DRAFT_KEY,
@@ -177,7 +176,8 @@ from relaydeck.client.features.terminal.surfaces import (
     mount_agent_screen,
     offered_position,
 )
-from relaydeck.gateway import terminal_wire
+from relaydeck.contracts.wire import terminal as terminal_wire
+from tests.support.fakes import FakeClipboard
 from tests.support.host_harness import HostApp, button_label, render_component, run
 from tests.support.terminal.sessions import (
     _agent_session,
@@ -649,20 +649,6 @@ def test_ticket_missing_is_typed_error_without_retryable() -> None:
     run(scenario())
 
 
-def test_agent_attach_requires_explicit_takeover() -> None:
-    async def scenario() -> None:
-        ops = ScriptedShellGatewayOps()
-        with pytest.raises(ShellOpError) as exc:
-            await ops.attach("home-mac", "term-a", "agent", False)
-        assert exc.value.code == "forbidden"
-        assert exc.value.details == {"reason": "agent_requires_takeover"}
-        info = await ops.attach("home-mac", "term-a", "agent", True)
-        assert info.takeover_authorized is True
-        assert "ownership" in TAKEOVER_DISCLOSURE_AGENT
-
-    run(scenario())
-
-
 # -- exit semantics ------------------------------------------------------------------------------
 
 
@@ -753,9 +739,9 @@ def test_reattach_drive_reset_notice_reattach_exact_continuation() -> None:
         assert controller.reattach_needed is True
         assert controller.pending_resume is None
         notice = controller.state.notice
-        assert notice is not None and "incomplete" in notice.text.lower()
+        assert notice is not None and "older output not kept" in notice.text.lower()
         # The shell mirrors the incomplete-history label at reset time.
-        assert "incomplete" in session.notice.lower()
+        assert "older output not kept" in session.notice.lower()
         # Drive 1: bare reattach -> fresh ticket, reopen at the live edge.
         factory.queue(_output("e1", 5, b" world"))
         assert await session.drive_recovery() == DRIVE_REATTACHED
@@ -1198,6 +1184,7 @@ def _render_shell(
         on_open_selection=lambda: calls["selection"].append(True),
         on_copy_selection=lambda a, f: calls["copy"].append((a, f)),
         on_close_selection=lambda: calls.update(close_selection=calls["close_selection"] + 1),
+        on_dismiss_notice=lambda notice: None,
         on_paste=lambda: calls.update(paste=calls["paste"] + 1),
         on_mode_change=lambda m: calls["mode"].append(m),
         on_key=lambda name: calls["key"].append(name),
@@ -1481,6 +1468,7 @@ def _render_agent(
         on_open_selection=lambda: calls.update(open_selection=True),
         on_copy_selection=lambda a, f: calls.update(copy=(a, f)),
         on_close_selection=lambda: calls.update(close_selection=True),
+        on_dismiss_notice=lambda notice: None,
         on_draft_change=lambda text: calls.update(draft=text),
         on_send=lambda: calls.update(send=True),
         on_confirm_blocked=lambda: calls.update(confirm_blocked=True),

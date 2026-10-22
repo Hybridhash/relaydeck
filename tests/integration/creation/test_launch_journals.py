@@ -333,8 +333,8 @@ def test_root_launch_observes_http_outcome_and_fences_duplicate_clicks(
                 yield None
 
         transport = RootTransport("http://gw", get_token, http)
-        from relaydeck.client.adapters.fake import FakeCredentialStore
         from relaydeck.client.pending_commands import PendingCommands
+        from tests.support.fakes import FakeCredentialStore
 
         transport.commands = PendingCommands(
             FakeCredentialStore(), "http://gw", "acct-1", "synthetic-device"

@@ -953,6 +953,11 @@ def _refresh_model(
         and now_ms - local.at_ms < REFRESH_DONE_SHOWN_MS
     ):
         notes.append("checked just now")
+    elif attempt is not None and attempt.result == "workspace_untrusted" and info.probe_dir:
+        notes.append(
+            f"Trust RelayDeck's {view.name} folder once: run `{view.kind}` in "
+            f"{info.probe_dir} and choose Trust."
+        )
     elif info.last_error:
         notes.append(_REFRESH_ERRORS.get(info.last_error, _REFRESH_ERROR_FALLBACK))
     left = -(-(cooldown - now_ms) // 60_000) if cooling and not running else None

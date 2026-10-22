@@ -12,6 +12,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response
 
 from relaydeck.companion.pictures import DAY_MS, MAX_BYTES, PictureError
+from relaydeck.contracts import paths
 from relaydeck.contracts.schemas import SchemaError, validate
 
 logger = logging.getLogger(__name__)
@@ -49,7 +50,7 @@ def install(
             raise PictureError("not_found", "Picture upload not found.")
         return record
 
-    @app.post("/v1/pictures", status_code=201)
+    @app.post(paths.PICTURES, status_code=201)
     async def begin(request: Request) -> Any:
         try:
             session = authorize(request)
@@ -66,7 +67,7 @@ def install(
             )
             # A grant is not presenter authentication. PUT additionally requires
             # this exact live session's bearer (or the validated web adapter).
-            url = f"/v1/pictures/{identifier}/content?grant={record.secret}"
+            url = f"{paths.picture_content(identifier)}?grant={record.secret}"
             result = {"picture_id": identifier, "upload_url": url, "expires_ms": record.deadline}
             validate("relaydeck/gateway/v1/picture-grant", result)
             return private(JSONResponse(result, status_code=201))
@@ -75,7 +76,7 @@ def install(
         except PictureError as exc:
             return private(error(exc.code, exc.message))
 
-    @app.put("/v1/pictures/{identifier}/content")
+    @app.put(paths.PICTURE_CONTENT)
     async def upload(request: Request, identifier: str) -> Any:
         store = state.pictures
         record = store.get(identifier) if store else None
@@ -177,7 +178,9 @@ def install(
                     record.status = "failed"
                     record.message = exc.message
             return private(error(exc.code, exc.message))
-        except Exception:
+        except Exception as exc:
+            # The type only: an exception's text can carry paths or content.
+            logger.error("picture_upload_failed error=%s", type(exc).__name__)
             with store.lock:
                 if store.get(identifier) is record:
                     record.status = "failed"
@@ -190,7 +193,7 @@ def install(
             if path and not committed:
                 Path(path).unlink(missing_ok=True)
 
-    @app.get("/v1/pictures/{identifier}")
+    @app.get(paths.PICTURE)
     async def result(request: Request, identifier: str) -> Any:
         try:
             record = owned(request, identifier)
@@ -200,9 +203,7 @@ def install(
         except PictureError as exc:
             return private(error(exc.code, exc.message))
 
-    @app.delete(
-        "/v1/pictures/{identifier}", status_code=204, response_class=Response, response_model=None
-    )
+    @app.delete(paths.PICTURE, status_code=204, response_class=Response, response_model=None)
     async def cancel(request: Request, identifier: str) -> Any:
         try:
             owned(request, identifier)

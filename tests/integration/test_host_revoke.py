@@ -17,8 +17,9 @@ import stat
 from typing import Any
 
 from relaydeck.gateway import cli as gateway_cli
-from relaydeck.gateway.app import GatewayState, revoke_host_and_close
+from relaydeck.gateway.app import GatewayState
 from relaydeck.gateway.hosts import drain_revoke_requests, write_revoke_request
+from relaydeck.gateway.revocation import revoke_host_and_close
 from tests.security.helpers import make_state
 from tests.support.gateway.fake_socket import _FakeSocket
 

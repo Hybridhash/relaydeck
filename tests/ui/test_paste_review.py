@@ -47,7 +47,7 @@ from relaydeck.client.features.terminal.paste_review import (
     counts_line,
 )
 from relaydeck.client.features.terminal.projection import TerminalProjection
-from relaydeck.gateway import terminal_wire
+from relaydeck.contracts.wire import terminal as terminal_wire
 from tests.support.host_harness import render_component, run
 
 VT = Path(__file__).resolve().parent.parent / "fixtures" / "vt"

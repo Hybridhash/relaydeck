@@ -54,7 +54,21 @@ tier = "A"
 evidence = "JSONL event logs read on this Mac; limits via the usage pane; model enrichment pending."
 
 [cli.tui]
-launch_new = ["muse", "--no-session-log"]
+launch_new = [
+  "muse", "--preset", "empty", "--model", "muse-spark-1.3", "--reasoning-effort", "minimal",
+]
+launch_resume = ["muse", "resume", "{id}"]
+hint_pattern = 'To continue this session, run muse resume (?P<id>[0-9a-f-]{36})'
+id_pattern = "[0-9a-f-]{36}"
+session_root = "~/.local/share/muse/sessions"
+session_entry = ".msp-view-g6/{id}"
+not_found = []
+warmup_prompt = "reply with the single word ok"
+warmup_marker = "(?m)^◆"
+usage_enters = 2
+untrusted = ["Do you trust this workspace"]
+trust_store = "~/.config/muse/trust.json"
+probe_dir = "{state_dir}/muse-probe"
 quit_text = "/quit"
 prompt_marker = "(?m)^❯"
 usage_marker = "Subscription"

@@ -1,5 +1,8 @@
 """Device-bound private picture upload contract; never an HTTP asset URL."""
 
+from typing import Literal, TypedDict
+
+from relaydeck.contracts import paths
 from relaydeck.contracts.pairing import document
 
 PICTURE_SCHEMAS = {
@@ -15,7 +18,7 @@ PICTURE_SCHEMAS = {
             "picture_id": {"type": "string", "pattern": "^[a-f0-9]{32}$"},
             "upload_url": {
                 "type": "string",
-                "pattern": "^/v1/pictures/[a-f0-9]{32}/content\\?grant=[A-Za-z0-9_-]{43}$",
+                "pattern": f"^{paths.PICTURE_CONTENT_PATTERN}\\?grant=[A-Za-z0-9_-]{{43}}$",
             },
             "expires_ms": {"type": "integer", "minimum": 0},
         },
@@ -36,3 +39,23 @@ PICTURE_SCHEMAS = {
         },
     ),
 }
+
+
+# Typed bodies for the schemas above; tests keep them identical to the JSON Schemas.
+class PictureRequest(TypedDict):
+    host_id: str
+
+
+class PictureGrant(TypedDict):
+    picture_id: str
+    upload_url: str
+    expires_ms: int
+
+
+class PictureResult(TypedDict):
+    picture_id: str
+    status: Literal["pending", "uploading", "ready", "failed"]
+    message: str
+    path: str
+    expires_ms: int
+    preview: str

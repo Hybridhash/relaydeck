@@ -18,7 +18,7 @@ from relaydeck.client.features.terminal.input_modes import (
     WORKFLOW_AGENT_DIRECT,
 )
 from relaydeck.client.retained_sessions import SLOT_IDLE_MS as RETENTION_IDLE_MS
-from relaydeck.gateway import terminal_wire
+from relaydeck.contracts.wire import terminal as terminal_wire
 from tests.support.host_harness import run
 from tests.support.sync.transport_fixtures import _wait
 from tests.support.ui.retained_root import _active, _open, _render

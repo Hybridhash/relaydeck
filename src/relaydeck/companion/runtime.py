@@ -5,14 +5,13 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-import re
 import secrets
 import shutil
-from collections.abc import Callable, Coroutine, Mapping
+from collections.abc import Callable, Coroutine
 from contextlib import suppress
-from copy import deepcopy
 from typing import Any
 
+from relaydeck.client.components.design_system.font_versions import is_current as fonts_is_current
 from relaydeck.client.serve import WebSessionStore, build_web_app, make_relaydeck_main
 from relaydeck.companion.config import CompanionConfig, UsageConfig
 from relaydeck.companion.detect import CatalogError, load_catalog
@@ -22,11 +21,13 @@ from relaydeck.connector.herdr import HerdrError
 from relaydeck.connector.link import ConnectorLink, LinkConfig, TunnelTransport
 from relaydeck.gateway import webpush, webpush_routes, webpush_store
 from relaydeck.gateway.app import create_app
+from relaydeck.gateway.bounds import GRACEFUL_SHUTDOWN_S, WS_MAX_SIZE
 from relaydeck.gateway.cli import ServeOptions, build_serve_state
 from relaydeck.gateway.identity import SessionStore
 from relaydeck.gateway.usage import UsageService, live_workspace_labels
 from relaydeck.gateway.webpush import WebPushProvider
 from relaydeck.gateway.webpush_store import WebPushStore
+from relaydeck.logging_setup import logging_config
 from relaydeck.persistence_contracts import (
     KeyProvider,
     KeyUnavailable,
@@ -54,6 +55,7 @@ from relaydeck.usage.limits_plane import (
     recover_stale_tabs,
     run_bounded_command,
 )
+from relaydeck.usage.limits_plane.trust_store import ensure_probe_folder, probe_folder
 from relaydeck.usage.link_digests import cwd_digest, load_or_create_link_key, repo_fingerprint
 from relaydeck.usage.pricing import PriceTable, load_price_table
 from relaydeck.usage.readers import READERS
@@ -61,57 +63,7 @@ from relaydeck.usage.store import SqliteUsageStore
 
 LOG = logging.getLogger(__name__)
 
-_QUERY_REDACTED = "?[redacted]"
-_QUERY_URL = re.compile(r"(?P<path>/[^\s?\"'<>]*)\?[^\s\"'<>]*")
-
-
-def _redact_query(value: Any) -> Any:
-    if not isinstance(value, str):
-        return value
-    # Uvicorn's request-target argument is one whole string. Drop its entire
-    # query, including hostile quotes/whitespace, without altering the path.
-    if value.startswith(("/", "http://", "https://", "ws://", "wss://")) and "?" in value:
-        return value.partition("?")[0] + _QUERY_REDACTED
-    return _QUERY_URL.sub(lambda match: match["path"] + _QUERY_REDACTED, value)
-
-
-class _UvicornQueryFilter(logging.Filter):
-    """Redact before any own/ancestor handler sees a Uvicorn request record."""
-
-    def filter(self, record: logging.LogRecord) -> bool:
-        record.msg = _redact_query(record.msg)
-        if isinstance(record.args, tuple):
-            record.args = tuple(_redact_query(arg) for arg in record.args)
-        elif isinstance(record.args, Mapping):
-            record.args = {key: _redact_query(value) for key, value in record.args.items()}
-        if hasattr(record, "message"):
-            record.message = record.getMessage()
-        return True
-
-
-def _uvicorn_logging_config() -> dict[str, Any]:
-    from uvicorn.config import LOGGING_CONFIG
-
-    config = deepcopy(LOGGING_CONFIG)
-    config.setdefault("filters", {})["redact_queries"] = {"()": _UvicornQueryFilter}
-    for name in ("uvicorn.error", "uvicorn.access"):
-        config["loggers"][name].setdefault("filters", []).append("redact_queries")
-    config["loggers"]["relaydeck.client.features.terminal.pictures"] = {
-        "level": "INFO",
-        "handlers": ["default"],
-        "propagate": False,
-    }
-    config["loggers"]["relaydeck.lease_lifecycle"] = {
-        "level": "INFO",
-        "handlers": ["default"],
-        "propagate": False,
-    }
-    config["loggers"]["relaydeck.gateway.loop_watch"] = {
-        "level": "WARNING",
-        "handlers": ["default"],
-        "propagate": False,
-    }
-    return config
+_uvicorn_logging_config = logging_config  # the shared setup; the old name stays for callers
 
 
 def _route_first_server(config: Any, before_exit: Callable[[], None]) -> Any:
@@ -154,9 +106,10 @@ def static_gzip(app: Any) -> Any:
 
 
 NO_CACHE = "no-cache"
+IMMUTABLE = "public, max-age=31536000, immutable"
 
 
-def cache_policy(path: str) -> str | None:
+def cache_policy(path: str, query: bytes | str = b"") -> str | None:
     """Cache-Control value for a web path, or None to leave it untouched.
 
     Every non-API response from this origin is either a static web file or
@@ -165,12 +118,16 @@ def cache_policy(path: str) -> str | None:
     so all of them revalidate with ETag/Last-Modified and the browser takes
     304s. There is intentionally no immutable/max-age anywhere: a year-long
     freshness stamp on an unversioned URL would pin phones to a stale engine
-    after an upgrade. /v1/*, the /ws handshake and /healthz are untouched.
+    after an upgrade. The one exception is the app's own bundled fonts requested with a
+    `v` that matches the file's content fingerprint: that URL changes when the file does.
+    /v1/*, the /ws handshake and /healthz are untouched.
     """
     if path in ("/ws", "/healthz"):
         return None
     if path.lstrip("/").startswith("v1/"):
         return None
+    if fonts_is_current(path, query):
+        return IMMUTABLE
     return NO_CACHE
 
 
@@ -184,7 +141,7 @@ def static_cache(app: Any) -> Any:
     async def route(scope: Any, receive: Any, send: Any) -> None:
         policy = None
         if scope.get("type") == "http" and scope.get("method") in ("GET", "HEAD"):
-            policy = cache_policy(scope.get("path", ""))
+            policy = cache_policy(scope.get("path", ""), scope.get("query_string", b""))
         if policy is None:
             await app(scope, receive, send)
             return
@@ -655,6 +612,9 @@ class CompanionRuntime:
             herdr = (found,)
         else:
             LOG.warning("usage_limits_no_herdr kind=%s", kind)
+        probe = probe_folder(recipe.probe_dir, self.config.state_dir)
+        if probe is not None and not ensure_probe_folder(probe):
+            LOG.warning("usage_probe_folder_unavailable kind=%s", kind)
         return TuiBundle(
             recipe,
             herdr,
@@ -795,7 +755,8 @@ class CompanionRuntime:
                     log_config=_uvicorn_logging_config(),
                     access_log=False,
                     proxy_headers=False,
-                    timeout_graceful_shutdown=5,
+                    timeout_graceful_shutdown=GRACEFUL_SHUTDOWN_S,
+                    ws_max_size=WS_MAX_SIZE,
                 ),
                 self._request_shutdown,
             )

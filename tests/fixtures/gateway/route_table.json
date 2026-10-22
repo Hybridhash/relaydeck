@@ -1,0 +1,412 @@
+[
+ {
+  "kind": "http",
+  "method": "GET",
+  "path": "/healthz",
+  "name": "healthz",
+  "anonymous": [
+   200,
+   null
+  ]
+ },
+ {
+  "kind": "http",
+  "method": "GET",
+  "path": "/readyz",
+  "name": "readyz",
+  "anonymous": [
+   503,
+   null
+  ]
+ },
+ {
+  "kind": "http",
+  "method": "GET",
+  "path": "/v1/authorize",
+  "name": "authorize",
+  "anonymous": [
+   503,
+   "host_offline"
+  ]
+ },
+ {
+  "kind": "ws",
+  "path": "/v1/connectors",
+  "name": "connector_socket"
+ },
+ {
+  "kind": "http",
+  "method": "POST",
+  "path": "/v1/deep-links/resolve",
+  "name": "resolve_deep_link",
+  "anonymous": [
+   401,
+   "unauthenticated"
+  ]
+ },
+ {
+  "kind": "http",
+  "method": "GET",
+  "path": "/v1/devices",
+  "name": "list_devices",
+  "anonymous": [
+   401,
+   "unauthenticated"
+  ]
+ },
+ {
+  "kind": "http",
+  "method": "POST",
+  "path": "/v1/devices",
+  "name": "register_device",
+  "anonymous": [
+   401,
+   "unauthenticated"
+  ]
+ },
+ {
+  "kind": "http",
+  "method": "DELETE",
+  "path": "/v1/devices/{device_id}",
+  "name": "delete_device",
+  "anonymous": [
+   401,
+   "unauthenticated"
+  ]
+ },
+ {
+  "kind": "http",
+  "method": "POST",
+  "path": "/v1/devices/{device_id}/rotate",
+  "name": "rotate_device_token",
+  "anonymous": [
+   401,
+   "unauthenticated"
+  ]
+ },
+ {
+  "kind": "http",
+  "method": "POST",
+  "path": "/v1/enrollments",
+  "name": "create_enrollment",
+  "anonymous": [
+   401,
+   "unauthenticated"
+  ]
+ },
+ {
+  "kind": "http",
+  "method": "GET",
+  "path": "/v1/enrollments/{enrollment_id}",
+  "name": "enrollment_status",
+  "anonymous": [
+   401,
+   "unauthenticated"
+  ]
+ },
+ {
+  "kind": "http",
+  "method": "POST",
+  "path": "/v1/enrollments/{enrollment_id}/redeem",
+  "name": "redeem_enrollment",
+  "anonymous": [
+   400,
+   "forbidden"
+  ]
+ },
+ {
+  "kind": "http",
+  "method": "GET",
+  "path": "/v1/events",
+  "name": "get_events",
+  "anonymous": [
+   401,
+   "unauthenticated"
+  ]
+ },
+ {
+  "kind": "http",
+  "method": "GET",
+  "path": "/v1/hosts",
+  "name": "list_hosts",
+  "anonymous": [
+   401,
+   "unauthenticated"
+  ]
+ },
+ {
+  "kind": "http",
+  "method": "DELETE",
+  "path": "/v1/hosts/{host_id}",
+  "name": "delete_host",
+  "anonymous": [
+   401,
+   "unauthenticated"
+  ]
+ },
+ {
+  "kind": "http",
+  "method": "GET",
+  "path": "/v1/hosts/{host_id}/agents",
+  "name": "list_agents",
+  "anonymous": [
+   401,
+   "unauthenticated"
+  ]
+ },
+ {
+  "kind": "http",
+  "method": "POST",
+  "path": "/v1/hosts/{host_id}/agents/{agent_id}/read",
+  "name": "mark_agent_read",
+  "anonymous": [
+   401,
+   "unauthenticated"
+  ]
+ },
+ {
+  "kind": "http",
+  "method": "POST",
+  "path": "/v1/hosts/{host_id}/commands",
+  "name": "post_command",
+  "anonymous": [
+   401,
+   "unauthenticated"
+  ]
+ },
+ {
+  "kind": "http",
+  "method": "GET",
+  "path": "/v1/hosts/{host_id}/commands/{command_id}",
+  "name": "get_command",
+  "anonymous": [
+   401,
+   "unauthenticated"
+  ]
+ },
+ {
+  "kind": "http",
+  "method": "GET",
+  "path": "/v1/hosts/{host_id}/snapshot",
+  "name": "get_snapshot",
+  "anonymous": [
+   401,
+   "unauthenticated"
+  ]
+ },
+ {
+  "kind": "http",
+  "method": "POST",
+  "path": "/v1/hosts/{host_id}/terminals/{terminal_id}/attachments",
+  "name": "create_attachment",
+  "anonymous": [
+   401,
+   "unauthenticated"
+  ]
+ },
+ {
+  "kind": "http",
+  "method": "GET",
+  "path": "/v1/hosts/{host_id}/terminals/{terminal_id}/control",
+  "name": "get_control_holder",
+  "anonymous": [
+   401,
+   "unauthenticated"
+  ]
+ },
+ {
+  "kind": "http",
+  "method": "GET",
+  "path": "/v1/hosts/{host_id}/usage",
+  "name": "get_usage",
+  "anonymous": [
+   401,
+   null
+  ]
+ },
+ {
+  "kind": "http",
+  "method": "POST",
+  "path": "/v1/hosts/{host_id}/usage/limits/refresh",
+  "name": "refresh_limits",
+  "anonymous": [
+   401,
+   null
+  ]
+ },
+ {
+  "kind": "http",
+  "method": "GET",
+  "path": "/v1/identity/callback",
+  "name": "identity_callback",
+  "anonymous": [
+   503,
+   "host_offline"
+  ]
+ },
+ {
+  "kind": "http",
+  "method": "POST",
+  "path": "/v1/logout",
+  "name": "logout_session",
+  "anonymous": [
+   401,
+   "unauthenticated"
+  ]
+ },
+ {
+  "kind": "http",
+  "method": "GET",
+  "path": "/v1/me",
+  "name": "get_me",
+  "anonymous": [
+   401,
+   "unauthenticated"
+  ]
+ },
+ {
+  "kind": "http",
+  "method": "GET",
+  "path": "/v1/metrics",
+  "name": "server_metrics",
+  "anonymous": [
+   401,
+   "unauthenticated"
+  ]
+ },
+ {
+  "kind": "http",
+  "method": "POST",
+  "path": "/v1/pairing/requests",
+  "name": "request_pairing",
+  "anonymous": [
+   404,
+   "not_found"
+  ]
+ },
+ {
+  "kind": "http",
+  "method": "POST",
+  "path": "/v1/pairing/{request_id}/redeem",
+  "name": "redeem_pairing",
+  "anonymous": [
+   404,
+   "not_found"
+  ]
+ },
+ {
+  "kind": "http",
+  "method": "POST",
+  "path": "/v1/pairing/{request_id}/status",
+  "name": "pairing_status",
+  "anonymous": [
+   404,
+   "not_found"
+  ]
+ },
+ {
+  "kind": "http",
+  "method": "POST",
+  "path": "/v1/pictures",
+  "name": "begin",
+  "anonymous": [
+   401,
+   "unauthenticated"
+  ]
+ },
+ {
+  "kind": "http",
+  "method": "DELETE",
+  "path": "/v1/pictures/{identifier}",
+  "name": "cancel",
+  "anonymous": [
+   401,
+   "unauthenticated"
+  ]
+ },
+ {
+  "kind": "http",
+  "method": "GET",
+  "path": "/v1/pictures/{identifier}",
+  "name": "result",
+  "anonymous": [
+   401,
+   "unauthenticated"
+  ]
+ },
+ {
+  "kind": "http",
+  "method": "PUT",
+  "path": "/v1/pictures/{identifier}/content",
+  "name": "upload",
+  "anonymous": [
+   401,
+   "unauthenticated"
+  ]
+ },
+ {
+  "kind": "http",
+  "method": "DELETE",
+  "path": "/v1/terminal-attachments/{attachment_id}",
+  "name": "delete_attachment",
+  "anonymous": [
+   401,
+   "unauthenticated"
+  ]
+ },
+ {
+  "kind": "http",
+  "method": "POST",
+  "path": "/v1/terminal-attachments/{attachment_id}/leases",
+  "name": "create_lease",
+  "anonymous": [
+   401,
+   "unauthenticated"
+  ]
+ },
+ {
+  "kind": "http",
+  "method": "DELETE",
+  "path": "/v1/terminal-leases/{lease_id}",
+  "name": "delete_lease",
+  "anonymous": [
+   401,
+   "unauthenticated"
+  ]
+ },
+ {
+  "kind": "http",
+  "method": "POST",
+  "path": "/v1/terminal-leases/{lease_id}/renew",
+  "name": "renew_lease",
+  "anonymous": [
+   401,
+   "unauthenticated"
+  ]
+ },
+ {
+  "kind": "http",
+  "method": "POST",
+  "path": "/v1/terminal-tickets",
+  "name": "issue_terminal_ticket",
+  "anonymous": [
+   401,
+   "unauthenticated"
+  ]
+ },
+ {
+  "kind": "ws",
+  "path": "/v1/terminal/{lease_id}",
+  "name": "terminal_socket"
+ },
+ {
+  "kind": "http",
+  "method": "POST",
+  "path": "/v1/token",
+  "name": "token_exchange",
+  "anonymous": [
+   400,
+   "forbidden"
+  ]
+ }
+]

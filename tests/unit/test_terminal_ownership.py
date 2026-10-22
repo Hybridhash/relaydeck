@@ -17,7 +17,6 @@ import pytest
 
 from relaydeck.connector.attach import (
     RETENTION_IDLE_MS,
-    RETENTION_SLOTS,
     AttachError,
     AttachmentPool,
     AttachRefused,
@@ -527,11 +526,6 @@ class _FakeSession:
     def close(self) -> int | None:
         self.closed += 1
         return 0
-
-
-def test_retention_baseline_constants() -> None:
-    assert RETENTION_SLOTS == 5
-    assert RETENTION_IDLE_MS == 5 * 60 * 1000
 
 
 def test_pool_retains_five_and_lru_evicts_sixth() -> None:

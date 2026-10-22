@@ -10,7 +10,6 @@ from typing import Any
 import pytest
 
 from relaydeck.client.adapters.clipboard import ClipboardReadStatus, read_clipboard
-from relaydeck.client.adapters.fake import FakeClipboard
 from relaydeck.client.components.design_system.terminal_window import (
     KEYBAR_FAILURE_MESSAGE,
     MobileKeyBar,
@@ -18,6 +17,7 @@ from relaydeck.client.components.design_system.terminal_window import (
 from relaydeck.client.features.terminal.paste_policy import BRACKET_END, BRACKET_START
 from relaydeck.client.features.terminal.paste_review import CONFIRM_KEY
 from relaydeck.client.features.terminal.surfaces import direct_typing
+from tests.support.fakes import FakeClipboard
 from tests.support.host_harness import render_component, run
 from tests.support.terminal.direct_typing import _change, _direct, _typing_key
 from tests.support.terminal.latch_text import _inputs
@@ -56,7 +56,8 @@ def test_clipboard_read_has_a_typed_unavailable_result(error: Exception) -> None
     run(scenario())
 
 
-@pytest.mark.parametrize("shell", [False, True])
+# Agents open the paste panel instead (test_paste_entry.py); shells keep this field fallback.
+@pytest.mark.parametrize("shell", [True])
 @pytest.mark.parametrize("timeout", [False, True])
 def test_paste_failure_opens_and_focuses_the_retained_field_without_terminal_input(
     shell: bool, timeout: bool, monkeypatch: pytest.MonkeyPatch
@@ -93,7 +94,8 @@ def test_paste_failure_opens_and_focuses_the_retained_field_without_terminal_inp
     run(scenario())
 
 
-@pytest.mark.parametrize("shell", [False, True])
+# Agents open the paste panel instead (test_paste_entry.py); shells keep this field fallback.
+@pytest.mark.parametrize("shell", [True])
 @pytest.mark.parametrize("selection", ["caret", "select-all"])
 @pytest.mark.parametrize("prefix", ["", " ", "  "])
 def test_fallback_native_menu_contract_selection_paste_review_and_exact_confirm(
@@ -149,7 +151,8 @@ def test_fallback_native_menu_contract_selection_paste_review_and_exact_confirm(
     run(scenario())
 
 
-@pytest.mark.parametrize("shell", [False, True])
+# Agents open the paste panel instead (test_paste_entry.py); shells keep this field fallback.
+@pytest.mark.parametrize("shell", [True])
 @pytest.mark.parametrize("stale", [False, True])
 def test_explicit_native_paste_select_all_cannot_write_unsafe_or_stale_replacement(
     shell: bool, stale: bool

@@ -169,12 +169,53 @@ def test_the_region_adds_no_layout_of_its_own() -> None:
     assert region.binding == "rev-1"
 
 
-def test_pictures_unavailable_leaves_the_screen_untouched() -> None:
-    props: dict[str, Any] = {"picture_paste_available": False, "on_attach_picture": 1}
+def test_pictures_unavailable_still_mounts_the_region_for_text_without_pictures() -> None:
+    props: dict[str, Any] = {
+        "picture_paste_available": False,
+        "capture_picture_activation": lambda *_a: None,
+        "attach_picture_source": lambda *_a: None,
+        "reject_picture_paste": lambda _r: None,
+        "picture_paste_binding": "rev-1",
+        "picture_paste_binding_now": lambda: "rev-1",
+        "browser_paste_text": lambda _text: None,
+        "on_attach_picture": 1,
+    }
     paste = take_paste_props(props)
     assert props == {"on_attach_picture": 1}
     screen = object()
-    assert wrap_with_paste_region(screen, paste, key="k") is screen
+    region = wrap_with_paste_region(screen, paste, key="k")
+    assert isinstance(region, RelayDeckPicturePaste)
+    assert region.content is screen and region.pictures is False and region.on_text is not None
+
+
+def test_a_text_event_reaches_the_terminal_paste_once_and_empty_text_is_dropped() -> None:
+    seen: list[str] = []
+
+    async def on_text(text: str) -> str:
+        seen.append(text)
+        return "inserted"
+
+    region = picture_paste_region(
+        object(),
+        capture=lambda *_a: None,
+        attach=lambda *_a: None,
+        reject=lambda _r: None,
+        binding="rev-1",
+        current_binding=lambda: "rev-1",
+        key="r",
+        on_text=on_text,
+    )
+    from types import SimpleNamespace
+
+    async def scenario() -> None:
+        await region.on_text(SimpleNamespace(text="ls -la", binding="rev-1"))
+        await region.on_text(SimpleNamespace(text="stale", binding="rev-0"))
+        await region.on_text(SimpleNamespace(text=""))
+        await region.on_text(SimpleNamespace(text=7))
+        await region.on_text(SimpleNamespace())
+
+    asyncio.run(scenario())
+    assert seen == ["ls -la"]
 
 
 class _Control:

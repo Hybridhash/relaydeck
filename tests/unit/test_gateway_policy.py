@@ -4,14 +4,14 @@ from __future__ import annotations
 
 import pytest
 
-from relaydeck.gateway import terminal_wire
+from relaydeck.contracts.endpoints import is_trusted_endpoint
+from relaydeck.contracts.wire import terminal as terminal_wire
 from relaydeck.gateway.cursors import (
     CursorError,
     decode_cursor,
     encode_cursor,
 )
 from relaydeck.gateway.identity import (
-    NonceStore,
     SessionStore,
     pkce_challenge,
     pkce_verify,
@@ -20,7 +20,6 @@ from relaydeck.gateway.policy import (
     authorize_command,
     command_limiter,
     input_limiter,
-    is_trusted_endpoint,
 )
 
 CAPS = frozenset({"sessions.read", "terminal.view", "terminal.control", "agents.prompt"})
@@ -197,17 +196,6 @@ def test_pkce_round_trip() -> None:
     assert pkce_verify(verifier, challenge) is True
     assert pkce_verify("w" * 64, challenge) is False
     assert pkce_verify("", challenge) is False
-
-
-def test_nonce_single_use_and_expiry() -> None:
-    store = NonceStore()
-    nonce = store.issue("oauth", 1000)
-    assert store.claim(nonce, "oauth", 1001) is True
-    assert store.claim(nonce, "oauth", 1002) is False
-    other = store.issue("oauth", 1000, ttl_ms=10)
-    assert store.claim(other, "oauth", 2000) is False
-    scoped = store.issue("enroll", 1000)
-    assert store.claim(scoped, "oauth", 1001) is False
 
 
 def test_sessions_lifecycle() -> None:

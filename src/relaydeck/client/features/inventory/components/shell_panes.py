@@ -55,6 +55,7 @@ from relaydeck.client.features.inventory.selectors import (
 )
 from relaydeck.client.features.settings.components import SettingsPage
 from relaydeck.client.features.settings.prefs import TerminalPrefs
+from relaydeck.client.features.settings.server_health import HealthPanel
 from relaydeck.client.features.usage.panel import UsageCard, UsagePanel
 from relaydeck.client.theme import LIST_WIDTH, MIN_TOUCH
 from relaydeck.domain.agent_order import CONSOLE_STATUSES
@@ -568,6 +569,13 @@ def build_usage_pane(ctx: ShellContext) -> Any:
     )
 
 
+def server_health_panel(ctx: ShellContext) -> Any:
+    """The Server health panel; it polls only while the app is in the foreground."""
+    if ctx.command_transport is None:
+        return None
+    return HealthPanel(ctx.command_transport, active=ctx.foreground, phone=ctx.mode == PHONE)
+
+
 def build_settings_page(ctx: ShellContext) -> Any:
     """Settings destination on the dark console theme."""
     account = ctx.account
@@ -593,6 +601,7 @@ def build_settings_page(ctx: ShellContext) -> Any:
         scenarios=scenarios,
         on_apply_scenario=on_apply_scenario,
         management=management,
+        server_health=server_health_panel(ctx),
         hosts_section=build_hosts_pane(ctx),
         notifications_panel=notifications_panel,
         diagnostics=diagnostics_rows(diagnostics) if diagnostics is not None else None,

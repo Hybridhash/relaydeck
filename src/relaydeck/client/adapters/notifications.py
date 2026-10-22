@@ -11,7 +11,7 @@ from relaydeck_notifications.notifications import (
     RelayDeckNotifications,
 )
 from relaydeck_notifications.notifications import tap_payload_dict as _extension_tap_dict
-from relaydeck_notifications.payload import PushPayload, parse_push_payload
+from relaydeck_notifications.payload import parse_push_payload
 
 from relaydeck.client.adapters.ports import (
     NotificationPort,
@@ -105,26 +105,3 @@ class ExtensionNotifications(NotificationPort):
 def tap_payload_dict(event: PushTapEvent) -> dict[str, str]:
     """The extension's guard input for a tap: required keys plus any opaque refs sent."""
     return _extension_tap_dict(event)
-
-
-def validated_tap(payload: PushPayload) -> PushTap:
-    """Project a guarded payload onto the tap port (refs resolve
-    server-side via the authenticated deep-link route)."""
-    return PushTap(
-        notification_id=payload.notification_id,
-        event_ref=payload.event_ref,
-        category=payload.category,
-    )
-
-
-def permission_explanation(permission: PushPermission, *, requests: int = 0) -> str | None:
-    """Quiet in-app copy for the denied state: data only, so a
-    declarative view can render it. None otherwise. The app stays fully
-    usable; the session inbox remains the source of truth."""
-    del requests  # reserved: escalation copy after repeated denials
-    if permission is PushPermission.DENIED:
-        return (
-            "Notifications are off. RelayDeck still works normally; "
-            "open the sessions list to see what needs attention."
-        )
-    return None

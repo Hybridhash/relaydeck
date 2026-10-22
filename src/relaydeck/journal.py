@@ -91,7 +91,6 @@ T = TypeVar("T")
 
 TERMINAL_STATUSES = ("succeeded", "failed", "rejected", "expired")
 NONTERMINAL_STATUSES = ("accepted", "dispatched", "acked", "unknown")
-ALL_STATUSES = NONTERMINAL_STATUSES + TERMINAL_STATUSES
 
 # Retention policy (documented above; acceptance item).
 TERMINAL_FULL_MS = 24 * 60 * 60 * 1000

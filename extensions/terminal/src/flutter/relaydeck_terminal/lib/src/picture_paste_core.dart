@@ -127,7 +127,11 @@ class PictureRegion {
     required this.eligible,
     required this.onOffer,
     required this.onReject,
+    required this.onText,
+    this.picturesEnabled = _always,
   });
+
+  static bool _always() => true;
 
   final String ownerId;
 
@@ -136,6 +140,94 @@ class PictureRegion {
 
   final void Function(String requestId, String mime, int size) onOffer;
   final void Function(String reason) onReject;
+
+  /// Text the focused terminal of this region pastes through Python's policy.
+  final void Function(String text) onText;
+
+  /// False while Python cannot take pictures: files in a paste are then ignored.
+  final bool Function() picturesEnabled;
+}
+
+/// Largest text one paste may carry (characters); Python checks it again.
+const int maxPasteText = 1024 * 1024;
+
+enum PasteAction {
+  /// Nothing of RelayDeck's owns the paste: the browser keeps its default.
+  ignore,
+
+  /// One acceptable picture, offered to Python.
+  offer,
+
+  /// Explained to the user; nothing is inserted.
+  reject,
+
+  /// Text for the focused terminal's reviewed paste.
+  terminal,
+
+  /// Text inserted into the focused Flutter text field at its caret.
+  field,
+}
+
+class PasteDecision {
+  const PasteDecision(this.action, {this.reason = ''});
+
+  final PasteAction action;
+  final String reason;
+
+  /// The browser's own paste is suppressed for every action but [ignore], so the
+  /// text can never land twice.
+  bool get takesEvent => action != PasteAction.ignore;
+}
+
+/// Decides one paste from facts alone. Pictures win over text while Python can
+/// take them; a text paste belongs to the focused terminal, else to the focused
+/// text field; one without text is refused with a reason when an input owns it.
+PasteDecision decidePaste({
+  required PasteClassification pictures,
+  required String text,
+  required bool terminalFocused,
+  required bool fieldFocused,
+  required bool pictureBusy,
+}) {
+  final focused = terminalFocused || fieldFocused;
+  final trimmed = text.trim();
+  // Office apps add a picture of the selection beside its text; inside an input the text
+  // wins. A Finder file copy carries only the file's name as text, which never lands.
+  final textWins = focused &&
+      trimmed.isNotEmpty &&
+      pictures.verdict == PasteVerdict.accept &&
+      trimmed != pictures.candidate?.name;
+  if (focused && (pictures.verdict == PasteVerdict.none || textWins) &&
+      text.length > maxPasteText) {
+    return const PasteDecision(PasteAction.reject, reason: 'text_too_large');
+  }
+  if (textWins) {
+    return PasteDecision(
+        terminalFocused ? PasteAction.terminal : PasteAction.field);
+  }
+  switch (pictures.verdict) {
+    case PasteVerdict.accept:
+      return pictureBusy
+          ? const PasteDecision(PasteAction.reject, reason: 'busy')
+          : const PasteDecision(PasteAction.offer);
+    case PasteVerdict.multiple:
+      return const PasteDecision(PasteAction.reject, reason: 'multiple');
+    case PasteVerdict.unsupported:
+      return const PasteDecision(PasteAction.reject, reason: 'unsupported');
+    case PasteVerdict.empty:
+      return const PasteDecision(PasteAction.reject, reason: 'empty');
+    case PasteVerdict.tooLarge:
+      return const PasteDecision(PasteAction.reject, reason: 'too_large');
+    case PasteVerdict.none:
+      if (!terminalFocused && !fieldFocused) {
+        return const PasteDecision(PasteAction.ignore);
+      }
+      if (text.isEmpty) {
+        return const PasteDecision(PasteAction.reject, reason: 'no_text');
+      }
+      return PasteDecision(
+          terminalFocused ? PasteAction.terminal : PasteAction.field);
+  }
 }
 
 /// The one place that decides which region, if any, owns a paste.
@@ -144,17 +236,11 @@ class PicturePasteDispatcher {
 
   void Function()? onChanged;
 
-  /// Set by the focused terminal: a text-only paste is handed to the terminal's own
-  /// paste (bracketed framing, safe-paste policy) instead of the browser's insertion.
-  bool Function(String text)? terminalPaste;
+  /// Set by the focused terminal: a text paste then goes to the terminal's own
+  /// reviewed paste in Python instead of the browser's insertion.
+  bool Function()? terminalFocused;
 
-  /// Returns true when the text was taken by a terminal and the browser must not
-  /// insert it a second time.
-  bool pasteText(String text) {
-    final take = terminalPaste;
-    if (take == null || text.isEmpty) return false;
-    return take(text);
-  }
+  bool get terminalOwnsPaste => terminalFocused?.call() ?? false;
 
   void Function() register(PictureRegion region) {
     _regions.add(region);

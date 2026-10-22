@@ -9,11 +9,11 @@ import re
 import time
 import weakref
 from collections.abc import Awaitable, Callable
-from typing import Any
+from typing import Any, cast
 
 from relaydeck.client.adapters.ports import CredentialStore
 from relaydeck.client.features.sync.transport import TransportError
-from relaydeck.contracts.schemas import SchemaError, validate
+from relaydeck.contracts.schemas import CommandRecord, CommandSubmit, SchemaError, validate
 
 MAX_RECORDS = 128
 MAX_BYTES = 131072
@@ -246,14 +246,15 @@ class PendingCommands:
             validate("relaydeck/gateway/v1/command-submit", command)
         except SchemaError:
             raise RecoveryError("Invalid command identity; nothing was sent.") from None
+        submit = cast(CommandSubmit, command)
         async with self.lock:
             await self._load()
-            key = (command["host_id"], command["command_id"])
+            key = (submit["host_id"], submit["command_id"])
             if key in self.records or any(
                 r["host"] == key[0]
-                and r["kind"] == command["kind"]
+                and r["kind"] == submit["kind"]
                 and r["kind"] != "agent.rename"
-                and r["target"] == command["target"]
+                and r["target"] == submit["target"]
                 and self.unresolved(r)
                 for r in self.records.values()
             ):
@@ -263,8 +264,8 @@ class PendingCommands:
             row = {
                 "host": key[0],
                 "id": key[1],
-                "kind": command["kind"],
-                "target": dict(command["target"]),
+                "kind": submit["kind"],
+                "target": dict(submit["target"]),
                 "created_ms": self.clock(),
                 "outcome": "pending",
                 "created": {},
@@ -283,15 +284,16 @@ class PendingCommands:
             if doc is not None:
                 try:
                     validate("relaydeck/gateway/v1/command-record", doc)
+                    record = cast(CommandRecord, doc)
                     if (
-                        doc["host_id"] != host
-                        or doc["command_id"] != command_id
-                        or doc["kind"] != previous["kind"]
-                        or doc["target"] != previous["target"]
+                        record["host_id"] != host
+                        or record["command_id"] != command_id
+                        or record["kind"] != previous["kind"]
+                        or record["target"] != previous["target"]
                     ):
                         raise ValueError
-                    outcome = doc["status"] if doc["status"] in OUTCOMES else "unknown"
-                    result = doc.get("result", {})
+                    outcome = record["status"] if record["status"] in OUTCOMES else "unknown"
+                    result = record.get("result", {})
                     created.update(
                         {k: v for k, v in result.items() if k in IDENTITIES and _identity(v)}
                     )

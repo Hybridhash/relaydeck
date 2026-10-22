@@ -1,7 +1,7 @@
 """Platform port contracts.
 
-Fake behavior, secure-storage adapter gating, clipboard adapter wiring,
-notification guard rails, and identity session flow. Native permission,
+Secure-storage adapter gating, clipboard adapter wiring and
+notification guard rails. Native permission,
 token, background-delivery, and deep-link proofs need a real device and
 are recorded as blocked.
 """
@@ -18,50 +18,14 @@ from relaydeck_notifications.notifications import RelayDeckNotifications
 from relaydeck_notifications.payload import parse_push_payload
 
 from relaydeck.client.adapters.clipboard import FletClipboard
-from relaydeck.client.adapters.fake import (
-    FakeClipboard,
-    FakeCredentialStore,
-    FakeIdentitySession,
-    FakeLifecycle,
-    FakeNotifications,
-)
 from relaydeck.client.adapters.notifications import ExtensionNotifications
 from relaydeck.client.adapters.ports import (
-    AuthCompletion,
-    LifecycleState,
-    PushPermission,
     PushTap,
 )
 from relaydeck.client.adapters.secure_storage import (
     FletSecureCredentialStore,
     SecureStorageUnavailable,
 )
-
-
-def test_fake_credential_store_round_trip() -> None:
-    async def scenario() -> None:
-        store = FakeCredentialStore()
-        assert await store.available() is True
-        assert await store.get("a") is None
-        await store.set("a", "1")
-        await store.set("b", "2")
-        assert await store.get("a") == "1"
-        await store.delete("a")
-        assert await store.get("a") is None
-        await store.clear_account()
-        assert await store.get("b") is None
-
-    asyncio.run(scenario())
-
-
-def test_fake_credential_store_unavailable_raises() -> None:
-    async def scenario() -> None:
-        store = FakeCredentialStore(available=False)
-        assert await store.available() is False
-        with pytest.raises(RuntimeError):
-            await store.set("a", "1")
-
-    asyncio.run(scenario())
 
 
 class _ScriptedSecureService:
@@ -124,17 +88,6 @@ def test_secure_storage_control_constructs() -> None:
     assert service is not None
 
 
-def test_fake_clipboard_counts_access() -> None:
-    async def scenario() -> None:
-        clip = FakeClipboard("hello")
-        assert await clip.get_text() == "hello"
-        assert clip.reads == 1
-        await clip.set_text("world")
-        assert clip.writes == ["world"]
-
-    asyncio.run(scenario())
-
-
 def test_flet_clipboard_adapter_delegates() -> None:
     async def scenario() -> None:
         calls: list[tuple[str, Any]] = []
@@ -157,16 +110,6 @@ def test_flet_clipboard_adapter_delegates() -> None:
 
 def test_clipboard_service_exists_in_core() -> None:
     assert hasattr(ft, "Clipboard")
-
-
-def test_fake_lifecycle_transitions() -> None:
-    port = FakeLifecycle()
-    seen: list[LifecycleState] = []
-    port.on_change(seen.append)
-    assert port.current() == LifecycleState.FOREGROUND
-    port.move_to(LifecycleState.BACKGROUND)
-    port.move_to(LifecycleState.FOREGROUND)
-    assert seen == [LifecycleState.BACKGROUND, LifecycleState.FOREGROUND]
 
 
 def test_push_payload_guard() -> None:
@@ -196,33 +139,6 @@ def test_push_payload_guard() -> None:
         parse_push_payload(
             {"notification_id": "n", "event_ref": "x" * 600, "category": "attention"}
         )
-
-
-def test_fake_notifications_permission_denied_stays_usable() -> None:
-    async def scenario() -> None:
-        port = FakeNotifications(permission=PushPermission.DENIED)
-        assert await port.request_permission() == PushPermission.DENIED
-        assert await port.token() is None
-        taps: list[PushTap] = []
-        port.on_tap(taps.append)
-        port.tap(PushTap("n", "e", "attention"))
-        assert taps == [PushTap("n", "e", "attention")]
-
-    asyncio.run(scenario())
-
-
-def test_fake_notifications_token_rotation() -> None:
-    async def scenario() -> None:
-        port = FakeNotifications()
-        assert await port.request_permission() == PushPermission.GRANTED
-        assert await port.token() == "fake-fcm-token-1"
-        seen: list[str] = []
-        port.on_token_refresh(seen.append)
-        port.rotate_token("fake-fcm-token-2")
-        assert seen == ["fake-fcm-token-2"]
-        assert await port.token() == "fake-fcm-token-2"
-
-    asyncio.run(scenario())
 
 
 def test_extension_notifications_guards_taps() -> None:
@@ -257,19 +173,3 @@ def test_notification_event_annotations_resolve_live() -> None:
     assert get_event_field_type(service, "on_push_tap").__name__ == "PushTapEvent"
     assert get_event_field_type(service, "on_push_token").__name__ == "PushTokenEvent"
     assert get_event_field_type(service, "on_app_link").__name__ == "AppLinkEvent"
-
-
-def test_fake_identity_session_flow() -> None:
-    async def scenario() -> None:
-        session = FakeIdentitySession()
-        url = await session.authorization_url()
-        assert url.startswith("https://")
-        assert await session.access_token() is None
-        await session.complete_callback(AuthCompletion(state="s", code="c1"))
-        assert await session.access_token() == "token-for-c1"
-        await session.complete_callback(AuthCompletion(state="s", error="access_denied"))
-        assert await session.access_token() == "token-for-c1"
-        await session.logout()
-        assert await session.access_token() is None
-
-    asyncio.run(scenario())

@@ -460,21 +460,6 @@ class ObserveSession(AttachSession):
         raise AttachError("observer has no input authority")
 
 
-def apply_controller_resize(session: AttachSession, cols: int, rows: int) -> tuple[int, int]:
-    """Apply a controller-authorized PTY geometry change.
-
-    The caller must hold the live control lease: viewers never reach
-    here (the gateway rejects their resize frames). Upstream
-    `pane.resize` is split-layout only (direction/amount) and carries no
-    PTY geometry, so it is never used here; sizing flows through the
-    attach client's local PTY winsize plus SIGWINCH, following the
-    CLI-subprocess design. Returns the applied (cols, rows).
-    """
-    _check_geometry(cols, rows)
-    session.resize(cols, rows)
-    return (session.cols, session.rows)
-
-
 class PtySession(Protocol):
     """Minimal retained-session surface: AttachSession satisfies this
     (its close() takes an optional timeout)."""

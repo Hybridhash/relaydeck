@@ -14,7 +14,6 @@ from __future__ import annotations
 import asyncio
 from collections import deque
 
-from relaydeck.client.adapters.fake import FakeClipboard
 from relaydeck.client.features.shell import ScriptedShellGatewayOps, ShellSession
 from relaydeck.client.features.shell.screen import SHELL_MODE_KEYS_KEY, mount_shell_screen
 from relaydeck.client.features.terminal.agent_session import AGENT_LIVE
@@ -30,6 +29,7 @@ from relaydeck.client.features.terminal.surfaces import (
     AGENT_WORKFLOW_DIRECT_KEY,
     mount_agent_screen,
 )
+from tests.support.fakes import FakeClipboard
 from tests.support.host_harness import render_component
 from tests.support.terminal.binding import _cancel, _control, _output, _wait_for
 from tests.support.terminal.dispatch import _agent_session, _SocketFactory, run_clean

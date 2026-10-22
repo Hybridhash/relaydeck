@@ -13,7 +13,6 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 import flet as ft
-from relaydeck_terminal.diagnostics import trace_lifecycle
 
 from relaydeck.client.components.appearance import AppearanceBridge
 from relaydeck.client.features.inventory.routing import RouteBridge
@@ -44,6 +43,7 @@ from relaydeck.client.hooks.navigation import (
 from relaydeck.client.hooks.preferences import use_preferences
 from relaydeck.client.hooks.retained import (
     use_retained_sessions,
+    use_root_trace,
     use_terminal_effects,
 )
 from relaydeck.client.hooks.sheets import use_creation_sheets
@@ -602,18 +602,12 @@ def Root(
         viewport=viewport,
     )
 
-    def trace_retained_root() -> None:
-        trace_lifecycle(
-            "root_retained",
-            owner=id(retained),
-            controller=id(controller),
-            entries=len(retained.entries()),
-            active=active_entry is not None,
-            wide=is_wide,
-        )
-
-    ft.use_effect(
-        trace_retained_root, dependencies=[retained_tick, terminal_open, is_wide, destination]
+    use_root_trace(
+        retained=retained,
+        controller=controller,
+        active=active_entry is not None,
+        wide=is_wide,
+        dependencies=[retained_tick, terminal_open, is_wide, destination],
     )
 
     shell = build_inventory_shell(

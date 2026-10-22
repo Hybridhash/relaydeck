@@ -1,4 +1,4 @@
-"""Opening and closing Keys in the split (field blurred, keyboard down)
+"""Opening and closing tools in the split (field blurred, keyboard down)
 keeps typing mode without marking the field focused, so the draft stays capped.
 Real `use_typing_focus` wiring, synthetic session; no network.
 """
@@ -39,7 +39,7 @@ def _CapHarness(session: Any, route: tuple[str, str] = ("agents", "agent-1")) ->
     )
 
 
-def test_keys_open_and_closed_in_the_blurred_split_keep_the_draft_capped() -> None:
+def test_tools_open_and_closed_in_the_blurred_split_keep_the_draft_capped() -> None:
     async def scenario() -> None:
         session, _ops, _factory, _submitted = _agent_session()
         session.open()
@@ -55,8 +55,8 @@ def test_keys_open_and_closed_in_the_blurred_split_keep_the_draft_capped() -> No
             capped = app.find("composer-draft").max_lines
             assert capped < focused  # the 40% cap is in force while the field is blurred
 
-            await app.set_props_and_fire("agent-keys-toggle", {}, "click")  # open Keys
-            await app.set_props_and_fire("agent-keys-toggle", {}, "click")  # close Keys
+            await app.set_props_and_fire("agent-tools-toggle", {}, "click")
+            await app.set_props_and_fire("agent-tools-toggle", {}, "click")
 
             # Closing Keys must not mark the field focused: the cap is unchanged.
             assert app.find("composer-draft").max_lines == capped

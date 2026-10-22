@@ -44,7 +44,7 @@ from relaydeck.connector.source import (
     HerdrSource,
     LiveSource,
 )
-from relaydeck.gateway import terminal_wire
+from relaydeck.contracts.wire import terminal as terminal_wire
 from relaydeck.gateway.app import GatewayState, create_app
 from relaydeck.gateway.production import JournalBackend
 from relaydeck.journal import CommandJournal

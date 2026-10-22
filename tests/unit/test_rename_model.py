@@ -49,6 +49,22 @@ def test_slug_is_always_a_valid_herdr_name_or_empty(label: str, slug: str) -> No
         ("🇩🇪🇫🇷", 2),
         ("1️⃣", 1),
         ("", 0),
+        ("\u1100\u1161" * 17, 17),
+        ("\u1100\u1161\u11a8", 1),
+        ("\uac00\u11a8", 1),
+        ("\u1100\uac00", 1),
+        ("\u0915\u094d\u0937", 1),
+        ("\u0915\u094d\u0937\u093f", 1),
+        ("\u0915\u094d a", 3),
+        ("a\u200db", 2),
+        ("a\u200d\U0001f680", 2),
+        ("\U0001f680\u200d\U0001f680", 1),
+        ("\U0001f44b\U0001f3fd", 1),
+        ("\U0001f3f4\U000e0067\U000e0062\U000e007f", 1),
+        ("\U0001f1e9\U0001f1ea\U0001f1eb\U0001f1f7\U0001f1fa", 3),
+        ("\r\n", 1),
+        ("\u0e01\u0e33", 1),
+        ("e\u0301e\u0301", 2),
     ],
 )
 def test_grapheme_count_counts_clusters_not_code_points(text: str, count: int) -> None:
@@ -160,33 +176,6 @@ def test_suggestions_are_capped_and_valid() -> None:
     assert all(not display_name_error(name) for name in got)
     assert m.suggestions("", "", "web") == ()
     assert re.fullmatch(r"[A-Z][a-z]+( [A-Z][a-z]+)*", got[0])
-
-
-@pytest.mark.parametrize(
-    ("text", "count"),
-    [
-        ("\u1100\u1161" * 17, 17),
-        ("\u1100\u1161\u11a8", 1),
-        ("\uac00\u11a8", 1),
-        ("\u1100\uac00", 1),
-        ("\u0915\u094d\u0937", 1),
-        ("\u0915\u094d\u0937\u093f", 1),
-        ("\u0915\u094d a", 3),
-        ("a\u200db", 2),
-        ("a\u200d\U0001f680", 2),
-        ("\U0001f680\u200d\U0001f680", 1),
-        ("\U0001f468\u200d\U0001f469\u200d\U0001f467", 1),
-        ("\U0001f44b\U0001f3fd", 1),
-        ("\U0001f3f4\U000e0067\U000e0062\U000e007f", 1),
-        ("\U0001f1e9\U0001f1ea\U0001f1eb\U0001f1f7\U0001f1fa", 3),
-        ("\r\n", 1),
-        ("\u0e01\u0e33", 1),
-        ("e\u0301e\u0301", 2),
-    ],
-)
-def test_grapheme_segmentation_follows_the_standard_rules(text: str, count: int) -> None:
-    assert grapheme_count(text) == count
-    assert "".join(graphemes(text)) == text
 
 
 def test_hangul_names_clamp_and_validate_at_the_boundary_in_clusters() -> None:

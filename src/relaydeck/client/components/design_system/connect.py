@@ -53,7 +53,6 @@ OPEN_COMMAND = f"{_CLI} open --ttl-seconds 120"
 _PAIR_TITLE = {"size": 26, "weight": 800, "height": 30 / 26}
 _STEP_TITLE = {"size": 16, "weight": 700, "height": 22 / 16}
 _FIELD_LABEL = {"size": 13, "weight": 600, "height": 18 / 13}
-_FIELD_TEXT = {"size": 13, "weight": 400, "height": 18 / 13}
 _CODE_TEXT = {"size": 22, "weight": 700, "height": 26 / 22}
 _NOTE_TEXT = {"size": 13.5, "weight": 400, "height": 19 / 13.5}
 _PHASE_STATUS = {

@@ -12,6 +12,7 @@ import time
 from typing import Any
 
 import flet as ft
+from relaydeck_terminal.diagnostics import trace_lifecycle
 
 from relaydeck.client.features.sync.controller import SyncController
 
@@ -279,3 +280,31 @@ def use_terminal_effects(
         retained.changed = lambda: None
 
     ft.use_effect(hold_terminal, dependencies=[], cleanup=release_terminal)
+
+
+def use_root_trace(
+    *,
+    retained: RetainedSessions,
+    controller: Any,
+    active: bool,
+    wide: bool,
+    dependencies: list[Any],
+) -> None:
+    """Trace `root_retained` only when its values change, not on every render."""
+    last: Any = ft.use_ref(None)
+
+    def trace() -> None:
+        values = (id(retained), id(controller), len(retained.entries()), active, wide)
+        if last.current == values:
+            return
+        last.current = values
+        trace_lifecycle(
+            "root_retained",
+            owner=values[0],
+            controller=values[1],
+            entries=values[2],
+            active=active,
+            wide=wide,
+        )
+
+    ft.use_effect(trace, dependencies=dependencies)

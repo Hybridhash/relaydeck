@@ -50,7 +50,8 @@ class PushWorker:
             except Exception:  # noqa: BLE001 - bounded recovery, no storage/provider content
                 self.error = "push_store_unavailable"
             try:
-                await asyncio.wait_for(self._wake.wait(), self.interval)
+                async with asyncio.timeout(self.interval):
+                    await self._wake.wait()
             except TimeoutError:
                 pass
 

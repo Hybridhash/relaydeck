@@ -9,7 +9,7 @@ from relaydeck_terminal import protocol
 
 from relaydeck.client.features.terminal.ui_resume import terminal_transition
 from relaydeck.client.features.terminal.warm_watch import watch_only
-from relaydeck.gateway import terminal_wire
+from relaydeck.contracts.wire import terminal as terminal_wire
 from tests.support.host_harness import run
 from tests.support.terminal.resume import _report
 from tests.support.terminal.retained_transport import mounted, requests, until

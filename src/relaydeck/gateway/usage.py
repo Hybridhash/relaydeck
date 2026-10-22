@@ -21,6 +21,7 @@ from zoneinfo import ZoneInfo
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response
 
+from relaydeck.contracts import paths
 from relaydeck.gateway.backend import BackendError
 from relaydeck.gateway.cursors import CursorError, decode_cursor
 from relaydeck.persistence_contracts import StorageUnavailable
@@ -257,6 +258,15 @@ class UsageService:
             ).hexdigest()
         except Exception:
             return ""
+
+    def refresh_attempts(self) -> list[tuple[str, int | None, str | None]]:
+        """(kind, finished_ms, result) of each tool's last on-demand refresh."""
+        status = self._limits_refresh_status() if self._limits_refresh_status is not None else {}
+        out: list[tuple[str, int | None, str | None]] = []
+        for kind, entry in status.items():
+            last = entry.get("last_attempt")
+            out.append((kind, last["finished_ms"], last["result"]) if last else (kind, None, None))
+        return out
 
     def _metadata(self, now: int) -> list[dict[str, Any]]:
         kinds: dict[str, dict[str, Any]] = {}
@@ -526,7 +536,8 @@ class UsageService:
     ) -> _Snapshot:
         """Only cache misses take the bounded report slot, until the worker truly finishes."""
         try:
-            await asyncio.wait_for(self._slot.acquire(), self.wait_s)
+            async with asyncio.timeout(self.wait_s):
+                await self._slot.acquire()
         except TimeoutError:
             raise _Busy from None
         return await self._work(
@@ -565,7 +576,8 @@ class UsageService:
     async def _produce(self, query: UsageQuery, now: int, binding: tuple[str, ...]) -> _Snapshot:
         """Coalesce validation and report work; cache hits bypass report admission entirely."""
         try:
-            await asyncio.wait_for(self._validation_slot.acquire(), self.wait_s)
+            async with asyncio.timeout(self.wait_s):
+                await self._validation_slot.acquire()
         except TimeoutError:
             raise _Busy from None
         if self._closed:
@@ -643,7 +655,7 @@ def install(
             return None, failure("not_found", 404)
         return session, None
 
-    @app.post("/v1/hosts/{host_id}/usage/limits/refresh", status_code=202)
+    @app.post(paths.USAGE_LIMITS_REFRESH, status_code=202)
     async def refresh_limits(request: Request, host_id: str) -> Response:
         """Start (or join) one on-demand pane refresh for a kind.
 
@@ -692,7 +704,7 @@ def install(
             headers=NO_STORE,
         )
 
-    @app.get("/v1/hosts/{host_id}/usage")
+    @app.get(paths.USAGE)
     async def get_usage(request: Request, host_id: str) -> Response:
         session, denied = authorized(request, host_id)
         if denied is not None:
