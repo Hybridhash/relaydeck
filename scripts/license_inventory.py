@@ -377,14 +377,16 @@ def build_inventory(root: Path) -> dict[str, object]:
 def render_table(inventory: dict[str, object]) -> str:
     lines = ["# Python (uv.lock)", "name==version | license | direct/groups"]
     for entry in inventory["python_packages"]:
-        assert isinstance(entry, dict)
+        if not isinstance(entry, dict):
+            raise SystemExit("bad inventory entry")
         scope = entry["direct"]
         if entry["groups"]:
             scope += f" [{entry['groups']}]"
         lines.append(f"{entry['name']}=={entry['version']} | {entry['license']} | {scope}")
     lines += ["", "# Dart (pubspec.yaml)", "name constraint | license | used by"]
     for entry in inventory["dart_packages"]:
-        assert isinstance(entry, dict)
+        if not isinstance(entry, dict):
+            raise SystemExit("bad inventory entry")
         lines.append(
             f"{entry['name']} {entry['constraint']} | {entry['license']} | {entry['used_by']}"
         )
@@ -407,7 +409,8 @@ def main(argv: list[str] | None = None) -> int:
     root = Path(args.root or Path(__file__).resolve().parent.parent)
     inventory = build_inventory(root)
     unknown = inventory["unknown_count"]
-    assert isinstance(unknown, int)
+    if not isinstance(unknown, int):
+        raise SystemExit("bad unknown_count")
     if args.out:
         Path(args.out).write_text(
             json.dumps(inventory, indent=2, sort_keys=True) + chr(10),

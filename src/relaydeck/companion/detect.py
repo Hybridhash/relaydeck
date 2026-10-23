@@ -311,7 +311,7 @@ def herdr_status_text(directories: Sequence[str]) -> str | None:
     if binary is None:
         return None
     try:
-        result = subprocess.run(
+        result = subprocess.run(  # noqa: S603 - absolute trusted binary, fixed args, no shell
             [binary, "integration", "status"],
             capture_output=True,
             text=True,

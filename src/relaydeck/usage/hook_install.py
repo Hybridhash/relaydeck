@@ -307,7 +307,8 @@ def install_hook(
                     ):
                         raise fs.HookFileError("invalid")
                 if upgrade:
-                    assert receipt is not None and existing_hook.raw is not None
+                    if receipt is None or existing_hook.raw is None:
+                        raise fs.HookFileError("invalid")
                     fs.atomic(target, hooks_fd, body, existing_hook, private=True)
                     upgraded = {**receipt, "hash": HOOK_SHA256}
                     fs.atomic(

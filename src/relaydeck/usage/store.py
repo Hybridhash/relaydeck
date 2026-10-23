@@ -592,7 +592,7 @@ class SqliteUsageStore:
         with self._transaction() as db:
             marks = ",".join("?" for _ in names)
             groups = db.execute(
-                "SELECT account,quota,source,MAX(observed) FROM limits "
+                "SELECT account,quota,source,MAX(observed) FROM limits "  # noqa: S608 - literal SQL fragments and placeholders, values bound
                 f"WHERE host=? AND kind=? AND source IN ({marks}) AND retired=0 "
                 "GROUP BY account,quota,source",
                 (host, kind, *names),
@@ -700,7 +700,7 @@ class SqliteUsageStore:
                     # reading (and its age) instead of vanishing.
                     keys = [w.window_key for w in snapshot.windows]
                     db.execute(
-                        "DELETE FROM limits WHERE host=? AND kind=? AND account=? AND quota=?"
+                        "DELETE FROM limits WHERE host=? AND kind=? AND account=? AND quota=?"  # noqa: S608 - literal SQL fragments and placeholders, values bound
                         f" AND window IN ({','.join('?' * (len(keys) + 1))})",
                         (*scope, *keys, ""),
                     )
@@ -1224,7 +1224,7 @@ class SqliteUsageStore:
                   AND m4.kind=c.kind))) AS ambig
           FROM candidates c),
         sess AS (SELECT host,kind,source,session,MIN(occurred) AS smin,MAX(occurred) AS smax
-          FROM ranked GROUP BY host,kind,source,session)"""
+          FROM ranked GROUP BY host,kind,source,session)"""  # noqa: S608 - literal SQL fragments and placeholders, values bound
             + inf
             + """, attributed AS (SELECT r.host,r.kind,r.source,r.session,r.event,r.occurred,
             r.day,r.model,r.counters,r.verified,r.parent_session_key,r.meter,
@@ -1408,7 +1408,7 @@ class SqliteUsageStore:
             # this transaction removes it from the shared connection.
             db.execute("DROP TABLE IF EXISTS temp.usage_attributed")
             db.execute(
-                "CREATE TEMP TABLE usage_attributed AS "
+                "CREATE TEMP TABLE usage_attributed AS "  # noqa: S608 - literal SQL fragments and placeholders, values bound
                 + self._attributed_sql(inferred=inferred)
                 + "SELECT * FROM attributed",
                 args,
@@ -1431,7 +1431,7 @@ class SqliteUsageStore:
             # NULL, so the grouping and the keyset are the same as before for every other query.
             hour = "usage_hour(occurred)" if query.hour else "NULL"
             sql = (
-                cte
+                cte  # noqa: S608 - literal SQL fragments and placeholders, values bound
                 + f""", current_gen AS (SELECT workspace,MAX(generation) AS gen FROM (
                     SELECT workspace,generation FROM mappings WHERE host=?
                     UNION ALL SELECT workspace,generation FROM pane_cwd WHERE host=?)
@@ -1471,7 +1471,7 @@ class SqliteUsageStore:
                   WHERE (day,scope,COALESCE(wire,''),kind,COALESCE(model,''),meter,
                     COALESCE(hour,-1))>(?,?,?,?,?,?,?)
                 ORDER BY day,scope,COALESCE(wire,''),kind,COALESCE(model,''),meter,
-                    COALESCE(hour,-1) LIMIT ?"""
+                    COALESCE(hour,-1) LIMIT ?"""  # noqa: S608 - literal SQL fragments and placeholders, values bound
             )
             # The first CTE already closes with ')'; additional CTEs start with a comma.
             found = db.execute(
@@ -1565,7 +1565,7 @@ class SqliteUsageStore:
                     coverage=max(previous.coverage, Coverage.UNVERIFIED, key=_COVERAGE.__getitem__),
                 )
             for kind, unmapped, linked, inferred_n, unverified in db.execute(
-                cte + "SELECT kind,COUNT(DISTINCT CASE WHEN workspace IS NULL AND verified=1 "
+                cte + "SELECT kind,COUNT(DISTINCT CASE WHEN workspace IS NULL AND verified=1 "  # noqa: S608 - literal SQL fragments and placeholders, values bound
                 "THEN json_array(source,session) END),"
                 "COUNT(DISTINCT CASE WHEN link='exact' AND verified=1 "
                 "THEN json_array(source,session) END),"
@@ -1588,7 +1588,7 @@ class SqliteUsageStore:
             pairs = [
                 (workspace, generation, day)
                 for workspace, generation, day in db.execute(
-                    cte + "SELECT workspace,generation,MAX(day) FROM attributed "
+                    cte + "SELECT workspace,generation,MAX(day) FROM attributed "  # noqa: S608 - literal SQL fragments and placeholders, values bound
                     "WHERE workspace IS NOT NULL AND verified=1 "
                     "GROUP BY workspace,generation ORDER BY workspace,generation",
                 )
@@ -1634,7 +1634,7 @@ class SqliteUsageStore:
             params.extend((workspace, gen))
         found: dict[tuple[str, int], str] = {}
         for workspace, gen, label in db.execute(
-            "SELECT workspace,generation,label FROM mappings WHERE host=? "
+            "SELECT workspace,generation,label FROM mappings WHERE host=? "  # noqa: S608 - literal SQL fragments and placeholders, values bound
             f"AND label IS NOT NULL AND ({condition}) ORDER BY first DESC",
             params,
         ):
@@ -1718,7 +1718,7 @@ class SqliteUsageStore:
             inf = ""
         with self._transaction(write=False) as db:
             rows = db.execute(
-                "SELECT e.kind,COUNT(DISTINCT json_array(e.source,e.session)) FROM events e "
+                "SELECT e.kind,COUNT(DISTINCT json_array(e.source,e.session)) FROM events e "  # noqa: S608 - literal SQL fragments and placeholders, values bound
                 "WHERE e.host=? AND e.day BETWEEN ? AND ? AND e.occurred>=? AND e.verified=1 "
                 "AND (EXISTS(SELECT 1 FROM mapping_gaps g WHERE g.source=e.source "
                 "AND g.first<=e.occurred AND (g.last IS NULL OR g.last>=e.occurred)) "
@@ -1860,23 +1860,23 @@ class SqliteUsageStore:
                 if sources:
                     marks = ",".join("?" for _ in sources)
                     flipped += db.execute(
-                        "UPDATE coverage SET retired=1 WHERE host=? AND retired=0 "
+                        "UPDATE coverage SET retired=1 WHERE host=? AND retired=0 "  # noqa: S608 - literal SQL fragments and placeholders, values bound
                         f"AND source NOT IN ({marks})",
                         (host_id, *sources),
                     ).rowcount
                     flipped += db.execute(
-                        "UPDATE coverage SET retired=0 WHERE host=? AND retired=1 "
+                        "UPDATE coverage SET retired=0 WHERE host=? AND retired=1 "  # noqa: S608 - literal SQL fragments and placeholders, values bound
                         f"AND source IN ({marks})",
                         (host_id, *sources),
                     ).rowcount
                     for table in ("cursors", "cursor_files"):
                         flipped += db.execute(
-                            f"UPDATE {table} SET retired=1 WHERE retired=0 "
+                            f"UPDATE {table} SET retired=1 WHERE retired=0 "  # noqa: S608 - literal SQL fragments and placeholders, values bound
                             f"AND substr(source,1,?)=? AND source NOT IN ({marks})",
                             (len(prefix), prefix, *sources),
                         ).rowcount
                         flipped += db.execute(
-                            f"UPDATE {table} SET retired=0 WHERE retired=1 "
+                            f"UPDATE {table} SET retired=0 WHERE retired=1 "  # noqa: S608 - literal SQL fragments and placeholders, values bound
                             f"AND substr(source,1,?)=? AND source IN ({marks})",
                             (len(prefix), prefix, *sources),
                         ).rowcount
@@ -1887,7 +1887,7 @@ class SqliteUsageStore:
                     ).rowcount
                     for table in ("cursors", "cursor_files"):
                         flipped += db.execute(
-                            f"UPDATE {table} SET retired=1 WHERE retired=0 "
+                            f"UPDATE {table} SET retired=1 WHERE retired=0 "  # noqa: S608 - literal SQL fragments and placeholders, values bound
                             "AND substr(source,1,?)=?",
                             (len(prefix), prefix),
                         ).rowcount
@@ -1895,12 +1895,12 @@ class SqliteUsageStore:
                     marks = ",".join("(?,?)" for _ in pairs)
                     flat = [part for pair in pairs for part in pair]
                     flipped += db.execute(
-                        "UPDATE limits SET retired=1 WHERE host=? AND retired=0 "
+                        "UPDATE limits SET retired=1 WHERE host=? AND retired=0 "  # noqa: S608 - literal SQL fragments and placeholders, values bound
                         f"AND (kind,source) NOT IN ({marks})",
                         (host_id, *flat),
                     ).rowcount
                     flipped += db.execute(
-                        "UPDATE limits SET retired=0 WHERE host=? AND retired=1 "
+                        "UPDATE limits SET retired=0 WHERE host=? AND retired=1 "  # noqa: S608 - literal SQL fragments and placeholders, values bound
                         f"AND (kind,source) IN ({marks})",
                         (host_id, *flat),
                     ).rowcount
@@ -1949,7 +1949,7 @@ class SqliteUsageStore:
             for table, condition in targets:
                 params = (cutoff, cutoff, remaining) if table == "mappings" else (cutoff, remaining)
                 cursor = db.execute(
-                    f"DELETE FROM {table} WHERE rowid IN "
+                    f"DELETE FROM {table} WHERE rowid IN "  # noqa: S608 - literal SQL fragments and placeholders, values bound
                     f"(SELECT rowid FROM {table} WHERE {condition} LIMIT ?)",
                     params,
                 )

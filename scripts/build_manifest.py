@@ -68,7 +68,7 @@ def sha256_file(path: Path) -> dict[str, object]:
 
 def run_capture(argv: list[str], timeout: int = 60) -> str | None:
     try:
-        proc = subprocess.run(argv, capture_output=True, text=True, timeout=timeout, check=False)
+        proc = subprocess.run(argv, capture_output=True, text=True, timeout=timeout, check=False)  # noqa: S603 - argv fixed by in-file callers, no shell
     except (OSError, subprocess.TimeoutExpired):
         return None
     if proc.returncode != 0:
@@ -209,7 +209,7 @@ def android_sdk() -> dict[str, str]:
 def jdk_version() -> dict[str, str]:
     # `java --version` prints to stdout on modern JDKs, stderr on JDK 8.
     try:
-        proc = subprocess.run(["java", "--version"], capture_output=True, text=True, timeout=60)
+        proc = subprocess.run(["java", "--version"], capture_output=True, text=True, timeout=60)  # noqa: S607 - argv fixed by in-file callers, no shell
     except (OSError, subprocess.TimeoutExpired):
         return unavailable("java executable not found")
     combined = (proc.stdout + proc.stderr).strip()

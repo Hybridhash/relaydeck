@@ -263,7 +263,7 @@ class JournalBackend(Backend):
         except JournalConflict as exc:
             raise BackendError("command_conflict", str(exc)) from None
         current = self.journal.record(cid)
-        assert current is not None
+        assert current is not None  # noqa: S101
         return record, current
 
     def accept_command(self, record: dict[str, Any], current: dict[str, Any]) -> dict[str, Any]:

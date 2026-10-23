@@ -32,6 +32,7 @@ the headless parity evidence; real-device/browser proof stays open.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import struct
 import time
@@ -141,12 +142,8 @@ async def _wait_for(predicate: Callable[[], bool], timeout_s: float = 30.0) -> N
 
 async def _cancel(task: asyncio.Task[Any]) -> None:
     task.cancel()
-    try:
+    with contextlib.suppress(asyncio.CancelledError, Exception):  # teardown races TransportError
         await task
-    except asyncio.CancelledError:
-        pass
-    except Exception:  # noqa: BLE001 - teardown races TransportError freely
-        pass
 
 
 async def _stop(task: asyncio.Task[Any], session: ShellSession) -> None:

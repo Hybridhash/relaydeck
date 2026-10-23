@@ -563,7 +563,7 @@ class PackagedRuntime:
                 self.notify()
 
     async def _connect(self) -> None:
-        assert self.auth is not None
+        assert self.auth is not None  # noqa: S101
         generation = self.generation
         token = await self.auth.access_token()
         if not token:

@@ -528,7 +528,7 @@ class PersistentStore:
                 columns += ",draft_epoch,draft_sequence"
                 values += self._clock()
             self._db.execute(
-                f"INSERT OR REPLACE INTO metadata ({columns}) VALUES "
+                f"INSERT OR REPLACE INTO metadata ({columns}) VALUES "  # noqa: S608 - literal SQL fragments, values bound
                 + "("
                 + ",".join("?" for _ in values)
                 + ")",
@@ -630,7 +630,7 @@ class PersistentStore:
         condition = "(table_name IN (?,?,?) AND expires_ms<=?) OR (table_name=? AND accessed_ms<=?)"
         with self.transaction() as tx:
             rows = tx._db.execute(
-                "SELECT * FROM records WHERE " + condition + " ORDER BY updated_ms, lookup LIMIT ?",
+                "SELECT * FROM records WHERE " + condition + " ORDER BY updated_ms, lookup LIMIT ?",  # noqa: S608 - literal SQL fragments, values bound
                 (*params, limits.MAX_SWEEP_ROWS),
             ).fetchall()
             for row in rows:
@@ -641,7 +641,8 @@ class PersistentStore:
             remaining = tx._db.execute("SELECT count(*) FROM records").fetchone()[0]
             more = (
                 tx._db.execute(
-                    "SELECT 1 FROM records WHERE " + condition + " LIMIT 1", params
+                    "SELECT 1 FROM records WHERE " + condition + " LIMIT 1",  # noqa: S608 - literal SQL fragments, values bound
+                    params,
                 ).fetchone()
                 is not None
             )
@@ -682,10 +683,11 @@ class PersistentStore:
             )
             params = (Table.DRAFT_REVISIONS.value, Table.DRAFTS.value)
             count = tx._db.execute(
-                "SELECT count(*) FROM records c WHERE " + missing, params
+                "SELECT count(*) FROM records c WHERE " + missing,  # noqa: S608 - literal SQL fragments, values bound
+                params,
             ).fetchone()[0]
             rows = tx._db.execute(
-                "SELECT c.* FROM records c WHERE "
+                "SELECT c.* FROM records c WHERE "  # noqa: S608 - literal SQL fragments, values bound
                 + missing
                 + " ORDER BY c.updated_ms, c.lookup LIMIT ?",
                 (*params, limits.MAX_SWEEP_ROWS),

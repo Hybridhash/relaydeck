@@ -215,11 +215,11 @@ class _WebsocketTransport:
             raise
 
     async def send_text(self, text: str) -> None:
-        assert self._ws is not None
+        assert self._ws is not None  # noqa: S101
         await self._ws.send(text)
 
     async def recv_text(self) -> str:
-        assert self._ws is not None
+        assert self._ws is not None  # noqa: S101
         message = await self._ws.recv()
         if isinstance(message, bytes):
             raise _ProtocolDrop("binary frame on command tunnel")
@@ -232,7 +232,7 @@ class _WebsocketTransport:
         if ws is not None:
             try:
                 await ws.close()
-            except Exception:  # noqa: BLE001 - close is best-effort
+            except Exception:  # noqa: S110 - close and bye are best-effort
                 pass
 
     async def close_queue_full(self) -> None:
@@ -299,7 +299,7 @@ class ConnectorLink:
         )
         self._opener = opener or self._open_transport
         self._sleep = sleep or asyncio.sleep
-        self._random = random.Random(config.backoff_seed)
+        self._random = random.Random(config.backoff_seed)  # noqa: S311 - jitter, not security
         self._sessions = 0
         self._dispatches = 0
         self._results = 0
@@ -580,7 +580,7 @@ class ConnectorLink:
         release = getattr(self._source, "release_output_batch", None)
         reserved = callable(take) and callable(release)
         if reserved:
-            assert callable(take)
+            assert callable(take)  # noqa: S101
             frames = take()
         else:
             frames = self._source.drain_outputs()
@@ -600,7 +600,7 @@ class ConnectorLink:
             await flush()
         finally:
             if reserved:
-                assert callable(release)
+                assert callable(release)  # noqa: S101
                 release(size)
 
     def _output_epoch_current(self, terminal_id: str, epoch: str) -> bool:
@@ -820,7 +820,7 @@ class ConnectorLink:
         """Push one live batch (upstream events + PTY bytes). Returns
         False when the upstream died: the caller drops the session so
         the next session rebootstraps (new epoch) and re-pushes."""
-        assert isinstance(self._source, LiveSource)
+        assert isinstance(self._source, LiveSource)  # noqa: S101
         try:
             events = await self._source.collect_live(LIVE_DRAIN_S)
         except HerdrError as exc:
@@ -988,7 +988,7 @@ class ConnectorLink:
     async def _collect_pty(
         self, wait_ready: Callable[[], Awaitable[None]], available: asyncio.Event
     ) -> None:
-        assert isinstance(self._source, LiveSource)
+        assert isinstance(self._source, LiveSource)  # noqa: S101
         while True:
             self._source.pump_live()
             available.set()
@@ -1171,7 +1171,7 @@ class ConnectorLink:
             pass
         try:
             await self._send(transport, {"kind": "bye"})
-        except Exception:  # noqa: BLE001 - shutdown best effort
+        except Exception:  # noqa: S110 - close and bye are best-effort
             pass
         return result
 

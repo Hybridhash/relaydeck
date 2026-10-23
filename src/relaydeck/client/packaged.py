@@ -16,6 +16,7 @@ from relaydeck.client.adapters.secure_storage import FletSecureCredentialStore
 from relaydeck.client.app import Root
 from relaydeck.client.components.appearance import chrome_style, configure_page_theme
 from relaydeck.client.features.pairing.components import PairingPanel
+from relaydeck.client.flet_invokes import install_invoke_result_guard
 from relaydeck.client.notifications_runtime import NotificationRuntime
 from relaydeck.client.packaged_runtime import PackagedRuntime
 from relaydeck.client.theme import MIN_TOUCH, palette
@@ -221,6 +222,7 @@ def _default_device_label(page: Any) -> str:
 
 
 def main(page: ft.Page) -> None:
+    install_invoke_result_guard(page.session)
     page.title = "RelayDeck"
     configure_page_theme(page)
     page.render(PackagedApp, page=page)

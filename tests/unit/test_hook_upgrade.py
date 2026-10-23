@@ -218,6 +218,8 @@ def test_the_allow_list_only_contains_the_previous_hashes_by_default() -> None:
         "eece0979aa2ccd21be47121fd2ba2a958a7a2caf8ccf4c8a3b8b24c7995c0c64",
         "f5632268feff5fa6ee8ec65e97049bbbd30f3f42f8000d977267fced84f0e5e7",
         "81833a623b5e14b8b0cf242d87ffdbe3fafb01ceee87e06845bc946fcde4914c",
+        "1cf6b549e22c8d0bc1efaf245da1630dbb242ce35c6acc85225b2909eef4b9a6",
+        "bc6f77c25219ec3b759df89de39b39960ee3c35b3393b8ad39b3131eb56e59eb",
     )
     assert HOOK_SHA256 not in PREVIOUS_HOOK_SHA256
     assert PREVIOUS_SHA256 not in PREVIOUS_HOOK_SHA256  # the test plants a synthetic one

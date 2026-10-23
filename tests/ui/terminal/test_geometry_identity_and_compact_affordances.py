@@ -47,7 +47,7 @@ def test_typing_and_icons_share_stable_fixed_height_row(shell, tier, monkeypatch
             attach_keys = ("terminal-attach-picture",) if shell else ()
             attachment_ids = tuple(app.find(key)._i for key in attach_keys)
             field = app.find(_typing_key(app))
-            identity = (row._i, keyboard._i, attachment_ids, field._i)
+            identity = (row._i, keyboard._i, attachment_ids, field.key)
             assert row.height == 40
             for key in (_typing_key(app), keyboard_key, *attach_keys):
                 path = _ancestry(app, app.find(key))
@@ -69,7 +69,7 @@ def test_typing_and_icons_share_stable_fixed_height_row(shell, tier, monkeypatch
                     row._i,
                     app.find(keyboard_key)._i,
                     tuple(app.find(key)._i for key in attach_keys),
-                    app.find(_typing_key(app))._i,
+                    app.find(_typing_key(app)).key,  # Direct resets renew the native field.
                 ) == identity
                 assert row.height == 40 and row.controls[-1].key == (
                     "shell-keyboard-semantics" if shell else "agent-keyboard-semantics"

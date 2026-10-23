@@ -43,6 +43,7 @@ if TYPE_CHECKING:
 
 from relaydeck.client.features.terminal.surfaces.actions import (
     phone_selection_actions,
+    release_terminal_keyboard,
     request_terminal_keyboard,
     selection_actions,
     use_mobile_key_actions,
@@ -97,6 +98,23 @@ def _set_native_keyboard_button(session: AgentSession, enabled: bool) -> None:
     diagnostics_logger().info("keyboard_button enabled=%s term=%s", enabled, term is not None)
     if term is not None:
         term.set_keyboard_button(enabled)
+
+
+def use_native_keyboard_button(session: AgentSession) -> Callable[[bool], None]:
+    """The screen's last keyboard-button request, re-sent when the native terminal appears."""
+    wanted: Any = ft.use_ref(None)
+    native_term = session.current_term
+
+    def request(enabled: bool) -> None:
+        wanted.current = enabled
+        _set_native_keyboard_button(session, enabled)
+
+    def reapply() -> None:
+        if native_term is not None and wanted.current is not None:
+            _set_native_keyboard_button(session, wanted.current)
+
+    ft.use_effect(reapply, dependencies=[id(native_term)])
+    return request
 
 
 def use_keyboard_state_workflow(session: AgentSession) -> None:
@@ -252,10 +270,9 @@ def mount_agent_screen(
         if scrolled is not None:
             return scrolled
         if not direct_input and scroll["scroll_input_enabled"]:
-            # Alternate-buffer scrolling may enable native gesture handling
-            # in Compose, but never native typing or changes to its draft.
+            # Alternate-buffer scrolling may enable native gestures in Compose, never typing.
             return ROUTE_DROPPED
-        result = await mobile_input(origin, data)
+        result = await mobile_input(origin, data, native_text=True)
         if (
             result == ROUTE_PTY
             and data
@@ -342,7 +359,8 @@ def mount_agent_screen(
         on_workflow_change=session.set_workflow,
         on_keyboard_change=session.set_keyboard,
         on_request_keyboard=lambda: request_terminal_keyboard(session, token, agent_direct=True),
-        on_keyboard_button=lambda enabled: _set_native_keyboard_button(session, enabled),
+        on_release_keyboard=lambda: release_terminal_keyboard(session),
+        on_keyboard_button=use_native_keyboard_button(session),
         on_key=session.press_key,
         on_toggle_modifier=session.toggle_modifier,
         on_dismiss_keys=lambda: session.set_keyboard(KEYBOARD_TEXT),

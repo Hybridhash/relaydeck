@@ -245,7 +245,7 @@ def _body(
             cards.message_card(screen.message, tokens=tokens, key="usage-state-message", tone=tone)
         ]
     wide = width == sm.WIDTH_WIDE
-    assert screen.summary is not None and screen.chart is not None
+    assert screen.summary is not None and screen.chart is not None  # noqa: S101
     empty_note = (
         [cards.empty_caption("No usage in this period", tokens=tokens, key="usage-empty")]
         if screen.empty

@@ -689,7 +689,7 @@ class HerdrSource:
         self._observe_started: dict[str, int] = {}
         self._observe_issues: dict[str, tuple[str, int | None, str]] = {}
         self._retry_clock = retry_clock
-        self._rng = random.Random(pane_sub_seed)
+        self._rng = random.Random(pane_sub_seed)  # noqa: S311 - jitter, not security
         self._attached: dict[str, tuple[AttachSession, str, str]] = {}
         self._output_changed = asyncio.Event()
         self._cancel_output_wait: Callable[[], None] | None = None
@@ -967,7 +967,7 @@ class HerdrSource:
                 continue
             try:
                 obs = self._proc_probe(pane_id, targets, self._proc_clock, deadline)
-            except Exception:  # noqa: BLE001 - a failed probe never breaks mappings
+            except Exception:  # noqa: S112 - a failed probe or read never breaks the stream
                 continue
             if obs is not None:
                 self._proc_apply(pane_id, kind, space, obs, now)
@@ -1066,11 +1066,11 @@ class HerdrSource:
             self._usage_active.pop(pane_id, None)
             self._proc_note_pane(pane, pane_id, valid=False)
             return None
-        assert isinstance(ref, dict) and isinstance(space, str)
+        assert isinstance(ref, dict) and isinstance(space, str)  # noqa: S101
         # Readers apply this same opaque-id normalization. A path only links when
         # the reader itself reports that exact identity; no basename discovery.
         value = session_text(ref["value"])
-        assert value is not None
+        assert value is not None  # noqa: S101
         known = self._usage_spaces.get(space)
         generation = known.generation if known is not None else 0
         label = known.label if known is not None else ""
@@ -2205,7 +2205,7 @@ class HerdrSource:
         pooled = self._observer_pool.acquire(
             f"{kind}:{terminal_id}", factory, self._now_ms(), allow_eviction=False
         )
-        assert isinstance(pooled, AttachSession)
+        assert isinstance(pooled, AttachSession)  # noqa: S101
         self._attached[f"{kind}:{terminal_id}"] = (pooled, terminal_id, "")
         self._observe_started[terminal_id] = self._observe_now_ms()
         retry = self._observe_retries.get(terminal_id)
@@ -2230,7 +2230,7 @@ class HerdrSource:
 
         self._wake_output_readers()
         pooled = self._pool.acquire(f"shell:{terminal_id}", factory, self._now_ms())
-        assert isinstance(pooled, AttachSession)
+        assert isinstance(pooled, AttachSession)  # noqa: S101
         self._attached[f"shell:{terminal_id}"] = (pooled, terminal_id, "")
         self._output_changed.set()
         return pooled
@@ -2263,7 +2263,7 @@ class HerdrSource:
 
         self._wake_output_readers()
         pooled = self._pool.acquire(f"agent:{target}", factory, self._now_ms())
-        assert isinstance(pooled, AttachSession)
+        assert isinstance(pooled, AttachSession)  # noqa: S101
         self._attached[f"agent:{target}"] = (pooled, target, "")
         self._output_changed.set()
         return pooled
@@ -2297,7 +2297,7 @@ class HerdrSource:
                     if not chunk:
                         break
                     drained.extend(chunk)
-            except Exception:  # noqa: BLE001 - a dead session yields nothing
+            except Exception:  # noqa: S110 - a failed probe or read never breaks the stream
                 pass  # Preserve bytes already drained before a late read failure.
             if drained:
                 self._stage(terminal_id, epoch, bytes(drained))

@@ -22,7 +22,7 @@ class Backoff:
 
     @classmethod
     def seeded(cls, seed: int) -> Backoff:
-        return cls(_random=random.Random(seed))
+        return cls(_random=random.Random(seed))  # noqa: S311 - jitter, not security
 
     def next_delay_ms(self) -> int:
         delay = min(MAX_MS, BASE_MS * (FACTOR ** min(self.attempts, 6)))

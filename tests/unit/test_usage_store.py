@@ -231,7 +231,7 @@ def test_failed_batch_rolls_back_all_records_and_cursor(tmp_path: Path) -> None:
         assert store.cursor(SOURCE).revision == 0
         assert not report(store).rows and not report(store).coverage
         assert all(
-            store._db.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == 0
+            store._db.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == 0  # noqa: S608 - literal table names
             for table in ("events", "receipts", "mappings", "limits")
         )
         write(store, (event(),))

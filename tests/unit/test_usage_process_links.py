@@ -105,7 +105,7 @@ def _herdr(
     pid: int = 123,
     *,
     group: int | None = None,
-    shell: int = 99,
+    shell_pid: int = 99,
     procs: list[dict[str, Any]] | None = None,
 ) -> str:
     """The real `herdr pane process-info` shape with synthetic values."""
@@ -116,7 +116,7 @@ def _herdr(
                 "type": "pane_process_info",
                 "process_info": {
                     "pane_id": "p1",
-                    "shell_pid": shell,
+                    "shell_pid": shell_pid,
                     "foreground_process_group_id": pid if group is None else group,
                     "foreground_processes": procs if procs is not None else [_proc(pid)],
                 },
@@ -151,7 +151,7 @@ def test_default_run_times_out() -> None:
 def test_group_pid_wins_among_several_and_shell_pid_is_ignored() -> None:
     run = FakeRun(
         {
-            "herdr": _herdr(group=123, shell=99, procs=[_proc(111), _proc(123), _proc(130)]),
+            "herdr": _herdr(group=123, shell_pid=99, procs=[_proc(111), _proc(123), _proc(130)]),
             "ps": _ps(),
             "lsof": _lsof("/root/x"),
         }
@@ -235,7 +235,7 @@ def test_real_process_info_shape_end_to_end(tmp_path: Path) -> None:
     root = tmp_path / "root"
     day = "sessions/2026/10/11"
     junk = _proc(123, argv="not-a-list", cmdline=7, cwd=None, name={"x": 1})
-    doc = json.loads(_herdr(group=123, shell=99, procs=[_proc(111), junk]))
+    doc = json.loads(_herdr(group=123, shell_pid=99, procs=[_proc(111), junk]))
     doc["result"]["process_info"]["tty"] = "/dev/ttys000"
     run = FakeRun(
         {

@@ -226,8 +226,10 @@ def _content_length(resp: object) -> int | None:
 
 
 def _fetch(url: str) -> bytes:
-    req = urllib.request.Request(url, headers={"User-Agent": "RelayDeck-web-build/1.0"})
-    with urllib.request.urlopen(req, timeout=60) as resp:
+    if not url.startswith("https://"):
+        raise FontError("https only")
+    req = urllib.request.Request(url, headers={"User-Agent": "RelayDeck-web-build/1.0"})  # noqa: S310 - https checked above
+    with urllib.request.urlopen(req, timeout=60) as resp:  # noqa: S310 - https checked above
         body = resp.read()
         advertised = _content_length(resp)
     if advertised is not None and advertised != len(body):
@@ -291,7 +293,8 @@ def main(argv: list[str]) -> None:
     out, cache, cjk = Path(argv[1]), Path(argv[2]), argv[3] == "1"
     js = (out / "main.dart.js").read_text()
     paths = sorted(set(re.findall(r'"([a-z0-9]+/v[0-9]+/[A-Za-z0-9_.-]+\.(?:woff2|ttf|otf))"', js)))
-    assert paths, "no fallback font paths found in main.dart.js"
+    if not paths:
+        raise SystemExit("no fallback font paths found in main.dart.js")
     if not cjk:
         paths = [p for p in paths if not p.startswith(CJK)]
     elif {p.split("/")[0] + "/" for p in paths if p.startswith(CJK)} != set(CJK):

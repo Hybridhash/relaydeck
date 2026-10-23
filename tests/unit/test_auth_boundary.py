@@ -10,6 +10,7 @@ import pytest
 
 from relaydeck.client.features.auth.callback import (
     CallbackError,
+    ParsedCallback,
     parse_callback,
     state_matches,
 )
@@ -145,6 +146,25 @@ def test_state_mismatch_keeps_tokens() -> None:
         assert snap.error == "state mismatch"
         assert http.calls == []
         assert await creds.get("access_token") is None
+
+    asyncio.run(scenario())
+
+
+def test_callback_without_code_fails_closed_before_any_exchange(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def scenario() -> None:
+        service, creds, http, _ = _service()
+        await service.begin_login()
+        state = await creds.get("oauth_state") or ""
+        monkeypatch.setattr(
+            "relaydeck.client.features.auth.service.parse_callback",
+            lambda *_a, **_k: ParsedCallback(None, state, None, ""),
+        )
+        snap = await service.complete_callback("dev.relaydeck.app://oauth?state=x")
+        assert snap.state == AuthState.ERROR and snap.error == "missing code"
+        assert http.calls == []
+        assert await creds.get("oauth_verifier") is not None  # nothing consumed
 
     asyncio.run(scenario())
 

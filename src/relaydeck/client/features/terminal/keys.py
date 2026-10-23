@@ -378,7 +378,7 @@ class KeyInputSession:
         if data is None:
             return None
         key = normalize_key_name(name)
-        assert key is not None  # encode_key succeeded, so the name resolved
+        assert key is not None  # encode_key succeeded, so the name resolved  # noqa: S101
         emission = KeyEmission(self._target_id, generation, data, _label(key, mods))
         self._outbox.append(emission)
         self._pending.clear()
@@ -441,7 +441,7 @@ class KeyInputSession:
         if generation is None:
             return None
         data = encode_key("c", frozenset({MOD_CTRL}))
-        assert data == b"\x03"  # C0 pairing fixture
+        assert data == b"\x03"  # C0 pairing fixture  # noqa: S101
         emission = KeyEmission(self._target_id, generation, data, "ctrl+c")
         self._outbox.append(emission)
         return emission

@@ -104,11 +104,14 @@ class HighlightView extends StatelessWidget {
       padding: padding,
       decoration: d,
       child: selectable
-          ? SelectableText.rich(TextSpan(
-              style: style,
-              children:
-                  _convert(highlight.parse(source, language: language).nodes!),
-            ))
+          ? SelectableText.rich(
+              TextSpan(
+                style: style,
+                children: _convert(
+                    highlight.parse(source, language: language).nodes!),
+              ),
+              magnifierConfiguration: TextMagnifierConfiguration.disabled,
+            )
           : Text.rich(
               TextSpan(
                 style: style,

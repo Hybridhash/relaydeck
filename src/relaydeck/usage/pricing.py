@@ -247,7 +247,7 @@ def _load_pin(path: Path) -> PriceTable:
                     raise ValueError
                 else:
                     prices[name] = float(value)
-            assert prices["input"] is not None and prices["output"] is not None
+            assert prices["input"] is not None and prices["output"] is not None  # noqa: S101
             threshold = row.get("tier_threshold_tokens")
             if threshold is None:
                 if any(prices[name] is not None for name in above_fields):

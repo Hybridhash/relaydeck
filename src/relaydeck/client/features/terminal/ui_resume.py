@@ -438,7 +438,7 @@ class TerminalUIResumes:
         # Bind before scheduling so early cancellation cannot strand output on a dead channel.
         try:
             term.rebind_transport()
-        except Exception:  # noqa: BLE001 - best effort; the attempt re-resolves
+        except Exception:  # noqa: S110 - best-effort; the attempt re-resolves
             pass
         # Publish/fence before scheduling: no queued editor or native send may race the probe.
         self._active[id(term)] = self._seen[id(term)] = attempt

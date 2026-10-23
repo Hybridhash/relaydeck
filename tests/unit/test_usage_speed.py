@@ -63,7 +63,7 @@ def _events() -> tuple[UsageEvent, ...]:
 
 
 def test_sql_totals_match_legacy_totals_randomised(tmp_path: Path) -> None:
-    rng = random.Random(7)
+    rng = random.Random(7)  # noqa: S311 - seeded test data
     with SqliteUsageStore(tmp_path / "usage.db", "UTC", prices=PRICES, clock=lambda: NOW) as store:
         events = list(_events())
         for i in range(120):
@@ -206,7 +206,7 @@ def test_collector_duty_floor(tmp_path: Path) -> None:
 
 
 def test_report_perf_60k_sql_is_not_slower_than_legacy(tmp_path: Path) -> None:
-    rng = random.Random(42)
+    rng = random.Random(42)  # noqa: S311 - seeded test data
     with SqliteUsageStore(tmp_path / "usage.db", "UTC", prices=PRICES, clock=lambda: NOW) as store:
         db = store._db
         rows = []

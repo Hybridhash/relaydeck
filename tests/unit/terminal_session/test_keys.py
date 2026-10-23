@@ -287,3 +287,44 @@ def test_a_shell_has_no_store_so_it_can_never_route_to_a_draft() -> None:
         assert rig.sent == [b"ls"]
 
     run(go())
+
+
+@pytest.mark.parametrize("blocked", ["default_review", "unbound", "paused", "background"])
+def test_native_bulk_text_without_a_live_review_port_is_dropped(blocked: str) -> None:
+    async def go() -> None:
+        rig = Rig()
+        if blocked == "unbound":
+            rig.bound = False
+        elif blocked == "paused":
+            rig.paused = True
+        elif blocked == "background":
+            rig.foreground = False
+        assert (
+            await rig.input.handle_view_input(ORIGIN_TEXT, b"one\ntwo", native_text=True)
+            == ROUTE_DROPPED
+        )
+        assert rig.sent == [] and rig.session.outbox == ()
+
+    run(go())
+
+
+def test_shell_typing_never_routes_to_a_draft_even_without_assert() -> None:
+    async def go() -> None:
+        rig = Rig(WORKFLOW_AGENT_COMPOSER, agent=True)
+        shell_input = KeyInput(
+            KeyHooks(
+                paused=lambda: False,
+                foreground=lambda: True,
+                bound=lambda: True,
+                epoch=lambda: 1,
+                keys=lambda: rig.session,
+                modes=lambda: rig.modes,
+                notify=rig._notify,
+                store=lambda: rig.store,
+            )
+        )
+        with pytest.raises(ValueError, match="never route to a draft"):
+            await shell_input.type_text("ls")
+        assert rig.sent == []
+
+    run(go())

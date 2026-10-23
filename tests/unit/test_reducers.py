@@ -233,7 +233,7 @@ def test_seeded_reorder_converges() -> None:
     ]
     results = []
     for seed in range(8):
-        rng = random.Random(seed)
+        rng = random.Random(seed)  # noqa: S311 - seeded test data
         order = list(events)
         rng.shuffle(order)
         # Deliver each event possibly twice, in shuffled order, through a

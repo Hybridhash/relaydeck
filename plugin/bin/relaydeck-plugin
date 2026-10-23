@@ -26,7 +26,7 @@ EXIT_NOT_READY = 3
 
 # The public repository and the release tag the install hint points at.
 REPO_URL = "https://github.com/Hybridhash/relaydeck"
-TAG = "v0.2.4"
+TAG = "v0.2.5"
 
 # Never forwarded to a child process, whatever the parent environment holds.
 DROPPED_ENV = ("HERDR_PLUGIN_CONTEXT_JSON",)

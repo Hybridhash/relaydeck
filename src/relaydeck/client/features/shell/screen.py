@@ -82,6 +82,7 @@ from relaydeck.client.features.terminal.surfaces import (
     use_mobile_key_actions,
     use_paste_fallback,
 )
+from relaydeck.client.features.terminal.surfaces.direct_typing import use_direct_reset_requests
 from relaydeck.client.features.terminal.surfaces.screen_overlays import paste_layer
 from relaydeck.client.theme import palette
 
@@ -241,6 +242,14 @@ def ShellScreen(
     phone = tier != "expanded"
 
     typing_open, set_typing_open = ft.use_state(False)
+    reset_requests, reset_action = use_direct_reset_requests()
+    on_mobile_item = reset_action(on_mobile_item, keys_only=True)
+    on_key, on_input = reset_action(on_key), reset_action(on_input)
+    on_paste = reset_action(on_paste)
+    on_confirm_paste, on_cancel_paste = (
+        reset_action(on_confirm_paste),
+        reset_action(on_cancel_paste),
+    )
 
     def request_keyboard() -> None:
         set_typing_open(True)
@@ -422,6 +431,7 @@ def ShellScreen(
             and review is None
             and not keyboard_closing,
             binding=direct_binding,
+            reset_requests=reset_requests,
             field_ref=direct_field,
             focus_requests=focus_requests,
             focus_handled=focus_handled,
@@ -779,7 +789,7 @@ def mount_shell_screen(
         scrolled = await native_scroll(origin, data)
         if scrolled is not None:
             return scrolled
-        return await mobile_input(origin, data)
+        return await mobile_input(origin, data, native_text=True)
 
     async def _on_copy(anchor: int, focus: int) -> str:
         return await session.copy_selection(sheet_text, anchor, focus)

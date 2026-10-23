@@ -116,7 +116,7 @@ class AuthService:
         return self._snapshot
 
     def subscribe(self, listener: Callable[[AuthSnapshot], None]) -> None:
-        assert self._listeners is not None
+        assert self._listeners is not None  # noqa: S101
         self._listeners.append(listener)
 
     def unsubscribe(self, listener: Callable[[AuthSnapshot], None]) -> None:
@@ -125,7 +125,7 @@ class AuthService:
 
     def _emit(self, snapshot: AuthSnapshot) -> None:
         self._snapshot = snapshot
-        assert self._listeners is not None
+        assert self._listeners is not None  # noqa: S101
         for listener in list(self._listeners):
             listener(snapshot)
 
@@ -207,7 +207,10 @@ class AuthService:
             )
             self._emit(snapshot)
             return snapshot
-        assert parsed.code is not None
+        if parsed.code is None:
+            snapshot = AuthSnapshot(AuthState.ERROR, error="missing code", can_retry=True)
+            self._emit(snapshot)
+            return snapshot
         self._emit(AuthSnapshot(AuthState.EXCHANGING))
         verifier = await self.credentials.get(VERIFIER_KEY)
         # Consume state before a network await. An uncertain exchange is never replayed.

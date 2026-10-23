@@ -259,7 +259,7 @@ class _Tab:
 class _Run:
     def __init__(self, ctx: FetchContext) -> None:
         bundle = ctx.tui
-        assert bundle is not None  # checked by fetch()
+        assert bundle is not None  # checked by fetch()  # noqa: S101
         self.ctx = ctx
         self.bundle = bundle
         self.recipe: TuiRecipe = bundle.recipe
@@ -696,7 +696,7 @@ class _Run:
     def warm_up(self, tab: _Tab) -> None:
         """The tool shows no usage before its first reply: wait for the launch message's answer
         and for the prompt to come back. Nothing is typed here."""
-        assert self.recipe.warmup_marker is not None
+        assert self.recipe.warmup_marker is not None  # noqa: S101
         wait_ms = int(_USAGE_S * 1000)
         if not self.seam.wait_output(
             tab.pane_id,
@@ -845,7 +845,7 @@ class _Run:
             try:
                 windows = self.run_in_tab(tab, resume_id)
             except _RetryFresh:
-                assert tab is not None
+                assert tab is not None  # noqa: S101
                 self.close_quietly(tab)
                 tab = self.create_tab(workspace, cwd)
                 windows = self.run_in_tab(tab, None)

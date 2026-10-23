@@ -313,10 +313,17 @@ class SessionFacade:
         return await self._key_input.type_text(text, token=token)
 
     async def handle_view_input(
-        self, origin: int, data: bytes, *, token: tuple[int, int] | None = None
+        self,
+        origin: int,
+        data: bytes,
+        *,
+        token: tuple[int, int] | None = None,
+        native_text: bool = False,
     ) -> str:
         """Extension input packets, generation-bound (see `KeyInput.handle_view_input`)."""
-        return await self._key_input.handle_view_input(origin, data, token=token)
+        return await self._key_input.handle_view_input(
+            origin, data, token=token, native_text=native_text
+        )
 
     async def press_key(
         self, name: str, *, physical_modifiers: frozenset[str] = frozenset()

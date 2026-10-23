@@ -74,7 +74,7 @@ class HostApp:
             ):
                 try:
                     value = getattr(control, attr, None)
-                except Exception:  # noqa: BLE001 - tolerant tree walk
+                except Exception:  # noqa: S112 - tolerant tree walk
                     continue
                 if value is None:
                     continue

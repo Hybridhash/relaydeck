@@ -508,7 +508,7 @@ class _Reader:
         parents: dict[str, str | None] = {}
         try:
             cursor = db.execute(
-                f"SELECT {_text('id')}, {_text('cwd')}, {_text('parent_session_id')}"
+                f"SELECT {_text('id')}, {_text('cwd')}, {_text('parent_session_id')}"  # noqa: S608 - constant table and column names
                 " FROM sessions ORDER BY id"
             )
             while True:
@@ -582,7 +582,7 @@ class _Reader:
             tail: list[Any] | None = None
             if usage_cols is not None and resume_table in (None, "u"):
                 query = (
-                    f"SELECT {_text('session_id')}, {_text('model')},"
+                    f"SELECT {_text('session_id')}, {_text('model')},"  # noqa: S608 - constant table and column names
                     f" {_text('billing_provider')}, {_text('billing_base_url')},"
                     f" {_text('billing_mode')}, {_text('task')},"
                     " api_call_count, input_tokens, output_tokens,"
@@ -640,7 +640,7 @@ class _Reader:
             if usage_cols is None and sessions_cols is not None and resume_table in (None, "s"):
                 start = resume_key if isinstance(resume_key, str) else None
                 query = (
-                    f"SELECT {_text('id')}, {_text('model')}, {_text('cwd')},"
+                    f"SELECT {_text('id')}, {_text('model')}, {_text('cwd')},"  # noqa: S608 - constant table and column names
                     f" {_text('parent_session_id')}, started_at,"
                     " last_activity_at, ended_at, api_call_count,"
                     " input_tokens, output_tokens, cache_read_tokens,"
@@ -818,7 +818,7 @@ def _scan_ids(
             for table, column in ((USAGE_TABLE, "session_id"), (SESSIONS_TABLE, "id")):
                 if table not in names or capped:
                     continue
-                cursor = db.execute(f"SELECT {_text(column)} FROM {table}")
+                cursor = db.execute(f"SELECT {_text(column)} FROM {table}")  # noqa: S608 - constant table and column names
                 while not capped:
                     chunk = cursor.fetchmany(_FETCH_ROWS)
                     if not chunk:

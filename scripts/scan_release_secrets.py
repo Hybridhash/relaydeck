@@ -148,8 +148,8 @@ def _git_files(root: str) -> list[str]:
 
     Raises GitEnumerationError when git is unavailable, times out or fails."""
     try:
-        proc = subprocess.run(  # noqa: S603 - fixed argv, no shell
-            ["git", "-C", root, "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+        proc = subprocess.run(  # noqa: S603, S607 - fixed argv, no shell; git from PATH
+            ["git", "-C", root, "ls-files", "-z", "--cached", "--others", "--exclude-standard"],  # noqa: S607 - fixed argv, no shell; git from PATH
             capture_output=True,
             timeout=60,
             check=False,

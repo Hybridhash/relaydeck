@@ -86,6 +86,7 @@ class TextControl extends StatelessWidget {
         ? (spans.isNotEmpty)
             ? SelectableText.rich(
                 TextSpan(text: text, style: style, children: spans),
+                magnifierConfiguration: TextMagnifierConfiguration.disabled,
                 maxLines: maxLines,
                 textAlign: textAlign,
                 cursorColor: selectionCursorColor,
@@ -99,6 +100,7 @@ class TextControl extends StatelessWidget {
               )
             : SelectableText(
                 text,
+                magnifierConfiguration: TextMagnifierConfiguration.disabled,
                 semanticsLabel: semanticsLabel,
                 maxLines: maxLines,
                 style: style,

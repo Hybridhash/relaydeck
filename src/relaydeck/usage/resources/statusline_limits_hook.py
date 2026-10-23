@@ -25,11 +25,17 @@ READ_DEADLINE_S = 2.0
 DEFAULT_CACHE = Path.home() / ".config/relaydeck/state/statusline-limits.json"
 LOCK_NAME = ".statusline-limits.lock"
 # Lock file: "<receipt_ms>:<confirm_ms>:<generation>" as ASCII. The receipt is written on every
-# confirmation and fences older writers. The confirm time moves only when the API generation
-# changes.
+# confirmation and fences older writers. The confirm time moves only on a fresh payload that
+# carries limit rows.
 LOCK_RE = re.compile(rb"([0-9]{1,16}):([0-9]{1,16})?:([0-9a-f]{32})?")
 LEGACY_LOCK_RE = re.compile(rb"[0-9]{1,16}")
 GENERATION_DOMAIN = b"relaydeck-api-generation-v1\0"
+SESSION_DOMAIN = b"relaydeck-session-v1\0"
+# One "<session digest>:<generation>" line per session, oldest update first.
+SESSIONS_NAME = ".statusline-sessions"
+SESSION_RE = re.compile(rb"([0-9a-f]{32}):([0-9a-f]{32})")
+MAX_SESSIONS = 64
+SESSIONS_MAX_BYTES = MAX_SESSIONS * 66
 
 
 def too_deep(raw: bytes, limit: int = MAX_DEPTH) -> bool:
@@ -97,6 +103,14 @@ def api_generation(payload: dict[str, Any]) -> str | None:
     return hashlib.sha256(material).hexdigest()[:32]
 
 
+def session_key(payload: dict[str, Any]) -> str | None:
+    """Digest of the session id under its own domain string; the raw id is never stored."""
+    session = payload.get("session_id")
+    if not isinstance(session, str) or not 0 < len(session) <= 256:
+        return None
+    return hashlib.sha256(SESSION_DOMAIN + session.encode("utf-8")).hexdigest()[:32]
+
+
 def read_lock(fd: int) -> tuple[int, int | None, str | None] | None:
     """(receipt_ms, confirm_ms, generation) from the lock file, or None when empty or malformed."""
     os.lseek(fd, 0, os.SEEK_SET)
@@ -136,28 +150,109 @@ def windows_from(value: object) -> dict[str, dict[str, int | float]]:
     return windows
 
 
-def merge_windows(
-    old: dict[str, dict[str, int | float]], new: dict[str, dict[str, int | float]]
+def live(
+    windows: dict[str, dict[str, int | float]], now_ms: int
 ) -> dict[str, dict[str, int | float]]:
-    """Reconcile concurrent sessions per window. Both maps are validated by windows_from.
+    return {name: row for name, row in windows.items() if row["resets_at"] * 1000 > now_ms}
 
-    Each session reports the whole account's limits, and usage only rises within a reset
-    window, so within the newest resets_at the maximum used percentage wins. A newer reset
-    replaces that window even when lower; an older reset is ignored; a window the payload
-    omits is kept until its reset passes (the reader marks expired windows). The merge is
-    order-independent: it depends only on the two maps, never on arrival order.
-    """
+
+def merge_windows(
+    old: dict[str, dict[str, int | float]], new: dict[str, dict[str, int | float]], kind: str
+) -> dict[str, dict[str, int | float]]:
+    """Merge live rows: add missing rows; fresh replaces; repaint preserves existing rows.
+    Baseline accepts newer resets; legacy also accepts higher use at equal reset."""
     merged = dict(old)
     for name, row in new.items():
         prev = merged.get(name)
-        if prev is None or row["resets_at"] > prev["resets_at"]:
+        if prev is None or kind == "fresh":
+            merged[name] = row
+        elif kind == "repaint":
+            continue
+        elif row["resets_at"] > prev["resets_at"]:
             merged[name] = row
         elif (
-            row["resets_at"] == prev["resets_at"]
+            kind == "legacy"
+            and row["resets_at"] == prev["resets_at"]
             and row["used_percentage"] > prev["used_percentage"]
         ):
             merged[name] = row
     return merged
+
+
+def classify(known: dict[str, str], session: str | None, generation: str | None) -> str:
+    if session is None or generation is None:
+        return "legacy"
+    stored = known.get(session)
+    if stored is None:
+        return "baseline"
+    return "repaint" if stored == generation else "fresh"
+
+
+def remember(
+    known: dict[str, str], session: str | None, generation: str | None, kind: str
+) -> dict[str, str]:
+    """A fresh or first-seen session moves to the end; the oldest entries are evicted."""
+    if session is None or generation is None or kind in ("legacy", "repaint"):
+        return known
+    updated = {key: value for key, value in known.items() if key != session}
+    updated[session] = generation
+    while len(updated) > MAX_SESSIONS:
+        del updated[next(iter(updated))]
+    return updated
+
+
+def read_sessions(path: Path) -> dict[str, str]:
+    """The stored session map, or an empty one when the file is absent or untrustworthy."""
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except OSError:
+        return {}
+    with os.fdopen(fd, "rb") as stream:
+        info = os.fstat(stream.fileno())
+        if (
+            not stat.S_ISREG(info.st_mode)
+            or info.st_uid != os.getuid()
+            or info.st_nlink != 1
+            or info.st_mode & 0o077
+            or info.st_size > SESSIONS_MAX_BYTES
+        ):
+            return {}
+        raw = stream.read(SESSIONS_MAX_BYTES + 1)
+    lines = raw.split(b"\n")
+    if len(raw) > SESSIONS_MAX_BYTES or lines.pop() != b"":
+        return {}
+    known: dict[str, str] = {}
+    for line in lines:
+        match = SESSION_RE.fullmatch(line)
+        if match is None or match[1].decode() in known:
+            return {}
+        known[match[1].decode()] = match[2].decode()
+    return known if len(known) <= MAX_SESSIONS else {}
+
+
+def sync_directory(directory: Path) -> None:
+    fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def write_atomic(target: Path, data: bytes) -> None:
+    fd, temporary = tempfile.mkstemp(prefix=".statusline-", suffix=".tmp", dir=target.parent)
+    try:
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(data)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, target)
+    except BaseException:
+        try:
+            os.unlink(temporary)
+        except OSError:
+            pass
+        raise
+    sync_directory(target.parent)
 
 
 def read_cache(path: Path) -> dict[str, Any] | None:
@@ -195,20 +290,14 @@ def persist(
     windows: dict[str, dict[str, int | float]],
     captured_ms: int,
     generation: str | None = None,
+    session: str | None = None,
 ) -> bool:
-    """Receipt time belongs to the caller, before locking. The payload merges with the stored
-    windows per merge_windows: a merged no-change leaves the cache alone, and moves the confirm
-    time only when the API generation changed (a repaint is not new evidence)."""
-    temporary: str | None = None
+    """Persist classified windows under the receipt fence; only fresh live limits confirm freshness.
+    Consume the generation last; empty payloads update bookkeeping only."""
     try:
         if not path.is_absolute() or any(p.is_symlink() for p in (path, *path.parents)):
             return False
-        if (
-            not windows
-            or windows_from(windows) != windows
-            or type(captured_ms) is not int
-            or captured_ms < 0
-        ):
+        if windows_from(windows) != windows or type(captured_ms) is not int or captured_ms < 0:
             return False
         path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         if any(p.is_symlink() for p in path.parents) or path.parent.stat().st_uid != os.getuid():
@@ -241,49 +330,50 @@ def persist(
             # an older DIFFERENT payload winning after a newer identical repaint, while
             # the cache's captured_ms remains the first actual observation of that payload.
             prior = read_lock(lock.fileno())
-            latest = prior[0] if prior is not None else -1
-            if captured_ms < latest:
+            if prior is not None and captured_ms < prior[0]:
                 return False
-            seen = prior[2] if prior is not None else None
-            changed = generation is not None and generation != seen
-            confirm = captured_ms if changed else (prior[1] if prior is not None else None)
-            kept = generation if generation is not None else seen
-            if old is not None:
-                if captured_ms < old["captured_ms"]:
-                    return False
-                windows = merge_windows(old["windows"], windows)
-                if windows == old["windows"]:
-                    _receipt(lock.fileno(), captured_ms, confirm, kept)
-                    return True
-            fd, temporary = tempfile.mkstemp(prefix=".statusline-", suffix=".tmp", dir=path.parent)
-            with os.fdopen(fd, "wb") as stream:
-                stream.write(
-                    json.dumps(
-                        {"captured_ms": captured_ms, "windows": windows},
-                        sort_keys=True,
-                        separators=(",", ":"),
-                        allow_nan=False,
-                    ).encode()
+            if old is not None and captured_ms < old["captured_ms"]:
+                return False
+            sessions_path = path.parent / SESSIONS_NAME
+            known = read_sessions(sessions_path)
+            kind = classify(known, session, generation)
+            incoming = live(windows, captured_ms)
+            confirm = prior[1] if prior is not None else None
+            if kind == "fresh" and incoming:
+                confirm = captured_ms
+            kept = generation if generation is not None else (prior[2] if prior else None)
+            receipted = False
+            if windows:
+                stored = live(old["windows"], captured_ms) if old is not None else {}
+                if kind == "fresh":
+                    stored = {k: v for k, v in stored.items() if k not in windows or k in incoming}
+                merged = merge_windows(stored, incoming, kind)
+                if not merged:
+                    if old is not None:
+                        # Fence older writers before deleting the cache timestamp.
+                        _receipt(lock.fileno(), captured_ms, confirm, kept)
+                        receipted = True
+                        path.unlink()
+                        sync_directory(path.parent)
+                elif old is None or merged != old["windows"]:
+                    body = {"captured_ms": captured_ms, "windows": merged}
+                    write_atomic(
+                        path,
+                        json.dumps(
+                            body, sort_keys=True, separators=(",", ":"), allow_nan=False
+                        ).encode(),
+                    )
+            if not receipted:
+                _receipt(lock.fileno(), captured_ms, confirm, kept)
+            # Publish the cache and receipt before consuming this generation.
+            remembered = remember(known, session, generation, kind)
+            if list(remembered.items()) != list(known.items()):
+                write_atomic(
+                    sessions_path, "".join(f"{k}:{v}\n" for k, v in remembered.items()).encode()
                 )
-                stream.flush()
-                os.fsync(stream.fileno())
-            os.replace(temporary, path)
-            temporary = None
-            directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-            try:
-                os.fsync(directory)
-            finally:
-                os.close(directory)
-            _receipt(lock.fileno(), captured_ms, confirm, kept)
-            return True
+            return bool(windows)
     except (OSError, ValueError, TypeError, OverflowError, RecursionError):
         return False
-    finally:
-        if temporary is not None:
-            try:
-                os.unlink(temporary)
-            except OSError:
-                pass
 
 
 def _receipt(fd: int, receipt_ms: int, confirm_ms: int | None, generation: str | None) -> None:
@@ -330,6 +420,7 @@ def main() -> int:
                     windows_from(payload.get("rate_limits")),
                     receipt,
                     api_generation(payload),
+                    session_key(payload),
                 )
     except (OSError, ValueError, TypeError, OverflowError, RecursionError):
         pass

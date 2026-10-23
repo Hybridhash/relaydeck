@@ -250,6 +250,7 @@ class _CupertinoTextFieldControlState extends State<CupertinoTextFieldControl> {
     }
 
     Widget textField = CupertinoTextField(
+        magnifierConfiguration: TextMagnifierConfiguration.disabled,
         style: textStyle,
         textAlignVertical: textVerticalAlign != null
             ? TextAlignVertical(y: textVerticalAlign)

@@ -115,7 +115,7 @@ class RendererBinding:
         for sink in list(self._sinks.values()):
             try:
                 sink(data)
-            except Exception:  # noqa: BLE001
+            except Exception:  # noqa: S110 - a dead renderer must not kill the stream
                 pass
 
     # -- view mount ---------------------------------------------------------
@@ -289,7 +289,7 @@ class RendererBinding:
                         reset(reason=reason)
                     else:
                         reset()
-                except Exception:  # noqa: BLE001 - renderer best effort
+                except Exception:  # noqa: S110 - a dead renderer must not kill the stream
                     pass
 
     async def reset_history(self, current: Callable[[], bool]) -> bool:

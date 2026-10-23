@@ -72,7 +72,7 @@ async def watch_only(
         if previous is not None:
             try:
                 await previous.close()
-            except Exception:
+            except Exception:  # noqa: S110 - release closes the old socket anyway
                 pass  # Release still closes the old server-side socket/lease.
         if old_lease is not None:
             await session._ops.release_lease(old_lease.lease_id)

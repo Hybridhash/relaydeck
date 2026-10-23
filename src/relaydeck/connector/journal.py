@@ -192,7 +192,7 @@ class ConnectorDispatch:
                 "error_code": "command_conflict",
             }
         current = await self._journal.run(self._journal.record, command_id)
-        assert current is not None
+        assert current is not None  # noqa: S101
         if current["status"] != "accepted":
             # Redelivered dispatch for a settled intent: recorded outcome,
             # zero new Herdr calls (never dispatches twice).
@@ -206,7 +206,7 @@ class ConnectorDispatch:
                 now=now,
             )
             current = await self._journal.run(self._journal.record, command_id)
-            assert current is not None
+            assert current is not None  # noqa: S101
             return self._result_doc(current)
         # Write-ahead: dispatched BEFORE the first Herdr byte, so a crash
         # here reconciles to unknown, never to a blind retry. A refused
@@ -216,7 +216,7 @@ class ConnectorDispatch:
             lambda: self._journal.mark_dispatched(command_id, now=self._now())
         ):
             current = await self._journal.run(self._journal.record, command_id)
-            assert current is not None
+            assert current is not None  # noqa: S101
             return self._result_doc(current)
         try:
             if self._epoch_probe is not None and current["host_epoch"] != self._epoch_probe():
@@ -239,7 +239,7 @@ class ConnectorDispatch:
                 result_digest=result_digest_for(result) if result else "",
             )
             current = await self._journal.run(self._journal.record, command_id)
-            assert current is not None
+            assert current is not None  # noqa: S101
             return self._result_doc(current)
         except (TimeoutError, OSError) as exc:
             await self._journal.run(self._journal.mark_unknown, command_id, now=self._now())
@@ -254,7 +254,7 @@ class ConnectorDispatch:
             now=self._now(),
         )
         current = await self._journal.run(self._journal.record, command_id)
-        assert current is not None
+        assert current is not None  # noqa: S101
         return self._result_doc(current)
 
     async def _execute(

@@ -59,7 +59,7 @@ def test_clipboard_read_has_a_typed_unavailable_result(error: Exception) -> None
 # Agents open the paste panel instead (test_paste_entry.py); shells keep this field fallback.
 @pytest.mark.parametrize("shell", [True])
 @pytest.mark.parametrize("timeout", [False, True])
-def test_paste_failure_opens_and_focuses_the_retained_field_without_terminal_input(
+def test_paste_failure_opens_and_focuses_replacement_field_without_terminal_input(
     shell: bool, timeout: bool, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     now = [1.0]
@@ -80,7 +80,7 @@ def test_paste_failure_opens_and_focuses_the_retained_field_without_terminal_inp
             await app.set_props_and_fire(_paste_key(shell), {}, "click")
             current = app.find(_typing_key(app))
             assert current.visible and current.can_request_focus and not current.disabled
-            assert current._i == field._i and focuses[count:] == [current._i]
+            assert current._i != field._i and focuses[count:] == [current._i]
             hint = app.find("shell-direct-paste-hint" if shell else "agent-direct-paste-hint")
             assert hint.visible and hint.value == "Long-press here and choose Paste"
             assert current.enable_interactive_selection is True
@@ -107,12 +107,13 @@ def test_fallback_native_menu_contract_selection_paste_review_and_exact_confirm(
         app, session, socket, _focuses = await _direct(shell)
         try:
             field = app.find(_typing_key(app))
-            assert not field.enable_interactive_selection
+            assert field.enable_interactive_selection is True
             field_id, term, binding = field._i, session.current_term, session._view_token
             session._clipboard = _Unavailable()
             await app.set_props_and_fire(_paste_key(shell), {}, "click")
             current = app.find(_typing_key(app))
-            assert current._i == field_id and current.enable_interactive_selection
+            assert current._i != field_id and current.enable_interactive_selection
+            capture_id = current._i
             for prop, value in MENU["field"].items():
                 if not prop.startswith("on_"):
                     assert getattr(current, prop) == value, prop
@@ -135,11 +136,13 @@ def test_fallback_native_menu_contract_selection_paste_review_and_exact_confirm(
             await _change(app, text)
             assert _inputs(socket) == []  # Includes withheld sentinel replacement DELs.
             assert session.pending_review.preview == text
-            assert not app.find(_typing_key(app)).enable_interactive_selection
+            reviewed = app.find(_typing_key(app))
+            assert reviewed.enable_interactive_selection is True
+            assert reviewed._i not in (field_id, capture_id)
             await app.set_props_and_fire(CONFIRM_KEY, {}, "click")
             assert _inputs(socket) == [text.encode()]
             assert session.current_term is term and session._view_token == binding
-            assert app.find(_typing_key(app))._i == field_id
+            assert app.find(_typing_key(app))._i not in (field_id, capture_id, reviewed._i)
             assert app.find(_typing_key(app)).value == "  "
             await _change(app, "  x")
             assert _inputs(socket) == [text.encode(), b"x"]

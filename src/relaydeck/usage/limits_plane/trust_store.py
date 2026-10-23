@@ -52,7 +52,7 @@ def is_trusted(folder: str, trusted: tuple[Path, ...]) -> bool:
         return False
 
 
-STATE_DIR_TOKEN = "{state_dir}"
+STATE_DIR_TOKEN = "{state_dir}"  # noqa: S105 - template placeholder
 
 
 def probe_folder(template: str | None, state_dir: Path) -> Path | None:

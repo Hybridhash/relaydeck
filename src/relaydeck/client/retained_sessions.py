@@ -300,7 +300,7 @@ class RetainedSessions:
                     self.screens.put(
                         entry.cache_key, ScreenSnapshot(text, entry.epoch, attachment, *position)
                     )
-            except Exception:
+            except Exception:  # noqa: S110 - cache only emulator screen truth
                 pass  # No byte-log fallback: cache only emulator screen truth.
 
         if entry.capture_task is not None:

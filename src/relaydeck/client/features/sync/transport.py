@@ -587,5 +587,5 @@ class WebsocketTerminalSocket(TerminalSocket):
             ws, self._ws = self._ws, None
             try:
                 await asyncio.wait_for(ws.close(), WS_CLOSE_TIMEOUT_S * 2)
-            except Exception:  # noqa: BLE001 - close is best-effort (incl. timeout)
+            except Exception:  # noqa: S110 - close is best-effort
                 pass

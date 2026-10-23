@@ -33,7 +33,7 @@ def test_hook_subprocess_whitelist_modes_and_identical_capture(tmp_path: Path) -
     payload = {
         "model": {"display_name": "model-a\n\x1b[31m"},
         "context_window": {"used_percentage": 21},
-        "rate_limits": {"five_hour": {"used_percentage": 12.5, "resets_at": 1791676801}},
+        "rate_limits": {"five_hour": {"used_percentage": 12.5, "resets_at": 4102444800}},
         "private": "private-marker",
     }
     result = invoke(cache, payload)
@@ -42,7 +42,7 @@ def test_hook_subprocess_whitelist_modes_and_identical_capture(tmp_path: Path) -
     assert "\x1b" not in result.stdout and "private-marker" not in result.stdout
     first = json.loads(cache.read_text())
     assert set(first) == {"captured_ms", "windows"}
-    assert first["windows"] == {"five_hour": {"used_percentage": 12.5, "resets_at": 1791676801}}
+    assert first["windows"] == {"five_hour": {"used_percentage": 12.5, "resets_at": 4102444800}}
     assert cache.stat().st_mode & 0o777 == 0o600
     assert cache.parent.stat().st_mode & 0o777 == 0o700
     assert not list(cache.parent.glob("*.tmp"))

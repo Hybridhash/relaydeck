@@ -74,7 +74,7 @@ def chart_reference(
 
 
 def make_page(seed: int, count: int, today: date, zone: str) -> model.UsagePage:
-    rng = random.Random(seed)
+    rng = random.Random(seed)  # noqa: S311 - seeded test data
     rows: list[dict[str, Any]] = []
     for _ in range(count):
         scope = rng.choice(["overall", "overall", "workspace", "not_linked"])

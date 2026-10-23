@@ -36,7 +36,7 @@ def _first_command(argv: Sequence[str]) -> str | None:
         if skip_value:
             skip_value = False
             continue
-        if token == "--config":
+        if token == "--config":  # noqa: S105 - CLI flag, not a credential
             skip_value = True
             continue
         if token.startswith("-"):

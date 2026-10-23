@@ -260,7 +260,7 @@ class CompanionRuntime:
         )
         if self.persistence is not None:
             provider = self.persistence_provider
-            assert provider is not None
+            assert provider is not None  # noqa: S101
             try:
                 self.gateway.sessions = SessionStore(
                     persistence=self.persistence,
@@ -454,7 +454,7 @@ class CompanionRuntime:
 
     def _prepare_usage(self) -> None:
         config = self.config.usage
-        assert config is not None
+        assert config is not None  # noqa: S101
         prices = PriceTable()
         if config.price_tables:
             try:
@@ -495,7 +495,7 @@ class CompanionRuntime:
                 inferred_linking=config.inferred_linking,
             )
             self.limits_scheduler = self._prepare_limits(config)
-            assert self.usage_store is not None
+            assert self.usage_store is not None  # noqa: S101
             retired = self.usage_store.retire_missing_sources(
                 self.config.host_id,
                 [s.source_key for s in sources],
@@ -537,7 +537,7 @@ class CompanionRuntime:
         """Build the limits-plane scheduler for enabled blocks with a known
         provider. Unknown formats are skipped (later providers register them);
         with nothing resolved, no scheduler runs and nothing changes."""
-        assert self.usage_store is not None
+        assert self.usage_store is not None  # noqa: S101
         specs: dict[str, ProviderSpec] = {}
         providers: dict[str, LimitsProvider] = {}
         skipped = 0
@@ -687,7 +687,7 @@ class CompanionRuntime:
             return secrets.token_bytes(32), cursor
 
     async def _maintain_storage(self) -> None:
-        assert self.stop is not None and self.persistence is not None
+        assert self.stop is not None and self.persistence is not None  # noqa: S101
         while not self.stop.is_set():
             try:
                 report = await asyncio.to_thread(self.persistence.sweep, self.gateway.now_ms())
@@ -832,7 +832,7 @@ class CompanionRuntime:
             self.source,
             opener=self.opener,
         )
-        assert self.stop is not None
+        assert self.stop is not None  # noqa: S101
         self.link_task = asyncio.create_task(link.run(self.stop), name="companion-connector")
         self.issue = "Waiting for authenticated connector synchronization."
 

@@ -306,7 +306,7 @@ def repair_sources(
         return outcomes
     for d in planned:
         source = by_key[(d.kind, d.format)]
-        assert source.limits_settings is not None and source.limits_cache is not None
+        assert source.limits_settings is not None and source.limits_cache is not None  # noqa: S101
         result: HookResult = install_hook(
             source.limits_settings,
             source.limits_cache,

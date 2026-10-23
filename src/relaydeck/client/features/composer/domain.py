@@ -652,7 +652,7 @@ class ComposerStore:
                 for chunk in chunk_payload(blocked_insert_bytes(text)):
                     if send_generation != self._send_generation:
                         return SEND_IGNORED
-                    assert self._sender is not None
+                    assert self._sender is not None  # noqa: S101
                     await self._sender(chunk)
             except Exception as exc:  # noqa: BLE001 - explicit failure, draft kept
                 if send_generation != self._send_generation:
@@ -708,7 +708,7 @@ class ComposerStore:
             for chunk in chunks:
                 if send_generation != self._send_generation:
                     return False
-                assert self._sender is not None
+                assert self._sender is not None  # noqa: S101
                 await self._sender(chunk)
         except Exception as exc:  # noqa: BLE001 - explicit failure, draft kept
             if send_generation != self._send_generation:

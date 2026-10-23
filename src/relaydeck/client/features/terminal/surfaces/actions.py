@@ -230,6 +230,14 @@ def request_terminal_keyboard(
         term.request_keyboard()
 
 
+def release_terminal_keyboard(session: Any) -> None:
+    """Hide the soft keyboard on the live terminal. Never writes to the PTY and never changes
+    input mode, so it is fenced only by the terminal still being there."""
+    term = session.current_term
+    if term is not None and not session.disposed:
+        term.release_keyboard()
+
+
 class DirectInput(Protocol):
     async def __call__(
         self,
@@ -251,6 +259,7 @@ class MobileInput(Protocol):
         can_input: Callable[[], bool] | None = None,
         paste_text: str | None = None,
         terminal_scroll: bool = False,
+        native_text: bool = False,
     ) -> str: ...
 
 
@@ -339,6 +348,7 @@ def use_mobile_key_actions(
         can_input: Callable[[], bool] | None = None,
         paste_text: str | None = None,
         terminal_scroll: bool = False,
+        native_text: bool = False,
     ) -> str:
         payloads = (data,) if isinstance(data, bytes) else data
 
@@ -354,37 +364,55 @@ def use_mobile_key_actions(
         # One FIFO writer transaction per native change. Keep packet boundaries
         # so one-shot modifiers consume exactly as they did for individual keys.
         async with lock_ref.current:
-            if paste_text is not None:
-                if not allowed():
-                    return ROUTE_DROPPED
-                return await session.request_paste(paste_text, require_review=True)
-            result = ROUTE_DROPPED
-            for payload in payloads:
-                if not allowed():
-                    return ROUTE_DROPPED  # Drop the remaining delta; never replay.
-                if terminal_scroll:
-                    # Only the scroll router uses this escape hatch, with its
-                    # strict packet whitelist and native/lease boundary guard.
-                    assert token is not None
-                    keys = session.sessions.keys
-                    emission = keys.commit_bytes(payload, token=token[1])
-                    result = (
-                        ROUTE_PTY if emission is not None and await keys.flush() else ROUTE_DROPPED
-                    )
-                elif not active or origin != ORIGIN_TEXT:
-                    result = await session.handle_view_input(origin, payload, token=token)
-                else:
-                    arm()
-                    keys = session.sessions.keys
-                    before = keys.pending_modifiers
-                    try:
-                        result = await session.handle_view_input(origin, payload, token=token)
-                    finally:
-                        settled(keys, before)
-                if result == ROUTE_DROPPED:
-                    return result
-                if result == ROUTE_PTY:
-                    record_scroll_input(session, origin, payload, scroll=terminal_scroll)
-            return result
+            used_modifiers = False
+            try:
+                if paste_text is not None:
+                    if not allowed():
+                        return ROUTE_DROPPED
+                    return await session.request_paste(paste_text, require_review=True)
+                result = ROUTE_DROPPED
+                for payload in payloads:
+                    if not allowed():
+                        return ROUTE_DROPPED  # Drop the remaining delta; never replay.
+                    if terminal_scroll:
+                        # Only the scroll router uses this escape hatch, with its
+                        # strict packet whitelist and native/lease boundary guard.
+                        assert token is not None  # noqa: S101
+                        keys = session.sessions.keys
+                        emission = keys.commit_bytes(payload, token=token[1])
+                        result = (
+                            ROUTE_PTY
+                            if emission is not None and await keys.flush()
+                            else ROUTE_DROPPED
+                        )
+                    elif not active or origin != ORIGIN_TEXT:
+                        if origin == ORIGIN_TEXT:
+                            used_modifiers = used_modifiers or bool(
+                                session.sessions.keys.pending_modifiers
+                            )
+                        result = await session.handle_view_input(
+                            origin, payload, token=token, native_text=native_text
+                        )
+                    else:
+                        arm()
+                        keys = session.sessions.keys
+                        before = keys.pending_modifiers
+                        used_modifiers = used_modifiers or bool(before)
+                        try:
+                            result = await session.handle_view_input(
+                                origin, payload, token=token, native_text=native_text
+                            )
+                        finally:
+                            settled(keys, before)
+                    if result == ROUTE_DROPPED:
+                        return result
+                    if result == ROUTE_PTY:
+                        record_scroll_input(session, origin, payload, scroll=terminal_scroll)
+                return result
+
+            finally:
+                notify = getattr(can_input, "modifier_used", None)
+                if used_modifiers and callable(notify):
+                    notify()  # Under the writer lock, before dependent deltas can run.
 
     return press, {mod: latch.state(mod) for mod in (MOD_CTRL, MOD_ALT)}, input

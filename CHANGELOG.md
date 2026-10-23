@@ -3,6 +3,23 @@
 User-visible changes by release. Versions follow the package version
 (`relaydeck --version`).
 
+## 0.2.5
+
+- **Dictation in Direct input**: on phones and narrow iPads, dictated text reaches the terminal as it
+  is spoken, corrections included, and appears once. The text field stays empty on screen, since the
+  terminal shows what was typed.
+- **Keyboard**: Return, Ctrl keys, Backspace and the tools keys keep the keyboard up in Direct input.
+  Done in the iPad typing column drops the keyboard in both Compose and Direct.
+- **Paste**: multi-line or unsafe text from the terminal's own input, such as the iPad keyboard's
+  Paste button, opens paste review. One-line pastes are typed directly.
+- **Stability**: a late reply from a closed text field no longer stops the page, and a hidden field
+  no longer redraws in a loop while you use the composer.
+- **Text selection**: the iOS magnifier is off, so it can never stay on screen after selecting text.
+- **Usage**: a manual limit reset shows at once, and idle sessions never bring an old reading back.
+- **Security**: Ruff's security rules run on all code, and checks that guarded safety are explicit,
+  so they hold under `python -O`.
+- **Quieter**: Direct input logs nothing per keystroke.
+
 ## 0.2.4
 
 - **Phone Direct input**: the typing row keeps only the text field and the keyboard button, stays

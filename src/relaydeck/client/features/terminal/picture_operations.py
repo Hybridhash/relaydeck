@@ -200,7 +200,8 @@ async def run_operation(
             return
         picture = Picture.from_wire(doc)
         if compose:
-            assert store is not None  # a captured Composer operation owns a draft store
+            # A captured Composer operation owns a draft store.
+            assert store is not None  # noqa: S101
             if len(store.pictures) >= MAX_STAGED_PICTURES:
                 host.stopped("stage", "picture_limit")
                 return
@@ -242,7 +243,7 @@ async def run_operation(
         if op.grant_id and not op.accepted:
             try:
                 await api.cancel(op.grant_id)
-            except Exception:
+            except Exception:  # noqa: S110 - cancel after a failed upload is best-effort
                 pass
         if host.is_current(op):
             host.finish(op)

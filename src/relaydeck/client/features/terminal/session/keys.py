@@ -20,10 +20,10 @@ Input invariants:
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
-from relaydeck_terminal.protocol import ORIGIN_KEY, ORIGIN_MOUSE
+from relaydeck_terminal.protocol import ORIGIN_KEY, ORIGIN_MOUSE, ORIGIN_TEXT
 
 from relaydeck.client.features.composer.domain import ComposerStore
 from relaydeck.client.features.terminal.input_modes import (
@@ -34,6 +34,11 @@ from relaydeck.client.features.terminal.input_modes import (
     route_committed_text,
 )
 from relaydeck.client.features.terminal.keys import KeyInputSession
+from relaydeck.client.features.terminal.paste_policy import contains_only_safe_scalars
+
+
+async def _drop_review(_text: str) -> str:
+    return ROUTE_DROPPED
 
 
 @dataclass(frozen=True)
@@ -46,6 +51,7 @@ class KeyHooks:
     modes: Callable[[], InputModeState]
     notify: Callable[[], None]
     note_input: Callable[[], None] = lambda: None
+    review_text: Callable[[str], Awaitable[str]] = _drop_review
     # Agent-only differences; shells keep the defaults.
     store: Callable[[], ComposerStore | None] = lambda: None
     allow_draft: bool = False  # only the agent Composer may route to a draft
@@ -95,26 +101,22 @@ class KeyInput:
             text=text,
             token=token,
         )
-        if not hooks.allow_draft:
-            assert route != ROUTE_DRAFT, "shell typing must never route to a draft"
+        if not hooks.allow_draft and route == ROUTE_DRAFT:
+            raise ValueError("shell typing must never route to a draft")
         await hooks.keys().flush()
         hooks.notify()
         return route
 
     async def handle_view_input(
-        self, origin: int, data: bytes, *, token: tuple[int, int] | None = None
+        self,
+        origin: int,
+        data: bytes,
+        *,
+        token: tuple[int, int] | None = None,
+        native_text: bool = False,
     ) -> str:
-        """Extension input packets, generation-bound.
-
-        - A captured `token` that no longer matches the live input
-          session fails closed: `dropped`, nothing sent, never replayed.
-        - Mouse reports (ORIGIN_MOUSE) are emulator-internal and are
-          always dropped: the input path has no mouse kind.
-        - Engine-encoded keys (ORIGIN_KEY) travel as exact bytes through
-          the live writer, but only outside the agent Composer workflow, so
-          Composer typing stays local while explicit terminal tools
-          (dock/paste, which bypass this gate) reach the writer.
-        - Committed text (ORIGIN_TEXT) routes like typed text.
+        """Route generation-bound native input; drop mouse packets and stale input.
+        Review native bulk text outside Composer; keep engine keys and field editing controls.
         """
         hooks = self._hooks
         if (
@@ -138,7 +140,16 @@ class KeyInput:
             await hooks.keys().flush()
             hooks.notify()
             return ROUTE_PTY
-        return await self.type_text(data.decode("utf-8", errors="replace"), token=key_token)
+        text = data.decode("utf-8", errors="replace")
+        if (
+            native_text
+            and origin == ORIGIN_TEXT
+            and not hooks.modes().text_edits_draft
+            and text not in ("\n", "\r")
+            and (any(char in text for char in "\r\n\t") or not contains_only_safe_scalars(text))
+        ):
+            return await hooks.review_text(text)
+        return await self.type_text(text, token=key_token)
 
     # -- tools/dock keys -------------------------------------------------------
     async def press_key(

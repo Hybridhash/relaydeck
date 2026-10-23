@@ -103,6 +103,30 @@ def test_expanded_touch_hands_the_keyboard_button_to_the_native_terminal(
     run(scenario())
 
 
+def test_a_terminal_that_appears_after_the_screen_still_gets_the_keyboard_button(
+    monkeypatch: Any,
+) -> None:
+    term = _FakeTerm()
+    current: list[_FakeTerm | None] = [None]
+    monkeypatch.setattr(AgentSession, "current_term", property(lambda _self: current[0]))
+
+    async def scenario() -> None:
+        session, _ops, _factory, _submitted = _agent_session()
+        session.open()
+        await session.confirm_takeover()
+        app = await render_component(_Screen, session, True)
+        try:
+            assert term.button == []
+            current[0] = term
+            session.set_workflow(input_modes.WORKFLOW_AGENT_DIRECT)
+            await app.settle()
+            assert term.button and term.button[-1] is True
+        finally:
+            await session.dispose()
+
+    run(scenario())
+
+
 def test_desktop_does_not_show_the_native_keyboard_button(fake_term: _FakeTerm) -> None:
     async def scenario() -> None:
         session, _ops, _factory, _submitted = _agent_session()

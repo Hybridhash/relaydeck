@@ -181,7 +181,7 @@ def is_scroll_input(origin: int, data: bytes, state: ViewState) -> bool:
     urxvt = re.fullmatch(r"\x1b\[(\d+);(\d+);(\d+)M", text)
     if sgr or urxvt:
         match = sgr or urxvt
-        assert match is not None
+        assert match is not None  # noqa: S101
         button, x, y = map(int, match.groups())
         if urxvt:
             button -= 32

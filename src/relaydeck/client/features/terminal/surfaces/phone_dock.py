@@ -137,6 +137,7 @@ def build_phone_dock(
     detail_width: float,
     direct_binding: Any,
     direct_field: Any,
+    reset_requests: int,
     draft: str,
     error: str | None,
     focus_handled: Any,
@@ -233,6 +234,7 @@ def build_phone_dock(
         and paste_review is None
         and not keyboard_closing,
         binding=direct_binding,
+        reset_requests=reset_requests,
         field_ref=direct_field,
         focus_requests=focus_requests,
         focus_handled=focus_handled,

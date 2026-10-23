@@ -9,7 +9,7 @@ To remove a patch, delete its folder and its delimited block in `scripts/build_w
 |---|---|---|---|
 | `flutter-file-upload-patch/` | file_picker web fix (upstream PR #2228): picture attach never resolved in WebKit, so on iPhone and iPad. | file_picker 11.0.3 | web build (`--check` preflight) |
 | `flutter-ios-pointer-patch/` | Flutter engine PR #189608 backport: iOS WebKit lost the pointer-up and left touches stuck down. Applied to a copy of the SDK; `~/flutter` is never edited. | Flutter 3.44.8 | web build (isolated SDK copy) |
-| `flet-reconnect-merge-patch/` | Flet reconnect repairs: snapshots reconcile controls by id (a mounted button no longer stays disabled), and a returning installed web app reconnects at once with capped retry delays. | Flet 1.0.3 | web build (`--check` preflight) |
+| `flet-reconnect-merge-patch/` | Reconciles controls by id, bounds reconnect retries, and disables selection magnifiers in SelectionArea, TextField, CupertinoTextField, selectable Text/Markdown/code and autocomplete. | Flet 1.0.3 | web build (`--check` preflight) |
 | `flet-build-template-ios15/` | Flet iOS build template deployment target 13.0 to 15.0 (Xcode 27 supports 15.0+ only). | Flet 1.0.3 template | iOS builds |
 | `native-runtime-pins/` | `mobile-overrides.toml`: pins native packaging needs that differ from the host lock. | `uv.lock` | `scripts/build_native.py` |
 

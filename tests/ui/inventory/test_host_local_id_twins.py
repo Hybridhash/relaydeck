@@ -8,6 +8,7 @@ real Flet dispatched events over a scripted two-host transport.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncGenerator
 from pathlib import Path
 from typing import Any
@@ -94,8 +95,9 @@ class _TwinTransport(GatewayTransport):
         return snapshot_page(_snapshot(host_id), limit, page_token, project, status, query)
 
     async def stream(self, host_id: str, cursor: str) -> AsyncGenerator[SseFrame]:
-        for _ in ():
-            yield SseFrame("metadata", "{}")
+        # An idle live stream: one that ended would reconnect and sync the host again.
+        await asyncio.Event().wait()
+        yield SseFrame("metadata", "{}")
 
     async def submit_command(self, command: dict[str, Any]) -> dict[str, Any]:
         raise NotImplementedError

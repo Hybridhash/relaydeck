@@ -91,7 +91,7 @@ def attach_argv(
     if target is not None:
         argv = [binary, "agent", "attach", target]
     else:
-        assert terminal_id is not None
+        assert terminal_id is not None  # noqa: S101
         argv = [binary, "terminal", "attach", terminal_id]
     if takeover:
         argv.append("--takeover")
@@ -226,7 +226,7 @@ class AttachSession:
         master, slave = pty.openpty()
         try:
             self._set_size_fd(slave, self.cols, self.rows)
-            self._proc = subprocess.Popen(
+            self._proc = subprocess.Popen(  # noqa: S603 - argv built by attach_argv, no shell
                 self.argv,
                 stdin=slave,
                 stdout=slave,
@@ -264,7 +264,7 @@ class AttachSession:
         if self._proc is not None and self._proc.poll() is None:
             try:
                 self._proc.send_signal(signal.SIGWINCH)
-            except Exception:  # noqa: BLE001 - best-effort signal
+            except Exception:  # noqa: S110 - signal is best-effort
                 pass
 
     def read(self, max_bytes: int = 65536, timeout: float = 5.0) -> bytes:

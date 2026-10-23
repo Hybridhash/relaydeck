@@ -100,7 +100,7 @@ def load_hook_sources(path: Path) -> tuple[ConfiguredHookSource, ...]:
 
         settings = _configured_path(row, "limits_settings")
         cache = _configured_path(row, "limits_cache", required=True)
-        assert cache is not None
+        assert cache is not None  # noqa: S101
         if kind in limits_kinds or cache in caches:
             raise fs.HookFileError("invalid")
         limits_kinds.add(kind)
@@ -203,7 +203,7 @@ def run_usage(
         print(json.dumps({"state": "not_configured"}))
         return 1
     source = selected[0]
-    assert source.limits_settings is not None and source.limits_cache is not None
+    assert source.limits_settings is not None and source.limits_cache is not None  # noqa: S101
     if args.usage_action == "install":
         result = install_hook(
             source.limits_settings,

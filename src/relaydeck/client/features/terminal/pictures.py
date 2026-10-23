@@ -491,7 +491,7 @@ def use_picture_attachment(
             return
         try:
             picker.page._services.unregister_services()
-        except Exception:
+        except Exception:  # noqa: S110 - cancel and registry hygiene are best-effort
             # Registry hygiene must never break the attach flow.
             pass
 
@@ -587,7 +587,7 @@ def use_picture_attachment(
             if op.grant_id:
                 try:
                     await api.cancel(op.grant_id)
-                except Exception:
+                except Exception:  # noqa: S110 - cancel and registry hygiene are best-effort
                     pass
 
     def finish(op: PictureOperation) -> None:

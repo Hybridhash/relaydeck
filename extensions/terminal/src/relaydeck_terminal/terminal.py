@@ -106,7 +106,7 @@ class _SnapshotWait:
             self.declared = total
             self.merged = bytearray(total)
             self.filled = bytearray(total)
-        assert self.merged is not None and self.filled is not None
+        assert self.merged is not None and self.filled is not None  # noqa: S101
         end = offset
         while end < offset + len(data):
             if not self.filled[end]:
@@ -859,10 +859,8 @@ class RelayDeckTerminal(LayoutControl):
         self._send(protocol.encode_request_keyboard())
 
     def release_keyboard(self) -> None:
-        """Ask the viewer to hide the soft keyboard and disarm touch input.
-
-        Never writes to the PTY; the viewer ignores it when input is disabled.
-        """
+        """Hide the soft keyboard and disarm touch input regardless of input state;
+        never write to the PTY."""
         self._send(protocol.encode_release_keyboard())
 
     def _abort_viewer_waiters(self, reason: str) -> None:

@@ -54,10 +54,12 @@ def test_the_documented_modules_exist() -> None:
     assert expected <= set(_modules())
 
 
-def test_the_package_docstring_lists_every_module() -> None:
-    doc = surfaces.__doc__ or ""
+def test_the_package_comments_list_every_module() -> None:
+    comments = "\n".join(
+        line for line in (PKG_DIR / "__init__.py").read_text().splitlines() if line.startswith("#")
+    )
     for name in _modules():
-        assert f"`{name}`" in doc, name
+        assert f"`{name}`" in comments, name
 
 
 @pytest.mark.parametrize("name", BUILDERS)

@@ -30,6 +30,7 @@ from relaydeck.client.features.terminal.events import (
     value_change,
 )
 from relaydeck.client.features.terminal.paste_policy import PasteReview
+from relaydeck.client.flet_invokes import focus_control
 from relaydeck.client.hooks.typing_focus import use_composer_focus_log
 from relaydeck.client.theme import palette
 
@@ -174,7 +175,7 @@ def _PhoneComposerField(
         # Screen-reader activation only. A touch lands on the field itself (see _keyboard_toggle).
         field = field_ref.current
         if field is not None:
-            spawn(field.focus(), label="Show composer keyboard")
+            spawn(focus_control(field), label="Show composer keyboard")
 
     def editor() -> Any:
         # Hidden/parked fields reject late changes. Reopening restores the

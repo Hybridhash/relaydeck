@@ -9,6 +9,7 @@ REGISTER_CLIENT protocol. (msgpack rides with flet; pinned with it.)
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from typing import Any
 from urllib.parse import parse_qsl, urlparse
 
@@ -32,6 +33,7 @@ from tests.support.gateway.flet_gateway import _gateway_state
 from tests.support.live_server import LiveGateway
 
 SECRET = b"flet-boundary-test-secret-32bytes!!"
+ANY_ADDR = "0.0.0.0"  # noqa: S104 - the refused address under test
 
 
 def _probe_main(store: WebSessionStore):  # type: ignore[no-untyped-def]
@@ -373,10 +375,8 @@ def test_logout_terminates_connections_and_session() -> None:
                     await _wait_marker(ws_d, b"who=anonymous")
             finally:
                 for ws in (ws_a, ws_b):
-                    try:
+                    with contextlib.suppress(Exception):  # test teardown
                         await ws.close()
-                    except Exception:  # noqa: BLE001 - test teardown
-                        pass
         finally:
             live.__exit__(None, None, None)
 
@@ -496,7 +496,7 @@ def test_serve_cli_validates_secret_and_loopback(capsys: Any) -> None:
     from relaydeck.client.serve import main
 
     assert main(["--cookie-secret", "short"]) == 2
-    assert main(["--host", "0.0.0.0", "--dev-login", "--dev-secret", "--port", "8127"]) == 2
+    assert main(["--host", ANY_ADDR, "--dev-login", "--dev-secret", "--port", "8127"]) == 2
     # Cursor secret is required too (sync cursors cannot validate without it).
     assert main(["--cookie-secret", "c" * 32]) == 2
     assert main(["--cookie-secret", "c" * 32, "--cursor-secret", "short"]) == 2

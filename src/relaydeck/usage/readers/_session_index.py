@@ -104,7 +104,7 @@ def load_session_index(
                 return None, 0
             db.set_progress_handler(lambda: 1 if time.monotonic() >= deadline else 0, _PROGRESS_OPS)
         cursor = db.execute(
-            f"SELECT {_capped('session_id', MAX_KEY_CHARS)},"
+            f"SELECT {_capped('session_id', MAX_KEY_CHARS)},"  # noqa: S608 - constant column names and int bounds
             f" {_capped('model_id', MAX_MODEL_CHARS)},"
             f" {_capped('workspace_root', MAX_PATH_CHARS)}"
             f" FROM sessions LIMIT {MAX_INDEX_ROWS + 1}"

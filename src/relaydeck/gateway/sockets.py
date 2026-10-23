@@ -203,7 +203,7 @@ class SocketRegistry:
                     if before is not None and not await before():
                         continue
                     await self.send_text(socket, text)
-            except Exception:  # noqa: BLE001 - notify is best-effort
+            except Exception:  # noqa: S112 - notify and close are best-effort
                 continue
             notified += 1
         return notified
@@ -221,7 +221,7 @@ class SocketRegistry:
                 continue
             try:
                 await self.send_text(socket, text)
-            except Exception:  # noqa: BLE001 - notify is best-effort
+            except Exception:  # noqa: S112 - notify and close are best-effort
                 continue
             notified += 1
         return notified
@@ -242,7 +242,7 @@ class SocketRegistry:
                         asyncio.wait_for(socket.close(code=1008, reason=reason), SEND_TIMEOUT_S)
                     )
                 )
-            except Exception:  # noqa: BLE001 - close is best-effort
+            except Exception:  # noqa: S110 - notify and close are best-effort
                 pass
             closed += 1
         return closed

@@ -302,7 +302,7 @@ class NotificationRuntime:
             tap = await self.port.initial_tap()
             if tap is not None and self.runtime.alive and generation == self.generation:
                 await self.tap(tap)
-        except Exception:  # noqa: BLE001 - missing native capability stays quiet
+        except Exception:  # noqa: S110 - missing native capability stays quiet
             pass
 
     async def revoke(self) -> None:

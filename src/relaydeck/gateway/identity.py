@@ -175,7 +175,7 @@ class SessionStore:
 
     @_locked
     def _durable_session(self, token: str, kind: str) -> tuple[Session, str, str] | None:
-        assert self.persistence is not None
+        assert self.persistence is not None  # noqa: S101
         if not self.check_generation() or self.verifier(token) in self._denied:
             return None
         with self.persistence.transaction() as tx:
@@ -316,10 +316,9 @@ class SessionStore:
             self._denied.add(hashed)
             self._pending_revocations[hashed] = session
             if decoded is not None:
-                if decoded[1] != hashed:
+                if decoded[1] != hashed or row is None:
                     raise StorageUnavailable("corrupt")
                 self._denied.add(decoded[2])
-                assert row is not None
                 self._remove_pair(tx, decoded[1], decoded[2], row.updated_ms)
             self._remove_web(tx, bound, {hashed})
         elif scope is not None:
@@ -344,7 +343,7 @@ class SessionStore:
     def _revoke_durable(
         self, scope: tuple[str, ...], predicate: Callable[[Session], bool]
     ) -> tuple[Session, ...]:
-        assert self.persistence is not None
+        assert self.persistence is not None  # noqa: S101
         self._denied_scopes.add(scope)
         with self.persistence.transaction() as tx:
             dead: list[Session] = []
@@ -376,7 +375,7 @@ class SessionStore:
 
     @_locked
     def _revoke_one(self, access: str) -> Session | None:
-        assert self.persistence is not None
+        assert self.persistence is not None  # noqa: S101
         with self.persistence.transaction() as tx:
             session = self.revoke_in_transaction(tx, access)
         self.finish_revocation(self.verifier(access))
@@ -864,7 +863,7 @@ class EnrollmentStore:
 
     def _load_file(self, now_ms: int | None) -> None:
         """Reload shared state from the file (caller holds the lock)."""
-        assert self.path is not None
+        assert self.path is not None  # noqa: S101
         try:
             with open(self.path, encoding="utf-8") as handle:
                 raw = json.load(handle)
@@ -913,7 +912,7 @@ class EnrollmentStore:
 
     def _save_file(self) -> None:
         """Write shared state atomically at 0600 (caller holds the lock)."""
-        assert self.path is not None
+        assert self.path is not None  # noqa: S101
         payload = {
             "version": ENROLLMENT_STORE_VERSION,
             "items": {

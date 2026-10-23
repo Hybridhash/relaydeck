@@ -36,6 +36,7 @@ from relaydeck.gateway.production import JournalBackend
 from tests.support.live_server import LiveGateway
 
 NOW = 1_700_000_000_000
+ANY_ADDR = "0.0.0.0"  # noqa: S104 - the refused address under test
 SECRET = b"gateway-loopback-test-secret-32byt"
 ALL_CAPS = frozenset(
     {
@@ -57,14 +58,14 @@ def _serve_args(*extra: str) -> Any:
 
 def test_serve_rejects_non_loopback_and_bad_options(tmp_path: Path) -> None:
     with pytest.raises(ServeConfigError, match="loopback"):
-        resolve_serve_options(_serve_args("--host", "0.0.0.0"))
+        resolve_serve_options(_serve_args("--host", ANY_ADDR))
     with pytest.raises(ServeConfigError, match="port"):
         resolve_serve_options(_serve_args("--port", "0"))
     with pytest.raises(ServeConfigError, match="32 bytes"):
         resolve_serve_options(_serve_args("--cursor-secret", "short"))
     with pytest.raises(ServeConfigError, match="cursor-secret-file"):
         resolve_serve_options(_serve_args("--cursor-secret-file", str(tmp_path / "nope")))
-    assert gateway_main(["serve", "--host", "0.0.0.0"]) == 2
+    assert gateway_main(["serve", "--host", ANY_ADDR]) == 2
 
 
 def test_serve_secret_sources_and_ephemeral(

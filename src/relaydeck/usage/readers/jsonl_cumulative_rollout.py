@@ -167,8 +167,8 @@ class _Handler(LineHandler):
         if None in (inputs, cached, writes, outputs, reasoning):
             self.skipped += 1
             return True
-        assert inputs is not None and cached is not None and writes is not None
-        assert outputs is not None and reasoning is not None
+        assert inputs is not None and cached is not None and writes is not None  # noqa: S101
+        assert outputs is not None and reasoning is not None  # noqa: S101
         uncached = inputs - cached - writes
         if uncached < 0 or reasoning > outputs:
             self.skipped += 1

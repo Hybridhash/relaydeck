@@ -227,7 +227,7 @@ async def _dev_login(request: Request) -> Any:
         now_ms,
     )
     principal = gateway_state.sessions.lookup(access, now_ms)
-    assert principal is not None
+    assert principal is not None  # noqa: S101
     sid = store.create_session(
         principal.account, principal.device_id, access, refresh, now_ms + 900_000
     )

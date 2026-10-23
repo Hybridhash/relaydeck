@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
+import flet as ft
 import pytest
 from flet.messaging.protocol import MessageAction
 
@@ -24,6 +25,73 @@ async def _stale_event(field: Any, name: str, data: str) -> None:
 
 
 @pytest.mark.parametrize("shell", [False, True])
+@pytest.mark.parametrize("tier", ["compact", "medium"])
+def test_direct_selection_stays_enabled_for_native_dictation_ranges(shell: bool, tier: str) -> None:
+    """The web engine collapses and rewrites dictation ranges when selection is disabled."""
+
+    async def scenario() -> None:
+        app, session, socket, _ = await _direct(shell, tier)
+        try:
+            assert app.find(_typing_key(app)).enable_interactive_selection is True
+            assert not _inputs(socket)
+        finally:
+            await session.dispose()
+
+    run(scenario())
+
+
+@pytest.mark.parametrize("shell", [False, True])
+def test_direct_mid_text_native_edit_retypes_only_the_tail_once(shell: bool) -> None:
+    async def scenario() -> None:
+        app, session, socket, focuses = await _direct(shell)
+        try:
+            await _change(app, "  abcd")
+            field = app.find(_typing_key(app))
+            field_id, count = field._i, len(focuses)
+            await app.set_props_and_fire(
+                _typing_key(app),
+                {"selection": ft.TextSelection(base_offset=4, extent_offset=4)},
+                "selection_change",
+                {"selected_text": "", "selection": {"base_offset": 4, "extent_offset": 4}},
+            )
+            assert _inputs(socket) == [b"abcd"]
+            await _change(app, "  abXcd")
+            await _change(app, "  abXcd")
+            assert _inputs(socket) == [b"abcd", b"\x7f", b"\x7f", b"Xcd"]
+            assert app.find(_typing_key(app))._i == field_id
+            assert len(focuses) == count
+        finally:
+            await session.dispose()
+
+    run(scenario())
+
+
+@pytest.mark.parametrize("shell", [False, True])
+@pytest.mark.parametrize("multiline", [False, True])
+def test_direct_native_paste_shaped_change_keeps_existing_review_policy(
+    shell: bool, multiline: bool
+) -> None:
+    async def scenario() -> None:
+        app, session, socket, _ = await _direct(shell)
+        try:
+            await _change(app, "  old")
+            text = "first\nsecond" if multiline else "single safe line"
+            await _change(app, "  " + text)
+            if multiline:
+                assert _inputs(socket) == [b"old"]  # No replacement DELs before review.
+                assert session.pending_review.preview == text
+            else:
+                assert _inputs(socket) == [b"old"] + [b"\x7f"] * 3 + [text.encode()]
+                assert session.pending_review is None
+            if not shell:
+                assert session.store.draft == "retained compose draft"
+        finally:
+            await session.dispose()
+
+    run(scenario())
+
+
+@pytest.mark.parametrize("shell", [False, True])
 def test_direct_field_exact_text_backspace_enter_latch_and_sentinel(shell: bool) -> None:
     async def scenario() -> None:
         app, session, socket, focuses = await _direct(shell)
@@ -35,9 +103,10 @@ def test_direct_field_exact_text_backspace_enter_latch_and_sentinel(shell: bool)
             assert field.hint_text == "Type to terminal" and field.value == "  "
             assert not field.autocorrect and not field.enable_suggestions
             assert field.capitalization.value == "none"
-            for char in "abc":
-                await _change(app, "  " + char)
-            assert any(
+            assert field.color == "transparent" and field.cursor_color
+            for length in range(1, 4):
+                await _change(app, "  " + "abc"[:length])
+            assert not any(
                 # Flet patches use subtree-local indices, not global IDs.
                 len(op) == 4 and op[2:] == ["value", "  "]
                 for message in app.conn.sent
@@ -46,15 +115,22 @@ def test_direct_field_exact_text_backspace_enter_latch_and_sentinel(shell: bool)
             )
             await _change(app, " ")
             await _change(app, "")
+            await app.set_props_and_fire(_typing_key(app), {}, "focus")
             before = len(focuses)
+            retired = app.find(_typing_key(app))._i
             await app.set_props_and_fire(_typing_key(app), {}, "submit", "  ")
-            assert _inputs(socket) == [b"a", b"b", b"c", b"\x7f", b"\x7f", b"\x7f", b"\r"]
-            assert len(focuses) > before
+            assert _inputs(socket) == [b"a", b"b", b"c"] + [b"\x7f"] * 4 + [b"\r"]
+            replacement = app.find(_typing_key(app))._i
+            assert replacement != retired and focuses[before:] == [replacement]
             # iOS multiline Return commits a newline through native change;
-            # the shared ORIGIN_TEXT encoder normalizes it without refocus.
+            # normalize once and hand focus to the replacement native epoch.
+            await app.set_props_and_fire(_typing_key(app), {}, "focus")
             before = len(focuses)
+            retired = replacement
             await _change(app, "  \n")
-            assert _inputs(socket)[-1] == b"\r" and len(focuses) == before
+            replacement = app.find(_typing_key(app))._i
+            assert _inputs(socket).count(b"\r") == 2
+            assert replacement != retired and focuses[before:] == [replacement]
             await app.set_props_and_fire("mod-ctrl", {}, "click")
             await _change(app, "  c")
             assert _inputs(socket)[-1] == b"\x03"
@@ -68,10 +144,7 @@ def test_direct_field_exact_text_backspace_enter_latch_and_sentinel(shell: bool)
             await _change(app, "  你好😀")
             assert _inputs(socket)[-1] == "你好😀".encode()
             field = app.find(_typing_key(app))
-            assert (
-                field.value == "  "
-                and field.selection.base_offset == field.selection.extent_offset == 2
-            )
+            assert field.value == "  你好😀" and not field.data["direct_reset"]
             if not shell:
                 assert session.store.draft == "retained compose draft"
         finally:
@@ -161,6 +234,7 @@ def test_rapid_cumulative_changes_do_not_repeat_prefix_or_replay_after_reset(she
             await asyncio.gather(*tasks)
             await app.settle()
             assert _inputs(socket) == [b"a", b"b", b"c"]
+            await app.set_props_and_fire(_typing_key(app), {}, "blur")
             await _ack_reset(app)
             await _change(app, "  c")
             assert _inputs(socket) == [b"a", b"b", b"c", b"c"]
@@ -227,7 +301,7 @@ def test_keyboard_single_clicks_toggle_and_rapid_duplicate_click_toggles_once(
             now[0] += 0.02
             await app.set_props_and_fire(key, {}, "click")
             assert app.find(_typing_key(app)).visible is not shell
-            assert app.find(_typing_key(app))._i == field_id
+            assert app.find(_typing_key(app))._i != field_id
             assert session.current_term is term and session.controller is controller
         finally:
             await session.dispose()
@@ -238,7 +312,7 @@ def test_keyboard_single_clicks_toggle_and_rapid_duplicate_click_toggles_once(
 @pytest.mark.parametrize("shell", [False, True])
 @pytest.mark.parametrize(
     ("value", "expected"),
-    [("x", [b"\x7f", b"\x7f", b"x"]), (" ab", [b"\x7f", b"ab"]), ("xy", [b"\x7f", b"\x7f", b"xy"])],
+    [("x", [b"x"]), (" ab", [b"ab"]), ("xy", [b"xy"])],
 )
 def test_reset_baseline_sentinel_replacement_keeps_every_inserted_character(
     shell: bool, value: str, expected: list[bytes]
@@ -258,9 +332,9 @@ def test_reset_baseline_sentinel_replacement_keeps_every_inserted_character(
 @pytest.mark.parametrize(
     ("value", "expected"),
     [
-        ("x", [b"a", b"\x7f", b"\x7f", b"\x7f", b"x"]),
-        (" ab", [b"a", b"\x7f", b"\x7f", b"ab"]),
-        ("xy", [b"a", b"\x7f", b"\x7f", b"\x7f", b"xy"]),
+        ("x", [b"a", b"\x7f", b"x"]),
+        (" ab", [b"a", b"\x7f", b"ab"]),
+        ("xy", [b"a", b"\x7f", b"xy"]),
     ],
 )
 def test_pending_reset_replacement_diffs_from_the_last_dispatched_edit(
@@ -336,16 +410,13 @@ def test_delayed_replacement_keeps_the_next_delta_ordered_and_modifiers_per_pack
             release.set()
             await asyncio.wait_for(asyncio.gather(*tasks), 2)
             await app.settle()
-            # Ctrl cannot encode DEL, so the first inserted character consumes
-            # the one-shot. A locked Ctrl is rearmed for the later insertion.
-            expected = [b"\x7f", b"\x7f", b"x" if ctrl == "off" else b"\x18"]
-            if next_value == "z":
+            # A modifier-transformed edit invalidates later queued revisions;
+            # locked Ctrl remains armed for the next fresh field edit.
+            expected = [b"x" if ctrl == "off" else b"\x18"]
+            if next_value == "z" and ctrl == "off":
                 expected.append(b"\x7f")
-            expected.append(
-                (b"\x19" if next_value == "xy" else b"\x1a")
-                if ctrl == "locked"
-                else (b"y" if next_value == "xy" else b"z")
-            )
+            if ctrl == "off":
+                expected.append(b"y" if next_value == "xy" else b"z")
             assert _inputs(socket) == expected
             assert app.find("mod-ctrl").data["latch"] == ("locked" if ctrl == "locked" else "off")
             await _ack_reset(app)
@@ -389,7 +460,7 @@ def test_delayed_replacement_holds_the_shared_writer_against_a_chip_press(shell:
             release.set()
             await asyncio.wait_for(asyncio.gather(*tasks), 2)
             await app.settle()
-            assert _inputs(socket) == [b"\x7f", b"\x7f", b"x", b"/"]
+            assert _inputs(socket) == [b"x", b"/"]
         finally:
             release.set()
             await asyncio.gather(*tasks, return_exceptions=True)
@@ -435,7 +506,7 @@ def test_delayed_replacement_drops_its_remainder_and_queued_delta_on_generation_
             await app.settle()
             # The first accepted write may finish; neither its remaining DEL+x
             # nor the queued y may be replayed into the new writer generation.
-            assert _inputs(socket) == [b"\x7f"]
+            assert _inputs(socket) == [b"x"]
             # A coalesced park/resume can retain keyboard intent; explicitly
             # close it before testing a fresh open, rather than assuming close.
             if app.find(_typing_key(app)).visible:
@@ -448,7 +519,7 @@ def test_delayed_replacement_drops_its_remainder_and_queued_delta_on_generation_
                 "shell-keyboard-toggle" if shell else "agent-workflow-toggle", {}, "click"
             )
             await _change(app, "  z")
-            assert _inputs(socket) == [b"\x7f", b"z"]
+            assert _inputs(socket) == [b"x", b"z"]
             assert session.current_term is term
             if not shell:
                 assert session.store.draft == "retained compose draft"

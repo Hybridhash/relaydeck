@@ -128,7 +128,7 @@ class PasteReviewSession:
                 await self._sender(chunk)
             return REQUEST_INSERTED
         if validation.outcome == OUTCOME_REVIEW:
-            assert validation.review is not None
+            assert validation.review is not None  # noqa: S101
             self._pending = PendingPaste(
                 text=text,
                 generation=generation,
@@ -136,7 +136,7 @@ class PasteReviewSession:
                 review=replace(validation.review, from_app=from_app),
             )
             return REQUEST_REVIEW
-        assert validation.outcome == OUTCOME_REJECTED
+        assert validation.outcome == OUTCOME_REJECTED  # noqa: S101
         self._pending = None
         self._error = validation.reason or "rejected"
         return REQUEST_REJECTED

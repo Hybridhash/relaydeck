@@ -310,7 +310,7 @@ def test_authenticated_metadata_and_payload_tamper_fails_closed(
             expected_revision=None,
         )
     # Column names come exclusively from this test's fixed parameter list.
-    store._db.execute(f"UPDATE records SET {column}=?", (value,))
+    store._db.execute(f"UPDATE records SET {column}=?", (value,))  # noqa: S608 - fixed column list
     with pytest.raises(StorageUnavailable, match="corrupt"):
         with store.transaction() as tx:
             tx.get(Table.REVOCATIONS, "device")

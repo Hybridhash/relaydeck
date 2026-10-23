@@ -84,6 +84,8 @@ def _typing_key(app: Any) -> str:
 
 
 async def _ack_reset(app: Any) -> None:
+    if not (app.find(_typing_key(app)).data or {}).get("direct_reset"):
+        return
     await app.set_props_and_fire(
         _typing_key(app),
         {},

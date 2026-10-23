@@ -155,7 +155,7 @@ class Subscription:
         self._writer.close()
         try:
             await self._writer.wait_closed()
-        except Exception:  # noqa: BLE001 - close is best-effort
+        except Exception:  # noqa: S110 - close is best-effort
             pass
 
 
@@ -210,7 +210,7 @@ class HerdrAdapter:
             writer.close()
             try:
                 await writer.wait_closed()
-            except Exception:  # noqa: BLE001 - close is best-effort
+            except Exception:  # noqa: S110 - close is best-effort
                 pass
         if not raw:
             raise HerdrProtocolError("bad_envelope", "empty reply")
@@ -407,7 +407,7 @@ class HerdrAdapter:
             writer.close()
             try:
                 await writer.wait_closed()
-            except Exception:  # noqa: BLE001 - close is best-effort
+            except Exception:  # noqa: S110 - close is best-effort
                 pass
             raise
         return Subscription(reader, writer)

@@ -76,7 +76,7 @@ def run_bounded_command(
     """
     args, timeout, env, _ = _checked_launch(argv, timeout_s, extra_env, max_bytes)
     try:
-        proc = subprocess.Popen(
+        proc = subprocess.Popen(  # noqa: S603 - argv[0] must be absolute, no shell
             args,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
@@ -181,7 +181,7 @@ def run_line_session(
         ):
             raise ValueError("steps_rejected")
     try:
-        proc = subprocess.Popen(
+        proc = subprocess.Popen(  # noqa: S603 - argv[0] must be absolute, no shell
             args,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
@@ -191,7 +191,7 @@ def run_line_session(
         )
     except OSError as exc:
         raise UsageUnavailable("unavailable") from exc
-    assert proc.stdin is not None and proc.stdout is not None
+    assert proc.stdin is not None and proc.stdout is not None  # noqa: S101
     deadline = time.monotonic() + timeout
     matched: list[bytes | None] = []
     buf = bytearray()
@@ -650,7 +650,7 @@ class LimitsScheduler:
             self._store.record_limits_failure(
                 spec.kind, key, error, now_ms, sources=self._sources.get(key, ())
             )
-        except Exception:  # noqa: BLE001 - the failure state below still applies
+        except Exception:  # noqa: S110 - the failure state below still applies
             pass
         with self._lock:
             state = self._states[key]

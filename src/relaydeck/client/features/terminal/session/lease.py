@@ -113,7 +113,7 @@ class LeaseRenewalOwner:
         ):
             return
         lease, controller = hooks.lease(), hooks.controller()
-        assert lease is not None
+        assert lease is not None  # noqa: S101
         trace = self.trace(lease)
 
         def failed(code: str) -> None:

@@ -199,7 +199,7 @@ class UsageCollector:
                 (),
                 source_key=source.source_key,
             )
-        except Exception:
+        except Exception:  # noqa: S110 - keep prior state when storage is unavailable
             pass  # Retain in-process coverage; unavailable storage cannot acknowledge a pass.
 
     def _backoff(self, source_key: str, now_ms: int) -> None:
@@ -256,7 +256,7 @@ class UsageCollector:
                 (),
                 source_key=key,
             )
-        except Exception:
+        except Exception:  # noqa: S110 - keep prior state when storage is unavailable
             pass  # Keep the previous observation; failure never refreshes its capture time.
 
     def _unmapped_coverage(self, now: int) -> None:
@@ -294,7 +294,7 @@ class UsageCollector:
             self._unmapped_counts = counts
             for kind, row in self.coverage.items():
                 self.coverage[kind] = replace(row, unmapped_sessions=counts.get(kind, 0))
-        except Exception:
+        except Exception:  # noqa: S110 - keep prior state when storage is unavailable
             pass  # Unavailable storage does not invent a zero count.
 
     def _mapping_pending(self, source: UsageSource) -> bool:
@@ -452,7 +452,7 @@ class UsageCollector:
                 self._last_prune = now_ms
                 try:
                     self.store.prune(now_ms)
-                except Exception:
+                except Exception:  # noqa: S110 - keep prior state when storage is unavailable
                     pass
             self._unmapped_coverage(now_ms)
             # The next wake-up is the earliest source due time; a source with no due time yet
@@ -482,6 +482,6 @@ class UsageCollector:
                             _, remaining = backfill(1000)
                             if not remaining:
                                 self._backfill_digest = digest_fn()
-                    except Exception:
+                    except Exception:  # noqa: S110 - keep prior state when storage is unavailable
                         pass
             return produced

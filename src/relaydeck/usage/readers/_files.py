@@ -695,7 +695,7 @@ def _commit(ledger: Ledger, unit: Unit) -> bool:
     if gap and not reasons:
         reasons = frozenset({REASON_UNKNOWN})
     base = unit.file if unit.file is not None else prev
-    assert base is not None
+    assert base is not None  # noqa: S101
 
     def stage(with_gap: bool) -> FileCursor | None:
         text = file_context(

@@ -213,7 +213,7 @@ def test_installed_hook_standalone_without_repo_or_environment(tmp_path: Path) -
         input=json.dumps(
             {
                 "private": "ticket=secret",
-                "rate_limits": {"five_hour": {"used_percentage": 25, "resets_at": 99999}},
+                "rate_limits": {"five_hour": {"used_percentage": 25, "resets_at": 4102444800}},
             }
         ),
         text=True,
@@ -226,7 +226,7 @@ def test_installed_hook_standalone_without_repo_or_environment(tmp_path: Path) -
     assert "secret" not in result.stdout
     body = json.loads(cache.read_text())
     assert set(body) == {"captured_ms", "windows"}
-    assert body["windows"] == {"five_hour": {"used_percentage": 25, "resets_at": 99999}}
+    assert body["windows"] == {"five_hour": {"used_percentage": 25, "resets_at": 4102444800}}
     assert cache.stat().st_mode & 0o777 == 0o600
 
 

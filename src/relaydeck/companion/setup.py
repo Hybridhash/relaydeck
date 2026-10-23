@@ -187,7 +187,7 @@ def _limits_hook_setup(
             1,
         )
     for source in entries:
-        assert source.limits_settings is not None and source.limits_cache is not None
+        assert source.limits_settings is not None and source.limits_cache is not None  # noqa: S101
         diagnosis = diagnose_source(source)
         if diagnosis.reason in ("ok", "cache_stale"):
             lines.append(f"Limits hook for {source.kind}: in place; nothing to change.")

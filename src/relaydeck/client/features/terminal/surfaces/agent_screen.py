@@ -1,8 +1,4 @@
-"""State and layout owner for the agent terminal detail.
-
-Sibling builders are plain functions so layout changes preserve the identity
-and ancestry of the terminal, tap target and draft editor. Hooks stay here;
-builders receive explicit props and callbacks."""
+"""Terminal detail state owner; plain sibling builders preserve renderer and editor ancestry."""
 
 from __future__ import annotations
 
@@ -64,6 +60,7 @@ from relaydeck.client.features.terminal.surfaces.common import (
 )
 from relaydeck.client.features.terminal.surfaces.direct_typing import (
     use_direct_keyboard,
+    use_direct_reset_requests,
     use_paste_fallback,
 )
 from relaydeck.client.features.terminal.surfaces.input_area import (
@@ -167,6 +164,7 @@ def AgentTerminalScreen(
     on_mobile_item: Callable[[KeyBarItem, bool], Any] | None = None,
     modifier_states: dict[str, str] | None = None,
     on_request_keyboard: Callable[[], Any] | None = None,
+    on_release_keyboard: Callable[[], Any] | None = None,
     on_keyboard_button: Callable[[bool], Any] | None = None,
     composer_focusable: bool = True,
     received_input: bool = False,
@@ -198,19 +196,19 @@ def AgentTerminalScreen(
     on_typing_exit: Callable[[str], Any] | None = None,
     keyboard_up: bool = False,
 ) -> Any:
-    """Controlled agent detail with a stable terminal renderer.
-
-    Watching exposes takeover disclosure; only confirmation authorizes attach.
-    Composer and Direct retain independent keyboard choice. Status is read-only
-    metadata, never inferred from output. Input callbacks use the current writer;
-    the renderer binds on mount and unbinds on unmount.
-    """
+    """Stable renderer and independent workflows; explicit takeover authorizes input."""
     tier = width_tier or ("compact" if phone else "expanded")
     phone = tier != "expanded"
     mobile_mode, set_mobile_mode = ft.use_state("reading")
+    hide_requests, set_hide_requests = ft.use_state(0)
     previous_tier = ft.use_ref(tier)
-    # The key bar is memoised on its inputs; these wrappers keep one identity per screen while
-    # always dispatching to the handlers of the current render.
+    reset_requests, reset_action = use_direct_reset_requests()
+    on_mobile_item = reset_action(on_mobile_item, keys_only=True)
+    on_key, on_input = reset_action(on_key), reset_action(on_input)
+    on_paste, on_paste_text = reset_action(on_paste), reset_action(on_paste_text)
+    on_confirm_paste = reset_action(on_confirm_paste)
+    on_cancel_paste = reset_action(on_cancel_paste)
+    # Stable key-bar callbacks dispatch to the current render's handlers.
     key_handlers: Any = ft.use_ref(None)
 
     def stable_key_actions() -> tuple[Any, Any, Any]:
@@ -302,8 +300,7 @@ def AgentTerminalScreen(
     split = typing_split and slot_mode
     pad = 0.0 if phone else WINDOW_PADDING
     split_gap = 8.0 if phone else TYPING_SPLIT_GAP
-    # Until a size event measures the detail (fresh mount or reload),
-    # use the real viewport width, not the 800 pt constant.
+    # Until a size event measures the detail, use the real viewport width, not the 800 pt constant.
     split_terminal_width, split_side_width = typing_split_widths(
         detail_width or viewport_width, padding=pad, gap=split_gap
     )
@@ -387,8 +384,7 @@ def AgentTerminalScreen(
         if on_request_keyboard:
             on_request_keyboard()
 
-    # On touch tablets the keyboard button is drawn by the native
-    # terminal, so its tap focuses inside the gesture. The terminal is told whether to show it.
+    # Touch tablets: the native terminal draws the keyboard button, so its tap focuses in-gesture.
     native_keyboard_button = touch and in_control and not phone
 
     def sync_native_keyboard_button() -> None:
@@ -550,6 +546,14 @@ def AgentTerminalScreen(
 
         return wrapped
 
+    def typing_done() -> None:
+        if workflow != WORKFLOW_AGENT_DIRECT:
+            set_hide_requests(hide_requests + 1)
+        elif on_release_keyboard is not None:
+            on_release_keyboard()
+        if on_typing_exit is not None:
+            on_typing_exit("done")
+
     def send_then_leave() -> Any:
         note_send()
         return on_send()
@@ -587,6 +591,7 @@ def AgentTerminalScreen(
             detail_width=detail_width,
             direct_binding=direct_binding,
             direct_field=direct_field,
+            reset_requests=reset_requests,
             draft=draft,
             error=error,
             focus_handled=focus_handled,
@@ -694,7 +699,8 @@ def AgentTerminalScreen(
             on_cancel_blocked=on_cancel_blocked,
             on_clear_error=on_clear_error,
             on_composer_focus=on_composer_focus,
-            on_typing_done=(lambda: on_typing_exit("done")) if on_typing_exit else None,
+            hide_requests=hide_requests,
+            on_typing_done=typing_done if on_typing_exit else None,
             on_confirm_blocked=on_confirm_blocked,
             on_draft_change=on_draft_change,
             on_keyboard_change=on_keyboard_change,

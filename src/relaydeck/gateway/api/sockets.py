@@ -730,7 +730,7 @@ def build_terminal_socket_router(ctx: RouteContext) -> APIRouter:
                     await state.sockets.send_text(
                         websocket, json.dumps({"kind": "reset", "detail": detail})
                     )
-                except Exception:
+                except Exception:  # noqa: S110 - reset notice is best-effort
                     pass
                 return detail
             try:

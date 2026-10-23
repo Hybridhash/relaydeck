@@ -28,6 +28,8 @@ T0 = 1_700_000_000_000
 MINUTE = 60 * 1000
 GEN_A = "a" * 32
 GEN_B = "b" * 32
+SES_A = "e" * 32
+SES_B = "f" * 32
 WINDOWS = {
     "five_hour": {"used_percentage": 12.5, "resets_at": (T0 + 10 * 3600 * 1000) // 1000},
     "seven_day": {"used_percentage": 30, "resets_at": (T0 + 4 * 24 * 3600 * 1000) // 1000},
@@ -61,9 +63,9 @@ def _lock(cache: Path) -> Path:
 
 
 def test_identical_windows_with_a_new_generation_are_fresh(cache: Path) -> None:
-    assert hook.persist(cache, WINDOWS, T0, GEN_A)
+    assert hook.persist(cache, WINDOWS, T0, GEN_A, SES_A)
     later = T0 + 14 * MINUTE
-    assert hook.persist(cache, WINDOWS, later, GEN_B)  # same numbers, a new API response
+    assert hook.persist(cache, WINDOWS, later, GEN_B, SES_A)  # same numbers, a new API response
     assert json.loads(cache.read_text())["captured_ms"] == T0  # cache keeps the first observation
     snapshot = _read(cache, T0 + 20 * MINUTE)
     assert snapshot.observed_ms == later
@@ -72,26 +74,34 @@ def test_identical_windows_with_a_new_generation_are_fresh(cache: Path) -> None:
 
 
 def test_a_repaint_with_the_same_generation_does_not_move_the_age(cache: Path) -> None:
-    assert hook.persist(cache, WINDOWS, T0, GEN_A)
+    assert hook.persist(cache, WINDOWS, T0, GEN_A, SES_A)
     for minute in (5, 10, 15):  # the timer keeps redrawing the same API response
-        assert hook.persist(cache, WINDOWS, T0 + minute * MINUTE, GEN_A)
+        assert hook.persist(cache, WINDOWS, T0 + minute * MINUTE, GEN_A, SES_A)
     snapshot = _read(cache, T0 + 20 * MINUTE)
     assert snapshot.observed_ms == T0
     assert snapshot.status == LimitStatus.STALE  # 20 minutes since the last API generation
 
 
-def test_changed_numbers_take_the_new_captured_time(cache: Path) -> None:
-    assert hook.persist(cache, WINDOWS, T0, GEN_A)
-    assert hook.persist(cache, CHANGED, T0 + 3 * MINUTE, GEN_A)
+def test_changed_numbers_under_a_new_generation_take_the_new_captured_time(cache: Path) -> None:
+    assert hook.persist(cache, WINDOWS, T0, GEN_A, SES_A)
+    assert hook.persist(cache, CHANGED, T0 + 3 * MINUTE, GEN_B, SES_A)
     snapshot = _read(cache, T0 + 4 * MINUTE)
     assert snapshot.observed_ms == T0 + 3 * MINUTE
     assert snapshot.windows[0].used_percent == 40.0
 
 
+def test_changed_numbers_under_the_same_generation_count_as_a_repaint(cache: Path) -> None:
+    assert hook.persist(cache, WINDOWS, T0, GEN_A, SES_A)
+    assert hook.persist(cache, CHANGED, T0 + 3 * MINUTE, GEN_A, SES_A)
+    snapshot = _read(cache, T0 + 4 * MINUTE)
+    assert snapshot.observed_ms == T0
+    assert snapshot.windows[0].used_percent == 12.5
+
+
 def test_a_fresh_generation_after_a_repaint_run_resets_the_age(cache: Path) -> None:
-    assert hook.persist(cache, WINDOWS, T0, GEN_A)
-    assert hook.persist(cache, WINDOWS, T0 + 10 * MINUTE, GEN_A)
-    assert hook.persist(cache, WINDOWS, T0 + 16 * MINUTE, GEN_B)
+    assert hook.persist(cache, WINDOWS, T0, GEN_A, SES_A)
+    assert hook.persist(cache, WINDOWS, T0 + 10 * MINUTE, GEN_A, SES_A)
+    assert hook.persist(cache, WINDOWS, T0 + 16 * MINUTE, GEN_B, SES_A)
     snapshot = _read(cache, T0 + 20 * MINUTE)
     assert snapshot.observed_ms == T0 + 16 * MINUTE
     assert snapshot.status == LimitStatus.FRESH
@@ -99,7 +109,7 @@ def test_a_fresh_generation_after_a_repaint_run_resets_the_age(cache: Path) -> N
 
 def test_the_stale_threshold_stays_fifteen_minutes_not_two(cache: Path) -> None:
     assert LIMIT_STALE_MS == 15 * MINUTE
-    assert hook.persist(cache, WINDOWS, T0, GEN_A)
+    assert hook.persist(cache, WINDOWS, T0, GEN_A, SES_A)
     snapshot = _read(cache, T0 + LIMIT_STALE_MS)
     assert snapshot.status == LimitStatus.FRESH  # exactly the threshold is not stale
     snapshot = _read(cache, T0 + LIMIT_STALE_MS + 1)
@@ -153,7 +163,10 @@ def test_the_session_id_is_never_written_to_disk(tmp_path: Path) -> None:
     payload = {
         "session_id": "synthetic-session-SECRET",
         "cost": {"total_api_duration_ms": 1200},
-        "rate_limits": WINDOWS,
+        "rate_limits": {
+            "five_hour": {"used_percentage": 12.5, "resets_at": 4102444800},
+            "seven_day": {"used_percentage": 30, "resets_at": 4102444800},
+        },
     }
     result = subprocess.run(
         [sys.executable, "-B", str(HOOK_PATH), "--cache-path", str(cache)],
@@ -163,6 +176,7 @@ def test_the_session_id_is_never_written_to_disk(tmp_path: Path) -> None:
         timeout=5,
     )
     assert result.returncode == 0
+    assert (cache.parent / hook.SESSIONS_NAME).is_file()
     written = b"".join(p.read_bytes() for p in cache.parent.iterdir())
     assert b"synthetic-session" not in written and b"SECRET" not in written
     assert _read(cache, int(time.time() * 1000) + MINUTE) is not None  # still usable
@@ -219,14 +233,14 @@ def test_a_confirmation_within_the_skew_allowance_is_used(cache: Path) -> None:
 
 
 def test_a_missing_lock_file_uses_the_captured_time(cache: Path) -> None:
-    assert hook.persist(cache, WINDOWS, T0, GEN_A)
+    assert hook.persist(cache, WINDOWS, T0, GEN_A, SES_A)
     _lock(cache).unlink()
     snapshot = _read(cache, T0 + 20 * MINUTE)
     assert snapshot.observed_ms == T0
 
 
 def test_a_symlinked_lock_is_ignored(cache: Path, tmp_path: Path) -> None:
-    assert hook.persist(cache, WINDOWS, T0, GEN_A)
+    assert hook.persist(cache, WINDOWS, T0, GEN_A, SES_A)
     target = tmp_path / "elsewhere.lock"
     target.write_bytes(f"{T0}:{T0 + 19 * MINUTE}:{GEN_A}".encode())
     target.chmod(0o600)
@@ -250,8 +264,8 @@ def _tree(root: Path) -> dict[str, tuple[bytes, int]]:
 def test_the_reader_never_writes_or_takes_the_lock(
     cache: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    assert hook.persist(cache, WINDOWS, T0, GEN_A)
-    assert hook.persist(cache, WINDOWS, T0 + 10 * MINUTE, GEN_B)
+    assert hook.persist(cache, WINDOWS, T0, GEN_A, SES_A)
+    assert hook.persist(cache, WINDOWS, T0 + 10 * MINUTE, GEN_B, SES_A)
     before = _tree(cache.parent)
 
     import fcntl
@@ -268,7 +282,7 @@ def test_the_reader_never_writes_or_takes_the_lock(
 
 def test_the_reader_and_the_hook_agree_on_the_lock_file(cache: Path) -> None:
     assert reader_module.LOCK_NAME == hook.LOCK_NAME
-    assert hook.persist(cache, WINDOWS, T0, GEN_A)
+    assert hook.persist(cache, WINDOWS, T0, GEN_A, SES_A)
     assert _lock(cache).exists()
-    assert hook.persist(cache, WINDOWS, T0 + 12 * MINUTE, GEN_B)
+    assert hook.persist(cache, WINDOWS, T0 + 12 * MINUTE, GEN_B, SES_A)
     assert _read(cache, T0 + 20 * MINUTE).observed_ms == T0 + 12 * MINUTE

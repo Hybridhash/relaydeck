@@ -428,3 +428,17 @@ def test_resource_validation_failure_has_no_owner_file_write(
     monkeypatch.setattr("relaydeck.usage.hook_install.hook_bytes", fail)
     assert files.install(confirmed=True).state == "resource_invalid"
     assert not files.hooks.exists()
+
+
+def test_upgrade_without_a_receipt_fails_closed_and_writes_nothing(
+    files: Files, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    files.hooks.mkdir(mode=0o700)
+    files.script.write_bytes(b"#!/bin/sh\n# older hook\n")
+    files.script.chmod(0o600)
+    monkeypatch.setattr("relaydeck.usage.hook_install._upgradeable", lambda *_a, **_k: True)
+    settings_before = files.settings.read_bytes()
+    result = files.install(confirmed=True)
+    assert result.state == "invalid" and not result.changed
+    assert files.script.read_bytes() == b"#!/bin/sh\n# older hook\n"
+    assert files.settings.read_bytes() == settings_before

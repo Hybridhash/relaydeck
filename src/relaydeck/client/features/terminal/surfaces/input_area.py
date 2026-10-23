@@ -91,6 +91,7 @@ def build_expanded_input(
     keep_typing: Callable[..., Any],
     keyboard: str,
     keyboard_up: bool,
+    hide_requests: int = 0,
     markers: tuple[StagedMarker, ...],
     on_attach_picture: Any,
     on_cancel_blocked: Callable[[], Any],
@@ -154,6 +155,7 @@ def build_expanded_input(
                 on_focus_change=on_composer_focus,
                 fill_lines=expanded_lines if split else WIDE_DRAFT_LINES,
                 keyboard=("hide" if keyboard_up else "show") if split else "",
+                hide_requests=hide_requests,
             ),
         )
     else:
@@ -200,8 +202,7 @@ def build_expanded_input(
             ),
         )
     if slot_mode:
-        # Controls cluster, composer and spacer: the composer slot keeps the
-        # same wrappers (right, bottom, width) in both layouts.
+        # Controls cluster, composer, spacer: the composer slot keeps its wrappers in both layouts.
         cluster_controls = axes_controls[:-1]
         comp_w, comp_h = comp_size
         ctl_w, ctl_h = ctl_size

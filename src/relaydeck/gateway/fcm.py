@@ -22,7 +22,7 @@ from cryptography.hazmat.primitives.asymmetric import padding, rsa
 from relaydeck.companion.private import read_private
 from relaydeck.gateway.push import HINT_CATEGORIES, HINT_KEYS, ProviderOutcome, ProviderPort
 
-TOKEN_URL = "https://oauth2.googleapis.com/token"
+TOKEN_URL = "https://oauth2.googleapis.com/token"  # noqa: S105 - URL
 FCM_SCOPE = "https://www.googleapis.com/auth/firebase.messaging"
 
 

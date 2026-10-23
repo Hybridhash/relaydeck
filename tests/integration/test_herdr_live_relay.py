@@ -855,7 +855,7 @@ def test_pane_resubscribe_backoff_no_churn(tmp_path: Path) -> None:
                 _PANE_SUB_RETRY_MS <= gate_in_ms <= (_PANE_SUB_RETRY_MS + _PANE_SUB_RETRY_JITTER_MS)
             )
             # Seeded schedule replays exactly (deterministic jitter).
-            expected = _PANE_SUB_RETRY_MS + random.Random(7).randrange(
+            expected = _PANE_SUB_RETRY_MS + random.Random(7).randrange(  # noqa: S311 - seeded test data
                 _PANE_SUB_RETRY_JITTER_MS + 1
             )
             assert gate_in_ms == expected

@@ -60,7 +60,7 @@ def Viewer() -> Any:
 
     def on_input(origin: int, data: bytes) -> None:
         # Local echo for the viewer only; the app routes INPUT to the PTY.
-        assert term_box.current is not None
+        assert term_box.current is not None  # noqa: S101
         term_box.current.write(data)
         set_status(f"echo {len(data)} bytes origin={ORIGINS.get(origin, origin)}")
 

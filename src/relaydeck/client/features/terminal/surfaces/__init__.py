@@ -1,23 +1,21 @@
-"""Agent detail presentation and session-bound mounts.
-
-`agent_screen` owns layout state and `agent_hooks` its hooks; the builders
-`agent_dock`, `agent_header`, `agent_panels`, `input_area`,
-`phone_dock`, `select_stack` and `terminal_host` receive props and callbacks.
-Keeping builders as plain functions preserves terminal ancestry between layouts.
-`mount` binds callbacks to a live session and writer token; `actions` holds the
-selection, keyboard and mobile key callbacks; `common` the shared keys.
-`direct_typing`, `phone_composer` and `sessions` keep editor and input lifetimes
-independent of presentation. `agent_switcher` holds the phone header's agent switcher,
-`tools_popover` the phone keys and actions, `paste_entry` the paste panel for browsers that
-block clipboard reads, and `screen_overlays` places these floating layers.
-Public exports are centralized here."""
+"""Session-bound terminal surfaces with stable renderer ancestry and independent editor lifetimes.
+Plain layout builders receive explicit props; mounted owners manage hooks and writer authority."""
 
 from __future__ import annotations
 
+# Layout state: `agent_screen` owns it, `agent_hooks` its hooks, `mount` binds callbacks to a live
+# session and writer token.
+# Plain builders (keep terminal ancestry between layouts): `agent_dock`, `agent_header`,
+# `agent_panels`, `input_area`, `phone_dock`, `select_stack`, `terminal_host`.
+# `actions` selection, keyboard and mobile key callbacks; `common` shared keys.
+# Editor and input lifetimes: `direct_typing`, `direct_typing_state`, `phone_composer`, `sessions`.
+# Phone chrome: `agent_switcher` header switcher, `tools_popover` keys and actions, `paste_entry`
+# paste panel for browsers that block clipboard reads, `screen_overlays` floating layers.
 from relaydeck.client.features.terminal.surfaces.actions import (
     DirectInput,
     MobileInput,
     phone_selection_actions,
+    release_terminal_keyboard,
     request_terminal_keyboard,
     selection_actions,
     use_mobile_key_actions,
@@ -149,6 +147,7 @@ __all__ = [
     "mount_agent_screen",
     "offered_position",
     "phone_selection_actions",
+    "release_terminal_keyboard",
     "request_terminal_keyboard",
     "selection_actions",
     "use_direct_keyboard",

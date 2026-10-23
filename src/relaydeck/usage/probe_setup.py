@@ -87,7 +87,7 @@ def doctor_line(target: ProbeTarget, state: str) -> str:
 
 def _run_in_terminal(argv: Sequence[str], cwd: Path) -> int:
     # Inherits stdin, stdout and stderr: the user answers the tool's prompt themselves.
-    return subprocess.run(list(argv), cwd=cwd, check=False).returncode
+    return subprocess.run(list(argv), cwd=cwd, check=False).returncode  # noqa: S603 - recipe binary found via which; interactive trust prompt
 
 
 def offer_trust(

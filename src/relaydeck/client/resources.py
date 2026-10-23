@@ -661,7 +661,7 @@ def build_resources(
         version = recovery_version()
         if not recovery_current():
             raise asyncio.CancelledError
-        assert refresh_identity is not None
+        assert refresh_identity is not None  # noqa: S101
         recovered = await refresh_identity()
         if not recovery_current() or version != recovery_version():
             raise asyncio.CancelledError

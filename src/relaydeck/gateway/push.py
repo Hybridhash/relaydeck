@@ -92,7 +92,7 @@ PREF_CATEGORY_TO_UI = {value: key for key, value in PREF_UI_TO_CATEGORY.items()}
 PLATFORMS = frozenset({"android"})
 
 LINK_PURPOSE_OPEN = "open-event"
-LINK_TOKEN_PREFIX = "rdl_"
+LINK_TOKEN_PREFIX = "rdl_"  # noqa: S105 - public prefix
 
 DEFAULT_PUSH_TTL_MS = 24 * 60 * 60 * 1000
 TERMINAL_KEEP_MS = 24 * 60 * 60 * 1000

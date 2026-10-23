@@ -70,6 +70,24 @@ def test_keyboard_toggle_gates_focus_before_hide_and_preserves_retained_session(
                         for op in patch
                     )
                 ]
+                if not indices:
+                    # Explicit reset replaces the native editor. Its disabled
+                    # initial properties also close focus before the hide frame.
+                    def created(node: Any) -> bool:
+                        if node is None:
+                            return False
+                        if isinstance(node, dict):
+                            return (
+                                node.get("key") == _typing_key(app) and node.get(prop) == value
+                            ) or any(created(child) for child in node.values())
+                        if isinstance(node, list | tuple):
+                            return any(created(child) for child in node)
+                        return (
+                            getattr(node, "key", None) == _typing_key(app)
+                            and getattr(node, prop, None) == value
+                        ) or created(getattr(node, "content", None))
+
+                    indices = [i for i, patch in enumerate(patches) if created(patch)]
                 assert indices, (field._i, prop, patches)
                 return indices[0]
 
@@ -92,7 +110,7 @@ def test_keyboard_toggle_gates_focus_before_hide_and_preserves_retained_session(
             await app.settle()
             field = app.find(_typing_key(app))
             assert field.visible is (surface != "shell") and not app.find(semantics).selected
-            assert field._i == field_id
+            assert field._i != field_id  # Explicit resets fence old native events.
             assert session.current_term is term and session.controller is controller
             if not shell:
                 assert session.store.draft == "retained compose draft"
@@ -116,7 +134,7 @@ def test_leaving_agent_or_shell_closes_keyboard_intent(shell: bool) -> None:
             session.set_foreground(True)
             await app.settle()
             assert app.find(_typing_key(app)).visible is not shell
-            assert app.find(_typing_key(app))._i == field_id
+            assert app.find(_typing_key(app))._i != field_id  # Leaving fences old native events.
             assert session.current_term is term
         finally:
             await session.dispose()

@@ -8,6 +8,7 @@ unchanged grid as a re-send, not as layout activity, and releases at its quiet w
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 import flet as ft
@@ -47,7 +48,7 @@ def _height_signature(app: Any) -> list[tuple[Any, ...]]:
         signature.append(
             (
                 type(control).__name__,
-                str(key),
+                re.sub(r":reset:\d+$", ":reset", str(key)),  # Direct resets re-key the field.
                 getattr(control, "visible", True),
                 height,
                 str(padding),

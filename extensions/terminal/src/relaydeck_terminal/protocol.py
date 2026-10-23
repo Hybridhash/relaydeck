@@ -287,7 +287,7 @@ def is_wheel_report(data: bytes) -> bool:
     urxvt = re.fullmatch(r"\x1b\[(\d+);(\d+);(\d+)M", text)
     if sgr or urxvt:
         match = sgr or urxvt
-        assert match is not None
+        assert match is not None  # noqa: S101
         button, x, y = map(int, match.groups())
         if urxvt:
             button -= 32
@@ -392,7 +392,7 @@ def encode_resume_report(req_id: int, instance: int, resets: int, applied: int) 
         if not 0 <= value < (1 << bits):
             raise ValueError(f"bad resume {name} {value!r}")
     payload = struct.pack(">IQIQ", req_id, instance, resets, applied)
-    assert len(payload) == RESUME_REPORT_LEN
+    assert len(payload) == RESUME_REPORT_LEN  # noqa: S101
     return struct.pack(">B", RESUME_REPORT) + payload
 
 

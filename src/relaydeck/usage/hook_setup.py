@@ -22,13 +22,15 @@ from relaydeck.usage.hook_files import HookFileError, document
 
 HOOK_VERSION = 1
 HOOK_FILENAME = "statusline_limits_hook.py"
-HOOK_SHA256 = "1cf6b549e22c8d0bc1efaf245da1630dbb242ce35c6acc85225b2909eef4b9a6"
+HOOK_SHA256 = "563433525dc3da91f97cffac4e371776be53a424a73ba33961ba0d3e8746a458"
 # Previous RelayDeck hook versions this build may upgrade from (shipped allow-list): earlier
 # revisions that may be installed on the owner's Mac. Nothing else is upgraded.
 PREVIOUS_HOOK_SHA256 = (
     "eece0979aa2ccd21be47121fd2ba2a958a7a2caf8ccf4c8a3b8b24c7995c0c64",
     "f5632268feff5fa6ee8ec65e97049bbbd30f3f42f8000d977267fced84f0e5e7",
     "81833a623b5e14b8b0cf242d87ffdbe3fafb01ceee87e06845bc946fcde4914c",
+    "1cf6b549e22c8d0bc1efaf245da1630dbb242ce35c6acc85225b2909eef4b9a6",
+    "bc6f77c25219ec3b759df89de39b39960ee3c35b3393b8ad39b3131eb56e59eb",
 )
 MAX_SETUP_BYTES = 1024 * 1024
 CHECK_INTERVAL_S = 60
@@ -103,7 +105,7 @@ class HookSetupCheck:
     def _state(self) -> str:
         if self.script is None or self.cache is None:
             return "not_configured"
-        assert self.settings is not None
+        assert self.settings is not None  # noqa: S101
         try:
             try:
                 script = _read(self.script, private=True)

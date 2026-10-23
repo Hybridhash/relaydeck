@@ -36,7 +36,10 @@ def main() -> int:
         failures.append(f"python minor {(py.major, py.minor)} != {EXPECTED_PY_MINOR}")
     try:
         out = subprocess.run(
-            ["flet", "--version"], capture_output=True, text=True, timeout=60
+            ["flet", "--version"],  # noqa: S607 - checks the PATH tool, fixed argv
+            capture_output=True,
+            text=True,
+            timeout=60,
         ).stdout
     except (OSError, subprocess.TimeoutExpired) as exc:
         out = ""

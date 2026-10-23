@@ -385,7 +385,7 @@ def test_persisted_non_secret_stores_carry_no_credentials(tmp_path: Any) -> None
     assert isinstance(push_db, sqlite3.Connection)
     non_secret_rows: list[str] = []
     for table in ("push_outbox", "push_refs", "push_links"):
-        for row in push_db.execute(f"SELECT * FROM {table}").fetchall():
+        for row in push_db.execute(f"SELECT * FROM {table}").fetchall():  # noqa: S608 - literal table names
             non_secret_rows.append(" ".join("" if v is None else str(v) for v in tuple(row)))
     token_cells = [row[0] for row in push_db.execute("SELECT token FROM push_devices").fetchall()]
     assert token_cells == [CANARY_PUSH]  # intended holder, and only there

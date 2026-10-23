@@ -97,7 +97,12 @@ class MarkdownControl extends StatelessWidget {
 
     return LayoutControl(
       control: control,
-      child: selectable ? SelectionArea(child: markdown) : markdown,
+      child: selectable
+          ? SelectionArea(
+              magnifierConfiguration: TextMagnifierConfiguration.disabled,
+              child: markdown,
+            )
+          : markdown,
     );
   }
 }

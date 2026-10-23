@@ -227,15 +227,20 @@ def test_direct_field_is_outside_clear_retained_viewport_across_native_input_and
             channel._deliver(protocol.encode_input(b"", protocol.ORIGIN_TEXT))
             channel._deliver(protocol.encode_input(b"mouse", protocol.ORIGIN_MOUSE))
             await app.settle()
-            assert _active(app, "agent-workflow-direct-typing")._i == field._i
+            # Native terminal input crosses the field baseline boundary too.
+            assert _active(app, "agent-workflow-direct-typing")._i != field._i
+            field = _active(app, "agent-workflow-direct-typing")
             await app.set_props_and_fire("key-enter", {}, "click")
-            assert _active(app, "agent-workflow-direct-typing")._i == field._i
+            assert _active(app, "agent-workflow-direct-typing")._i != field._i
+            field = _active(app, "agent-workflow-direct-typing")
             bridge.set_size(390, 544)
             await app.settle()
             _assert_unobstructed_viewport(app, term)
             channel._deliver(protocol.encode_input(b"a", origin))
             await app.settle()
-            assert _active(app, "agent-workflow-direct-typing")._i == field._i
+            # Native terminal input crosses the field baseline boundary too.
+            assert _active(app, "agent-workflow-direct-typing")._i != field._i
+            field = _active(app, "agent-workflow-direct-typing")
             await app.set_props_and_fire("terminal-back", {}, "click")
             await app.set_props_and_fire("agent-home-mac:term-1", {}, "click")
             # Parking closes keyboard intent; returning keeps the field and
@@ -243,20 +248,22 @@ def test_direct_field_is_outside_clear_retained_viewport_across_native_input_and
             assert app.find("agent-workflow-direct-typing").visible is False
             assert session.lease.mode == "view" and session.controller.key_generation() is None
             # Returning from the list is watching. Typing requires fresh,
-            # explicit takeover, preserving the native tree and field instance.
+            # explicit takeover. The terminal tree stays; reset epochs retire only the editor.
             await app.set_props_and_fire("agent-takeover", {}, "click")
             await app.set_props_and_fire("agent-takeover-confirm", {}, "click")
             # The tools popover's Direct mode, not a tap, opens phone Direct input.
             now[0] += 1.0
             await open_direct_input(app)
-            assert _active(app, "agent-workflow-direct-typing")._i == field._i
+            assert _active(app, "agent-workflow-direct-typing")._i != field._i
+            field = _active(app, "agent-workflow-direct-typing")
             await open_compose(app)
             await app.settle()
             await asyncio.sleep(0.06)
             await app.settle()
             now[0] += 1.0
             await open_direct_input(app)
-            assert _active(app, "agent-workflow-direct-typing")._i == field._i
+            assert _active(app, "agent-workflow-direct-typing")._i != field._i
+            field = _active(app, "agent-workflow-direct-typing")
             assert session.current_term is term and _shape(_ancestry(app, term)) == ancestry
         finally:
             await app.set_props_and_fire("test-unmount", {}, "click")

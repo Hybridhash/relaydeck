@@ -125,7 +125,7 @@ def MatchedRow(
             controls.append(ft.Container(expand=expands[index]))
             continue
         column = card.content
-        assert isinstance(column, ft.Column)
+        assert isinstance(column, ft.Column)  # noqa: S101
 
         def measure(event: Any, slot: int = index) -> None:
             set_heights(

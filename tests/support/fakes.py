@@ -81,7 +81,7 @@ class FakeNotifications(NotificationPort):
         self,
         *,
         permission: PushPermission = PushPermission.UNKNOWN,
-        token: str | None = "fake-fcm-token-1",
+        token: str | None = "fake-fcm-token-1",  # noqa: S107 - synthetic fixture
     ) -> None:
         self._permission = permission
         self._token = token

@@ -1,3 +1,99 @@
+--- a/lib/src/controls/auto_complete.dart
++++ b/lib/src/controls/auto_complete.dart
+@@ -96,6 +96,7 @@
+           VoidCallback onFieldSubmitted) {
+         _attachController(textEditingController);
+         return TextField(
++          magnifierConfiguration: TextMagnifierConfiguration.disabled,
+           controller: textEditingController,
+           focusNode: focusNode,
+           onEditingComplete: onFieldSubmitted,
+--- a/lib/src/controls/cupertino_textfield.dart
++++ b/lib/src/controls/cupertino_textfield.dart
+@@ -250,6 +250,7 @@
+     }
+ 
+     Widget textField = CupertinoTextField(
++        magnifierConfiguration: TextMagnifierConfiguration.disabled,
+         style: textStyle,
+         textAlignVertical: textVerticalAlign != null
+             ? TextAlignVertical(y: textVerticalAlign)
+--- a/lib/src/controls/highlight_view.dart
++++ b/lib/src/controls/highlight_view.dart
+@@ -104,11 +104,14 @@
+       padding: padding,
+       decoration: d,
+       child: selectable
+-          ? SelectableText.rich(TextSpan(
+-              style: style,
+-              children:
+-                  _convert(highlight.parse(source, language: language).nodes!),
+-            ))
++          ? SelectableText.rich(
++              TextSpan(
++                style: style,
++                children: _convert(
++                    highlight.parse(source, language: language).nodes!),
++              ),
++              magnifierConfiguration: TextMagnifierConfiguration.disabled,
++            )
+           : Text.rich(
+               TextSpan(
+                 style: style,
+--- a/lib/src/controls/markdown.dart
++++ b/lib/src/controls/markdown.dart
+@@ -97,7 +97,12 @@
+ 
+     return LayoutControl(
+       control: control,
+-      child: selectable ? SelectionArea(child: markdown) : markdown,
++      child: selectable
++          ? SelectionArea(
++              magnifierConfiguration: TextMagnifierConfiguration.disabled,
++              child: markdown,
++            )
++          : markdown,
+     );
+   }
+ }
+--- a/lib/src/controls/selection_area.dart
++++ b/lib/src/controls/selection_area.dart
+@@ -22,6 +22,7 @@
+     }
+     var selectionArea = SelectionArea(
+       child: content,
++      magnifierConfiguration: TextMagnifierConfiguration.disabled,
+       onSelectionChanged: (SelectedContent? selection) {
+         control.triggerEvent("change", selection?.plainText);
+       },
+--- a/lib/src/controls/text.dart
++++ b/lib/src/controls/text.dart
+@@ -86,6 +86,7 @@
+         ? (spans.isNotEmpty)
+             ? SelectableText.rich(
+                 TextSpan(text: text, style: style, children: spans),
++                magnifierConfiguration: TextMagnifierConfiguration.disabled,
+                 maxLines: maxLines,
+                 textAlign: textAlign,
+                 cursorColor: selectionCursorColor,
+@@ -99,6 +100,7 @@
+               )
+             : SelectableText(
+                 text,
++                magnifierConfiguration: TextMagnifierConfiguration.disabled,
+                 semanticsLabel: semanticsLabel,
+                 maxLines: maxLines,
+                 style: style,
+--- a/lib/src/controls/textfield.dart
++++ b/lib/src/controls/textfield.dart
+@@ -276,6 +276,7 @@
+     var maxLength = widget.control.getInt("max_length");
+ 
+     Widget textField = TextFormField(
++        magnifierConfiguration: TextMagnifierConfiguration.disabled,
+         style: textStyle,
+         autofocus: autofocus,
+         enabled: !widget.control.disabled,
 --- a/lib/src/flet_backend.dart
 +++ b/lib/src/flet_backend.dart
 @@ -37,9 +37,12 @@
@@ -234,7 +330,7 @@
 @@ -808,9 +890,14 @@
      }
    }
-
+ 
 +  /// Length of the payload's text form, so logs never carry its contents.
 +  static int _payloadSize(dynamic payload) =>
 +      payload == null ? 0 : payload.toString().length;

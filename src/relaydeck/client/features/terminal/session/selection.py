@@ -112,7 +112,7 @@ class SelectionController:
             if callable(clear):
                 try:
                     clear()
-                except Exception:  # noqa: BLE001 - renderer best effort
+                except Exception:  # noqa: S110 - renderer is best-effort
                     pass
         hooks.notify()
 

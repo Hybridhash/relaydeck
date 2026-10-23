@@ -18,7 +18,7 @@ PAIRING_REDEEM = "/v1/pairing/{request_id}/redeem"
 # Sign-in.
 AUTHORIZE = "/v1/authorize"
 IDENTITY_CALLBACK = "/v1/identity/callback"
-TOKEN = "/v1/token"
+TOKEN = "/v1/token"  # noqa: S105 - URL path
 LOGOUT = "/v1/logout"
 
 # Devices and notifications.

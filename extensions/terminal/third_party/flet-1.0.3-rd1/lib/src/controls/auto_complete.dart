@@ -96,6 +96,7 @@ class _AutoCompleteControlState extends State<AutoCompleteControl> {
           VoidCallback onFieldSubmitted) {
         _attachController(textEditingController);
         return TextField(
+          magnifierConfiguration: TextMagnifierConfiguration.disabled,
           controller: textEditingController,
           focusNode: focusNode,
           onEditingComplete: onFieldSubmitted,

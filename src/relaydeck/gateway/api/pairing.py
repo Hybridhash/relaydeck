@@ -58,7 +58,7 @@ def build_router(ctx: RouteContext) -> APIRouter:
     async def request_pairing(request: Request) -> JSONResponse:
         try:
             body = await pairing_body(request, "relaydeck/gateway/v1/pairing-request")
-            assert state.pairing is not None
+            assert state.pairing is not None  # noqa: S101
             result = await run_blocking(
                 state.pairing.request,
                 body,
@@ -73,7 +73,7 @@ def build_router(ctx: RouteContext) -> APIRouter:
     async def pairing_status(request_id: str, request: Request) -> JSONResponse:
         try:
             body = await pairing_body(request, "relaydeck/gateway/v1/pairing-proof")
-            assert state.pairing is not None
+            assert state.pairing is not None  # noqa: S101
             result = await run_blocking(
                 state.pairing.poll,
                 request_id,
@@ -89,7 +89,7 @@ def build_router(ctx: RouteContext) -> APIRouter:
     async def redeem_pairing(request_id: str, request: Request) -> JSONResponse:
         try:
             body = await pairing_body(request, "relaydeck/gateway/v1/pairing-proof")
-            assert state.pairing is not None
+            assert state.pairing is not None  # noqa: S101
             grant = await run_blocking(
                 state.pairing.redeem,
                 request_id,

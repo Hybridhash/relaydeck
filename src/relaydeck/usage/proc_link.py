@@ -85,7 +85,7 @@ ProbeFn = Callable[
 def default_run(argv: tuple[str, ...], timeout: float) -> str | None:
     """Run argv with no shell and no stdin; stdout on success, else None."""
     try:
-        out = subprocess.run(
+        out = subprocess.run(  # noqa: S603 - fixed herdr subcommands, no shell
             argv, text=True, capture_output=True, stdin=subprocess.DEVNULL, timeout=timeout
         )
     except (OSError, subprocess.TimeoutExpired):

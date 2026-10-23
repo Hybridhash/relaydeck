@@ -95,6 +95,7 @@ def key_hooks(session: TerminalSessionBase) -> KeyHooks:
         modes=lambda: session._sessions.modes,
         notify=lambda: session._notify(),
         note_input=lambda: session.note_input(),
+        review_text=lambda text: session.request_paste(text, require_review=True),
         store=lambda: session._composer_store(),
         # Only a session with a composer workflow may route text to a draft.
         allow_draft=session._workflow_kind != WORKFLOW_SHELL,

@@ -276,6 +276,7 @@ class _TextFieldControlState extends State<TextFieldControl> {
     var maxLength = widget.control.getInt("max_length");
 
     Widget textField = TextFormField(
+        magnifierConfiguration: TextMagnifierConfiguration.disabled,
         style: textStyle,
         autofocus: autofocus,
         enabled: !widget.control.disabled,

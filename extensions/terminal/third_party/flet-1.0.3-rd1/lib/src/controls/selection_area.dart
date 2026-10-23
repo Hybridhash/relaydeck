@@ -22,6 +22,7 @@ class SelectionAreaControl extends StatelessWidget {
     }
     var selectionArea = SelectionArea(
       child: content,
+      magnifierConfiguration: TextMagnifierConfiguration.disabled,
       onSelectionChanged: (SelectedContent? selection) {
         control.triggerEvent("change", selection?.plainText);
       },

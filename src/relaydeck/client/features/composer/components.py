@@ -49,6 +49,7 @@ from relaydeck.client.features.composer.keyboard_toggle import keep_focus, keybo
 from relaydeck.client.features.composer.shortcut import use_send_shortcut
 from relaydeck.client.features.terminal.events import click, spawn, value_change
 from relaydeck.client.features.terminal.paste_policy import PasteReview
+from relaydeck.client.flet_invokes import focus_control
 from relaydeck.client.theme import FONT_SIZE, MIN_TOUCH, palette
 
 COMPOSER_KEY = "composer-box"
@@ -140,19 +141,11 @@ def ComposerBox(
     fill_lines: int | None = None,
     working: bool = True,
     keyboard: str = "",
+    hide_requests: int = 0,
 ) -> Any:
-    """Presentation: reference `.composer` frame (draft field plus
-    staged/validation/error notices) with a `.composer-footer` row
-    carrying Send, over the shared tokens (`dark` selects the
-    table). Every key, callback, value handler, and traversal position
-    is unchanged. Optional props (both default off, defaults render exactly as before):
-    `on_focus_change(bool)` reports the draft field gaining/losing focus;
-    `fill_lines` fixes the field to that many visible lines (text scrolls
-    inside, the layout never grows); `keyboard` ("hide"/"show") puts the keyboard button in
-    the field, and taps elsewhere (Send included) keep the keyboard up; `working` is the
-    agent's own status, so the progress notice ends when the agent stops. Only plain
-    TextField props change, never the widget structure or wrappers, so the field keeps its
-    identity and its focus while the box moves between layouts."""
+    """Render the stable draft field and send controls without changing editor identity.
+    Advancing hide_requests drops focus; only the latest live hide request re-enables the field.
+    """
     tokens = palette(dark)
     hint = _validation_hint(blockers)
     staged = markers_line(markers)
@@ -167,21 +160,39 @@ def ComposerBox(
 
     field_ref: Any = ft.use_ref(None)
     closing, set_closing = ft.use_state(False)
+    alive = ft.use_ref(True)
+    hide_round: Any = ft.use_ref(0)
+    hide_handled: Any = ft.use_ref(hide_requests)
 
     def hide_keyboard() -> None:
-        # A brief disable is what drops focus (and the keyboard) on iOS.
+        # A brief disable is what drops focus (and the keyboard) on iOS. Only the latest
+        # round re-enables, and never after this box is gone.
+        hide_round.current += 1
+        current = hide_round.current
         set_closing(True)
 
         async def reopen() -> None:
             await asyncio.sleep(0.05)
-            set_closing(False)
+            if alive.current and hide_round.current == current:
+                set_closing(False)
 
         spawn(reopen(), label="Close composer keyboard")
+
+    def hide_on_request() -> None:
+        if hide_requests > hide_handled.current:
+            hide_handled.current = hide_requests
+            hide_keyboard()
+
+    def leave() -> None:
+        alive.current = False
+
+    ft.use_effect(hide_on_request, dependencies=[hide_requests])
+    ft.use_effect(lambda: None, dependencies=[], cleanup=leave)
 
     def show_keyboard() -> None:
         # Screen-reader activation only; a touch lands on the field itself.
         if field_ref.current is not None:
-            spawn(field_ref.current.focus(), label="Show composer keyboard")
+            spawn(focus_control(field_ref.current), label="Show composer keyboard")
 
     def focus_changed(focused: bool) -> None:
         shortcut.focus(focused)

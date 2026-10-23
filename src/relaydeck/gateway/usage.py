@@ -670,7 +670,8 @@ def install(
         session, denied = authorized(request, host_id)
         if denied is not None:
             return denied
-        assert session is not None
+        if session is None:
+            return failure("forbidden", 403)
         service = state.usage
         if service is None or service.host_id != host_id:
             return failure("usage_disabled", 404)
@@ -709,7 +710,8 @@ def install(
         session, denied = authorized(request, host_id)
         if denied is not None:
             return denied
-        assert session is not None
+        if session is None:
+            return failure("forbidden", 403)
         service = state.usage
         if service is None or service.host_id != host_id:
             return failure("usage_disabled", 404)

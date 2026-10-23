@@ -60,6 +60,7 @@ from relaydeck.client.features.auth.web_recovery import (
     BrowserRecoveryMiddleware,
 )
 from relaydeck.client.features.terminal.diagnostics import diagnostics_logger
+from relaydeck.client.flet_invokes import install_invoke_result_guard
 from relaydeck.contracts import paths
 from relaydeck.contracts.schemas import AuthorizationRequest, Me, validate
 from relaydeck.devtools.dev_server import (  # noqa: F401  (re-exported for tests and the runner)
@@ -212,7 +213,7 @@ class WebSessionStore:
         return hashlib.sha256(sid.encode()).hexdigest()
 
     def _web_record(self, session: _WebSession) -> Record:
-        assert self.gateway_sessions is not None
+        assert self.gateway_sessions is not None  # noqa: S101
         doc = {
             "account": session.identity.account,
             "device_id": session.identity.device_id,
@@ -236,7 +237,7 @@ class WebSessionStore:
         )
 
     def _read_web(self, sid: str) -> _WebSession | None:
-        assert self.persistence is not None
+        assert self.persistence is not None  # noqa: S101
         authority = self.gateway_sessions
         if authority is None or not authority.check_generation() or sid in self._denied_sids:
             return None
@@ -411,7 +412,7 @@ class WebSessionStore:
         return session.identity if session is not None else None
 
     def rotate_web(self, sid: str, expected_generation: int) -> str | None:
-        assert self.persistence is not None and self.gateway_sessions is not None
+        assert self.persistence is not None and self.gateway_sessions is not None  # noqa: S101
         authority = self.gateway_sessions
         with authority._lock, self.persistence.transaction() as tx:
             row = tx.get(Table.WEB_SESSIONS, self._sid_key(sid))
@@ -471,7 +472,7 @@ class WebSessionStore:
             return self._draft_tabs[flet_id]
         tab = secrets.token_urlsafe(24)
         if self.persistence is not None:
-            assert self.gateway_sessions is not None
+            assert self.gateway_sessions is not None  # noqa: S101
             scope = (self.public_origin, identity.account, identity.device_id)
 
             def key(fid: str) -> str:
@@ -771,7 +772,9 @@ class WebSessionStore:
         handshake = self._handshakes.get(flet_id)
         if handshake is None:
             return None
-        digest = hashlib.sha1(f"{handshake.ip}{handshake.user_agent}".encode()).hexdigest()
+        digest = hashlib.sha1(
+            f"{handshake.ip}{handshake.user_agent}".encode(), usedforsecurity=False
+        ).hexdigest()
         return f"{handshake.page_name}_{flet_id}_{digest}"
 
     # -- ws closers ----------------------------------------------------
@@ -794,7 +797,7 @@ class WebSessionStore:
             try:
                 await closer()
                 closed += 1
-            except Exception:  # noqa: BLE001 - best-effort sever
+            except Exception:  # noqa: S110 - best-effort sever and teardown
                 pass
         return closed
 
@@ -857,6 +860,7 @@ def make_before_main(store: WebSessionStore) -> Any:
         sid, handshake = held if held is not None else (None, None)
         try:
             flet_id = page.session.id
+            install_invoke_result_guard(page.session)
         except RuntimeError:
             return
         if handshake is None:
@@ -1390,7 +1394,7 @@ async def teardown_web_sid(
             if unique is not None:
                 try:
                     await flet_fastapi.app_manager.delete_session(unique)
-                except Exception:  # noqa: BLE001 - teardown is best-effort
+                except Exception:  # noqa: S110 - best-effort sever and teardown
                     pass
         store.retire_local(sid)
     if committed and identity is not None and store.command_store is not None:
